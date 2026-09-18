@@ -138,8 +138,11 @@ clips the green channel, flattening the whole mark to one tone no matter how the
 The ramp runs *along* the mark's diagonal, not across it — across shades each limb over its width,
 which reads as a tube.
 
-Green in the map is a route with stops, not a glow: `CityMap.drawRoute`. `--route-style` picks how
-it's drawn — `dashed` (the default), `line`, `trail`, `points` or `none` — and the far stop is Amber,
+Green in the map is a route, not a glow: `CityMap.drawRoute`. Its ends follow the convention every
+map app uses — a solid dot inside a dark collar where you start, and an Amber pin whose point sits
+on the destination. The pin's sides are the real tangents from its tip to its head, and the markers
+are drawn in icon space rather than map space so the pin stays upright instead of leaning with the
+map's rotation. `--route-style` picks how the path between them is drawn — `dashed` (the default), `line`, `trail`, `points` or `none` — and the far stop is Amber,
 the one point on the map worth a glance. It's clipped away from the mark (`clearance`), both because
 the mark sits above the map and because a bright stop touching the outline collapses the contrast
 right there, which is how it was found.
