@@ -125,26 +125,12 @@ public struct IconRenderer {
         // Along the mark's own diagonal, not across it. Running the ramp across the limbs shades
         // each one light-to-dark over its width, which reads as an inflated tube; running it along
         // them leaves the faces flat and lets the colour travel the length of the figure.
-        // The axis is pulled in from the bounding box corners. Run corner to corner and the ramp
-        // only reaches its end colours out at the corners, where there is almost no mark — so most
-        // of the figure sits in the middle of the ramp and the gradient barely shows. Inset, the
-        // ramp completes across the body and the ends clamp.
-        let inset = 0.20
+        // Straight up the mark, bottom to top, spanning its full height: the three stops are a
+        // vertical ramp, and the shape reaches both extremes at its own top and bottom.
         gradient(bodyCtx,
-                 from: CGPoint(x: bounds.minX + bounds.width * inset, y: bounds.minY + bounds.height * inset),
-                 to: CGPoint(x: bounds.maxX - bounds.width * inset, y: bounds.maxY - bounds.height * inset),
+                 from: CGPoint(x: bounds.midX, y: bounds.minY),
+                 to: CGPoint(x: bounds.midX, y: bounds.maxY),
                  stops: palette.markRamp(shade: settings.markShade).map { (CGFloat($0.0), $0.1.cg()) })
-        // A second, gentler ramp across the first. One ramp gives a mark that changes only along a
-        // single line; crossing them makes the colour vary in two directions.
-        bodyCtx.saveGState()
-        bodyCtx.setAlpha(0.16)
-        gradient(bodyCtx,
-                 from: CGPoint(x: bounds.minX, y: bounds.maxY),
-                 to: CGPoint(x: bounds.maxX, y: bounds.minY),
-                 stops: [(0, palette.ion.mixed(with: palette.ionCool, 0.34).cg()),
-                         (0.5, palette.ion.cg(0)),
-                         (1, palette.markLight.cg())])
-        bodyCtx.restoreGState()
 
         // 8–10 — light it as glass: a bevelled rim that catches a sharp highlight, throws light
         // back at grazing angles, and bends the map behind it. All derived from the outline, so it

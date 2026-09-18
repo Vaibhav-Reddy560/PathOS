@@ -136,34 +136,30 @@ public struct Palette: Sendable {
 
     // MARK: Derived
 
-    /// The mark's colours: Ion's own hue and saturation, moved along the lightness axis.
+    /// The mark's colours: Ion's own hue, run up to full saturation and moved along lightness.
     ///
-    /// Every stop stays vivid. Lightening by mixing toward Ice washes the teal out until the mark
-    /// is a pale grey shape, and dipping into dark teal reads as shadow rather than colour — both
-    /// leave the mark looking like one flat tone. The hue drifts a little across the ramp, cyan at
-    /// the lit end toward green-teal at the deep end, which is what keeps it alive.
+    /// These are the stops from the design: #8DFFEE, #6DFFEA and #00FFD0. All three sit on Ion's
+    /// hue at 100% saturation, so they are derived from the palette rather than pasted in as three
+    /// loose hex values — change Ion and the mark follows. The derivation lands within 4/255 of
+    /// each, which is below anything the eye resolves.
+    ///
+    /// Two rules the stops encode: never lighten by mixing toward Ice, which drops saturation
+    /// until the mark is a pale grey shape; and keep the body clear of the top of the range,
+    /// because the glass pass adds light on top and a body near white clips the green channel,
+    /// flattening the mark to one tone.
     private var tealHue: Double { ion.hsl.hue }
-    /// Pushed well up: at high lightness a colour needs a lot of saturation to still read
-    /// as a colour rather than a tint.
-    private var tealSaturation: Double { min(1, ion.hsl.saturation * 1.26) }
 
-    private func teal(lightness: Double, hueShift: Double = 0) -> Swatch {
-        Swatch(hue: tealHue + hueShift, saturation: tealSaturation, lightness: lightness)
+    private func teal(lightness: Double) -> Swatch {
+        Swatch(hue: tealHue, saturation: 1, lightness: lightness)
     }
 
-    /// Kept well clear of the top of the range. The lighting adds specular and edge light on top
-    /// of these, and a body that already sits near white clips the green channel — which is what
-    /// flattens the whole mark into one pale tone no matter how the ramp is built.
-    public var markLight: Swatch { teal(lightness: 0.845, hueShift: 17) }
-    public var markMid: Swatch { teal(lightness: 0.715, hueShift: 6) }
-    /// The deepest tone still sits above Ion's own lightness — the ramp travels light, not dark.
-    public func markDeep(_ shade: Double) -> Swatch { teal(lightness: 0.595 - 0.34 * (1 - shade), hueShift: -8) }
+    public var markLight: Swatch { teal(lightness: 0.776) }    // #8DFFEE
+    public var markMid: Swatch { teal(lightness: 0.714) }      // #6DFFEA
+    /// The deepest stop, #00FFD0. `markShade` moves it, with the design value at the default.
+    public func markDeep(_ shade: Double) -> Swatch { teal(lightness: 0.50 - (0.74 - shade) * 0.35) }
 
     public func markRamp(shade: Double) -> [(Double, Swatch)] {
-        [(0.00, markLight),
-         (0.34, markMid),
-         (0.70, teal(lightness: 0.595, hueShift: -3)),
-         (1.00, markDeep(shade))]
+        [(0.00, markLight), (0.50, markMid), (1.00, markDeep(shade))]
     }
 
     public var ionCool: Swatch { Swatch(red: ion.red * 0.32, green: ion.green * 0.56, blue: ion.blue) }
