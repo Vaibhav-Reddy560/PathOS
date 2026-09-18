@@ -46,6 +46,16 @@ final class LiveActivityController {
         }
     }
 
+    /// Like `show`, but skips the update when nothing on screen would change — for trackers
+    /// that recompute every few seconds.
+    @discardableResult
+    func showIfChanged(_ state: ContentState, staleAfter: TimeInterval = 3600, relevance: Double = 50) async -> Bool {
+        if let activity, activity.activityState == .active, lastState == state {
+            return true
+        }
+        return await show(state, staleAfter: staleAfter, relevance: relevance)
+    }
+
     /// For fast-changing data like the compass: skips updates that are too soon or too small,
     /// staying well inside ActivityKit's update budget.
     func updateThrottled(_ state: ContentState, minInterval: TimeInterval = 3, minBearingChange: Double = 10) async {

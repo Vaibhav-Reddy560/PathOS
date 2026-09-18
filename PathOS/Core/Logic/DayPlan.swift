@@ -15,11 +15,12 @@ nonisolated struct PlannedEvent: Identifiable, Hashable, Sendable {
 }
 
 nonisolated enum DayPlan {
-    /// Events that touch `day`, earliest first. An event running past midnight belongs to both days.
+    /// Events that touch `day`, earliest first. An event running past midnight belongs to both days;
+    /// a deadline with no length belongs to the day it falls on, even at midnight.
     static func events(_ events: [PlannedEvent], on day: Date, calendar: Calendar = .current) -> [PlannedEvent] {
         guard let interval = calendar.dateInterval(of: .day, for: day) else { return [] }
         return events
-            .filter { $0.start < interval.end && $0.end > interval.start }
+            .filter { ($0.start >= interval.start && $0.start < interval.end) || ($0.start < interval.end && $0.end > interval.start) }
             .sorted { $0.start < $1.start }
     }
 
@@ -48,6 +49,13 @@ nonisolated enum DayPlan {
             text = rest == 0 ? "\(hours) h" : "\(hours) h \(rest) min"
         }
         return past ? "\(text) ago" : "in \(text)"
+    }
+
+    /// What a reminder counts back from. An all-day item starts at midnight, and a reminder
+    /// before that would arrive the night before, so it counts back from 9 in the morning instead.
+    static func reminderAnchor(start: Date, isAllDay: Bool, calendar: Calendar = .current) -> Date {
+        guard isAllDay else { return start }
+        return calendar.date(bySettingHour: 9, minute: 0, second: 0, of: start) ?? start
     }
 
     /// When to notify, or nil when that moment has already passed.

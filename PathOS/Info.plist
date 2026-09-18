@@ -41,6 +41,8 @@
 		<string>olacabs</string>
 		<string>rapido</string>
 	</array>
+	<key>NSCalendarsFullAccessUsageDescription</key>
+	<string>PathOS shows events from your calendars, including ones you subscribe to, on the map with their places.</string>
 	<key>NSCalendarsWriteOnlyAccessUsageDescription</key>
 	<string>PathOS adds events scanned from posters to your calendar.</string>
 	<key>NSCameraUsageDescription</key>

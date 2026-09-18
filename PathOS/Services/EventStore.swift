@@ -78,7 +78,8 @@ final class EventStore {
     func scheduleReminder(for event: PathEvent) {
         Task {
             await notifications.removePending(withPrefix: event.notificationID)
-            guard let fireDate = DayPlan.reminderDate(start: event.start, minutesBefore: event.reminderMinutesBefore, now: Date()) else { return }
+            let anchor = DayPlan.reminderAnchor(start: event.start, isAllDay: event.isAllDay)
+            guard let fireDate = DayPlan.reminderDate(start: anchor, minutesBefore: event.reminderMinutesBefore, now: Date()) else { return }
             let place = event.placeName.map { " · \($0)" } ?? ""
             notifications.schedule(
                 id: event.notificationID,

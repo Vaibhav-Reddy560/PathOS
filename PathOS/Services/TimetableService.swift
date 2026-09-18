@@ -58,7 +58,14 @@ final class TimetableService {
     }
 
     static func skip(_ exception: TimetableException) -> TimetableSkip {
-        TimetableSkip(dayStart: exception.dayStart, entryID: exception.entryID, reason: exception.reason)
+        TimetableSkip(
+            dayStart: exception.dayStart,
+            entryID: exception.entryID,
+            reason: exception.reason,
+            startMinutesOverride: exception.startMinutesOverride,
+            endMinutesOverride: exception.endMinutesOverride,
+            roomOverride: exception.roomOverride
+        )
     }
 
     // MARK: Importing
@@ -139,6 +146,50 @@ final class TimetableService {
         context.delete(entry)
         save()
         refreshReminders()
+    }
+
+    func entry(id: UUID) -> TimetableEntry? {
+        entries().first { $0.id == id }
+    }
+
+    /// Cancels one class on one day. Any earlier move of it that day is replaced.
+    func cancelOnce(entryID: UUID, on day: Date, reason: String = "Cancelled") {
+        clearChanges(to: entryID, on: day)
+        context.insert(TimetableException(dayStart: Calendar.current.startOfDay(for: day), reason: reason, entryID: entryID))
+        save()
+        refreshReminders()
+    }
+
+    /// Moves one class on one day, leaving every other week as it was.
+    func moveOnce(entryID: UUID, on day: Date, startMinutes: Int, endMinutes: Int, room: String? = nil) {
+        clearChanges(to: entryID, on: day)
+        context.insert(TimetableException(
+            dayStart: Calendar.current.startOfDay(for: day),
+            reason: "Moved",
+            entryID: entryID,
+            startMinutesOverride: startMinutes,
+            endMinutesOverride: endMinutes,
+            roomOverride: room
+        ))
+        save()
+        refreshReminders()
+    }
+
+    /// Changes a class for every week from now on.
+    func update(_ entry: TimetableEntry, weekday: Int? = nil, startMinutes: Int? = nil, endMinutes: Int? = nil, room: String? = nil, isActive: Bool? = nil) {
+        if let weekday { entry.weekday = weekday }
+        if let startMinutes { entry.startMinutes = startMinutes }
+        if let endMinutes { entry.endMinutes = endMinutes }
+        if let room { entry.room = room }
+        if let isActive { entry.isActive = isActive }
+        save()
+        refreshReminders()
+    }
+
+    private func clearChanges(to entryID: UUID, on day: Date) {
+        for exception in exceptions() where exception.entryID == entryID && Calendar.current.isDate(exception.dayStart, inSameDayAs: day) {
+            context.delete(exception)
+        }
     }
 
     func setDayOff(_ day: Date, isOff: Bool, reason: String = "No classes") {

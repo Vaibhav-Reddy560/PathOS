@@ -24,8 +24,9 @@ nonisolated struct MapLayers: OptionSet, Hashable, Sendable {
     static let places = MapLayers(rawValue: 1 << 1)
     static let events = MapLayers(rawValue: 1 << 2)
     static let memories = MapLayers(rawValue: 1 << 3)
+    static let transit = MapLayers(rawValue: 1 << 4)
 
-    static let all: MapLayers = [.rings, .places, .events, .memories]
+    static let all: MapLayers = [.rings, .places, .events, .memories, .transit]
 }
 
 /// Anything PathOS draws on the map, already carrying what its colour means.
@@ -37,6 +38,7 @@ nonisolated struct WorldSignal: Identifiable, Hashable, Sendable {
         case place
         case event
         case assistantPick
+        case transitStop
 
         var spokenName: String {
             switch self {
@@ -46,6 +48,7 @@ nonisolated struct WorldSignal: Identifiable, Hashable, Sendable {
             case .place: "place"
             case .event: "event"
             case .assistantPick: "suggested place"
+            case .transitStop: "stop"
             }
         }
     }
@@ -82,6 +85,24 @@ nonisolated struct WorldSignal: Identifiable, Hashable, Sendable {
     }
 }
 
+/// A bus stop or metro station near you, for the map's transit layer.
+nonisolated struct TransitStopInput: Hashable, Sendable {
+    nonisolated enum Kind: String, Sendable {
+        case bus
+        case metro
+    }
+
+    var kind: Kind
+    var name: String
+    var subtitle: String
+    var latitude: Double
+    var longitude: Double
+    var distanceMeters: Double
+
+    /// "bus:Indiranagar 100 Feet Road", "metro:Indiranagar".
+    var id: String { "\(kind.rawValue):\(name)" }
+}
+
 nonisolated struct MemoryInput: Sendable {
     var id: UUID
     var title: String
@@ -103,6 +124,7 @@ nonisolated struct SavedPlaceInput: Sendable {
 /// Turns app data into map signals. Green is only ever things that come from you; cyan is the world.
 nonisolated enum WorldSignalBuilder {
     static let maxWorldSignals = 24
+    static let maxTransitSignals = 10
     /// World signals closer than this are where you already are: they'd bury your dot, and the
     /// instrument strip already names the venue. AI and assistant picks are still shown.
     static let hereRadius = 35.0
@@ -114,6 +136,7 @@ nonisolated enum WorldSignalBuilder {
         places: [SavedPlaceInput],
         radar: [RadarItem],
         assistantPlaces: [PlaceSummary],
+        transit: [TransitStopInput] = [],
         origin: CLLocationCoordinate2D?,
         layers: MapLayers = .all,
         now: Date = Date()
@@ -172,6 +195,24 @@ nonisolated enum WorldSignalBuilder {
             return (first.distanceMeters ?? .infinity) < (second.distanceMeters ?? .infinity)
         }
         world = Array(world.prefix(maxWorldSignals))
+
+        // Stops sit under everything else: useful to find, never worth burying a place for.
+        if layers.contains(.transit) {
+            let stops = transit.filter { seen.insert($0.id).inserted }.sorted { $0.distanceMeters < $1.distanceMeters }.prefix(maxTransitSignals)
+            world = stops.map { stop in
+                WorldSignal(
+                    id: stop.id,
+                    kind: .transitStop,
+                    role: .world,
+                    title: stop.name,
+                    subtitle: stop.subtitle,
+                    symbol: stop.kind == .metro ? "tram.fill" : "bus.fill",
+                    latitude: stop.latitude,
+                    longitude: stop.longitude,
+                    distanceMeters: stop.distanceMeters
+                )
+            } + world
+        }
 
         var yours: [WorldSignal] = []
         if layers.contains(.memories) {

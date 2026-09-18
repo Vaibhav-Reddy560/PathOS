@@ -1,3 +1,4 @@
+import CoreLocation
 import Foundation
 
 /// A plain copy of one leg, so trip logic can be tested without SwiftData.
@@ -51,6 +52,97 @@ nonisolated enum TripPlan {
     /// Planned distance across legs that have one.
     static func plannedDistance(_ legs: [PlannedLeg]) -> Double {
         legs.compactMap(\.distanceMeters).reduce(0, +)
+    }
+}
+
+/// How a leg you're on is going.
+nonisolated struct LegProgress: Equatable, Sendable {
+    /// Straight-line metres to the destination, when both ends of that are known.
+    var distanceRemaining: Double?
+    /// 0…1, by distance when possible, otherwise by the clock.
+    var fractionDone: Double?
+    var eta: Date?
+    var minutesRemaining: Int?
+    var hasArrived: Bool
+    /// The arrival you planned has passed and you're not there yet.
+    var isLate: Bool
+}
+
+nonisolated enum TripTracker {
+    /// How close counts as arrived. A station or an airport is far bigger than a street address.
+    static func arrivalRadius(for mode: TravelMode) -> Double {
+        switch mode {
+        case .walk, .scooter, .car, .cab: 150
+        case .bus, .metro: 300
+        case .train, .ferry: 600
+        case .flight: 3_000
+        }
+    }
+
+    /// Where you are along a leg. With a location and a destination it measures you; without,
+    /// it goes by the times you planned.
+    static func progress(
+        leg: PlannedLeg,
+        origin: CLLocationCoordinate2D?,
+        destination: CLLocationCoordinate2D?,
+        location: CLLocationCoordinate2D?,
+        now: Date
+    ) -> LegProgress {
+        let planned = leg.arrivalEstimate()
+        var remaining: Double?
+        if let destination, let location {
+            remaining = GeoMath.distance(from: location, to: destination)
+        }
+        let hasArrived = remaining.map { $0 <= arrivalRadius(for: leg.mode) } ?? false
+
+        var fraction: Double?
+        if let remaining, let origin, let destination {
+            let total = GeoMath.distance(from: origin, to: destination)
+            if total > 0 { fraction = min(1, max(0, 1 - remaining / total)) }
+        } else if let planned, planned > leg.departure {
+            fraction = min(1, max(0, now.timeIntervalSince(leg.departure) / planned.timeIntervalSince(leg.departure)))
+        }
+        if hasArrived { fraction = 1 }
+
+        // At the mode's usual speed from here; trusted over the plan only when you're clearly behind it.
+        let bySpeed = remaining.map { now.addingTimeInterval(($0 / 1_000) / leg.mode.averageKilometresPerHour * 3_600) }
+        var eta = planned
+        var isLate = false
+        if !hasArrived {
+            if let planned, planned <= now {
+                isLate = true
+                eta = bySpeed
+            } else if let planned, let bySpeed, bySpeed.timeIntervalSince(planned) > 10 * 60 {
+                isLate = true
+                eta = bySpeed
+            } else if planned == nil {
+                eta = bySpeed
+            }
+        }
+
+        return LegProgress(
+            distanceRemaining: remaining,
+            fractionDone: fraction,
+            eta: hasArrived ? now : eta,
+            minutesRemaining: hasArrived ? 0 : eta.map { max(0, Int(($0.timeIntervalSince(now) / 60).rounded(.up))) },
+            hasArrived: hasArrived,
+            isLate: isLate
+        )
+    }
+
+    /// "Arrives 5:40 PM · 38 km to go", "Running late · about 25 min to go".
+    static func summary(_ progress: LegProgress) -> String {
+        if progress.hasArrived { return "You've arrived" }
+        var parts: [String] = []
+        if progress.isLate {
+            parts.append(progress.minutesRemaining.map { "Running late · about \($0) min to go" } ?? "Running late")
+        } else if let eta = progress.eta {
+            parts.append("Arrives \(eta.formatted(date: .omitted, time: .shortened))")
+        }
+        if let remaining = progress.distanceRemaining {
+            parts.append("\(GeoMath.formatDistance(remaining)) to go")
+        }
+        return parts.isEmpty ? "On your way" : parts.joined(separator: " · ")
     }
 }
 

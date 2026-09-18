@@ -54,6 +54,7 @@ targets:
         NSMicrophoneUsageDescription: "PathOS analyzes ambient noise levels to adjust alert haptics and listens to your voice questions."
         NSSpeechRecognitionUsageDescription: "PathOS transcribes your voice questions on-device."
         NSCalendarsWriteOnlyAccessUsageDescription: "PathOS adds events scanned from posters to your calendar."
+        NSCalendarsFullAccessUsageDescription: "PathOS shows events from your calendars, including ones you subscribe to, on the map with their places."
         NSPhotoLibraryUsageDescription: "PathOS can scan posters and receipts from your photos."
         NSSupportsLiveActivities: true
         NSSupportsLiveActivitiesFrequentUpdates: true

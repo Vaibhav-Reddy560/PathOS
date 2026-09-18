@@ -253,11 +253,10 @@ private struct LegEditor: View {
         )
         leg.destinationLatitude = destinationCoordinate?.latitude
         leg.destinationLongitude = destinationCoordinate?.longitude
-        if let here = state.location.location {
-            leg.originLatitude = here.coordinate.latitude
-            leg.originLongitude = here.coordinate.longitude
-        }
         state.trips.add(leg, to: trip)
+        // Where it starts matters for the map pin before you leave, so look it up by name rather
+        // than assuming it starts wherever you're planning it from.
+        Task { await state.trips.pinEnds(of: leg, places: state.places, vault: state.vault, near: state.location.location) }
         state.haptics.success()
         dismiss()
     }

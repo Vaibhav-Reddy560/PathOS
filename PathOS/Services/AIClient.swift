@@ -114,6 +114,80 @@ nonisolated struct TimetableExtraction {
     var rows: [TimetableRow]
 }
 
+@Generable
+nonisolated enum GeneratedMailKind {
+    case event
+    case task
+    case update
+    case ignore
+}
+
+@Generable
+nonisolated struct MailReading {
+    @Guide(description: "event: something to attend at a time. task: something to do by a deadline. update: worth knowing, nothing to schedule. ignore: newsletters, marketing, codes, login alerts, social notifications")
+    var kind: GeneratedMailKind
+
+    @Guide(description: "What matters in the email, in one plain sentence under 25 words")
+    var summary: String
+
+    @Guide(description: "Short title for the event or task, e.g. 'IEEE talk on edge AI' or 'Submit DBMS assignment'")
+    var title: String
+
+    @Guide(description: "Event start or task deadline as local ISO 8601 without timezone, like 2026-09-21T14:00, or just 2026-09-25 when no time is given. Empty if the email gives no date.")
+    var startISO: String?
+
+    @Guide(description: "Event end as local ISO 8601, only if the email states it")
+    var endISO: String?
+
+    @Guide(description: "Venue or address for events, or 'Online' for video calls")
+    var place: String?
+}
+
+@Generable
+nonisolated enum GeneratedChangeAction {
+    case move
+    case cancel
+    case rename
+    case add
+    case dayOff
+    case classesOn
+    case none
+}
+
+@Generable
+nonisolated enum GeneratedChangeScope {
+    case once
+    case everyWeek
+    case unspecified
+}
+
+@Generable
+nonisolated struct ChangeReading {
+    @Guide(description: "move: to a new time or day. cancel: call it off. rename: give an event a new name. add: a new event. dayOff: no classes on a whole day. classesOn: classes back on for a day that was off. none: not a change to the schedule")
+    var action: GeneratedChangeAction
+
+    @Guide(description: "For move, cancel and rename: the id of the item, copied exactly from the list, like c3 or e1. Empty otherwise.")
+    var itemID: String?
+
+    @Guide(description: "The new day for move, or the day meant for add, dayOff and classesOn, as yyyy-MM-dd")
+    var date: String?
+
+    @Guide(description: "New start time as 24-hour HH:mm, e.g. 16:00 for 4 pm")
+    var startTime: String?
+
+    @Guide(description: "New end time as 24-hour HH:mm, only if the person says one")
+    var endTime: String?
+
+    @Guide(description: "everyWeek if they say every week, from now on or permanently; once if they say just this time or name one date; unspecified otherwise")
+    var scope: GeneratedChangeScope
+
+    @Guide(description: "The new name for rename, or the name of a new event for add")
+    var title: String?
+
+    @Guide(description: "Where a new event is, if they say")
+    var place: String?
+}
+
 /// On-device Apple Intelligence (Foundation Models). No network, no API key.
 @Observable
 final class AIClient {
@@ -173,6 +247,97 @@ final class AIClient {
             generating: TimetableExtraction.self
         )
         return response.content.rows
+    }
+
+    /// Reads one email and says what it asks of you. One session per message: the on-device
+    /// model's context is small, and one email's headers and opening fit it comfortably.
+    func readMail(_ message: MailMessage, now: Date = Date()) async throws -> MailProposal {
+        let session = LanguageModelSession(instructions: """
+            You sort one email for a college student in Bengaluru, India, and say what it asks of them. \
+            event: something to attend at a time, such as a class, exam, meeting, interview, talk, \
+            conference, workshop, booking, flight or train. \
+            task: something to do by a deadline, such as submitting, paying, registering or replying. \
+            update: worth knowing but nothing to schedule, such as results, changes or announcements. \
+            ignore: newsletters, marketing, one-time codes, login alerts, social notifications. \
+            Today is \(now.formatted(date: .complete, time: .shortened)). \
+            Resolve relative dates like "tomorrow" or "this Friday" from when the email was sent. \
+            Never invent a date, time or place the email doesn't give.
+            """)
+        let reading = try await session.respond(
+            to: "Email:\n\(message.promptText())",
+            generating: MailReading.self
+        ).content
+        let kind: MailKind = switch reading.kind {
+        case .event: .event
+        case .task: .task
+        case .update: .update
+        case .ignore: .ignore
+        }
+        return MailTriage.proposal(
+            kind: kind,
+            title: reading.title,
+            summary: reading.summary,
+            startISO: reading.startISO,
+            endISO: reading.endISO,
+            place: reading.place
+        )
+    }
+
+    /// Reads a spoken or typed change against your real schedule. The model only chooses from the
+    /// list it's given, so it can't point at a class or event that doesn't exist.
+    func readChange(_ request: String, candidates: [ChangeCandidate], now: Date = Date()) async throws -> ChangeReadingValues {
+        let list = candidates.prefix(40).map { $0.line() }.joined(separator: "\n")
+        let session = LanguageModelSession(instructions: """
+            You turn a request to change someone's schedule into a structured change. \
+            Now is \(now.formatted(.dateTime.weekday(.wide).day().month(.wide).year().hour().minute())). \
+            "My 3pm class" means the class at 15:00 on the nearest day that has one. \
+            Resolve "tomorrow", "Thursday" and "next week" from now. \
+            Only choose items from the list, by id. If nothing in the list matches, leave itemID empty.
+            """)
+        let reading = try await session.respond(
+            to: "Schedule (id | kind | title | when | where):\n\(list.isEmpty ? "(nothing scheduled)" : list)\n\nRequest: \(request)",
+            generating: ChangeReading.self
+        ).content
+
+        let action: ChangeAction = switch reading.action {
+        case .move: .move
+        case .cancel: .cancel
+        case .rename: .rename
+        case .add: .add
+        case .dayOff: .dayOff
+        case .classesOn: .classesOn
+        case .none: .none
+        }
+        let scope: ChangeScope = switch reading.scope {
+        case .once: .once
+        case .everyWeek: .everyWeek
+        case .unspecified: .unspecified
+        }
+        return ChangeReadingValues(
+            action: action,
+            itemID: reading.itemID,
+            date: reading.date,
+            startTime: reading.startTime,
+            endTime: reading.endTime,
+            scope: scope,
+            title: reading.title,
+            place: reading.place
+        )
+    }
+
+    /// The model is busy or rationing requests: worth trying again later rather than falling back.
+    static func isTransient(_ error: Error) -> Bool {
+        if let error = error as? LanguageModelSession.GenerationError {
+            switch error {
+            case .rateLimited, .concurrentRequests: return true
+            default: return false
+            }
+        }
+        if #available(iOS 27.0, *) {
+            if let error = error as? LanguageModelError, case .rateLimited = error { return true }
+            if let error = error as? LanguageModelSession.Error, case .concurrentRequests = error { return true }
+        }
+        return false
     }
 
     /// Ranks nearby places and events into a short "what's good right now" stream.

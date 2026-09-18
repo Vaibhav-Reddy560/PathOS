@@ -10,6 +10,7 @@ nonisolated struct PathOSActivityAttributes: ActivityAttributes {
         case spatialNote
         case venue
         case journey
+        case trip
     }
 
     nonisolated struct ContentState: Codable, Hashable, Sendable {

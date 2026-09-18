@@ -36,6 +36,7 @@ struct ControlRail: View {
             Toggle("Places", systemImage: "mappin", isOn: layer(.places))
             Toggle("Events", systemImage: "ticket", isOn: layer(.events))
             Toggle("Your memories", systemImage: "bookmark", isOn: layer(.memories))
+            Toggle("Bus stops & metro", systemImage: "bus", isOn: layer(.transit))
         } label: {
             RailGlyph(symbol: "square.3.layers.3d", role: .world)
         }

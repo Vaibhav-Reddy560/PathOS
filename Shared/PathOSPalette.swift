@@ -89,7 +89,7 @@ nonisolated enum SignalRole: String, CaseIterable, Sendable {
 extension PathOSActivityAttributes.Mode {
     nonisolated var role: SignalRole {
         switch self {
-        case .compass, .commute, .spatialNote, .journey: .you
+        case .compass, .commute, .spatialNote, .journey, .trip: .you
         case .exitCheck: .attention
         case .venue: .world
         }

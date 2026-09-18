@@ -145,6 +145,10 @@ private struct CompactMetric: View {
             Text(state.etaMinutes.map { "\($0)m" } ?? "Metro")
                 .font(.caption.weight(.semibold).monospacedDigit())
                 .foregroundStyle(.ice)
+        case .trip:
+            Text(state.etaMinutes.map { "\($0)m" } ?? state.distanceMeters.map(GeoMath.formatDistance) ?? "Trip")
+                .font(.caption.weight(.semibold).monospacedDigit())
+                .foregroundStyle(.ice)
         }
     }
 }
@@ -177,6 +181,7 @@ extension PathOSActivityAttributes.Mode {
         case .spatialNote: "Spatial memory"
         case .venue: "Context"
         case .journey: "Journey"
+        case .trip: "Trip"
         }
     }
 }

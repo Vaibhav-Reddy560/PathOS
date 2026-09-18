@@ -8,6 +8,8 @@ nonisolated enum EventOrigin: String, Codable, CaseIterable, Sendable {
     case captured
     case scan
     case timetable
+    case mail
+    case assistant
 
     var label: String {
         switch self {
@@ -15,6 +17,8 @@ nonisolated enum EventOrigin: String, Codable, CaseIterable, Sendable {
         case .captured: "From text you shared"
         case .scan: "From a scan"
         case .timetable: "From your timetable"
+        case .mail: "From your Gmail"
+        case .assistant: "Asked of PathOS"
         }
     }
 
@@ -24,6 +28,8 @@ nonisolated enum EventOrigin: String, Codable, CaseIterable, Sendable {
         case .captured: "text.viewfinder"
         case .scan: "camera.viewfinder"
         case .timetable: "graduationcap"
+        case .mail: "envelope"
+        case .assistant: "apple.intelligence"
         }
     }
 }

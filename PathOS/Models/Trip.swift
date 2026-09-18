@@ -126,6 +126,11 @@ final class TripLeg {
         set { modeRaw = newValue.rawValue }
     }
 
+    var originCoordinate: CLLocationCoordinate2D? {
+        guard let originLatitude, let originLongitude else { return nil }
+        return CLLocationCoordinate2D(latitude: originLatitude, longitude: originLongitude)
+    }
+
     var destinationCoordinate: CLLocationCoordinate2D? {
         guard let destinationLatitude, let destinationLongitude else { return nil }
         return CLLocationCoordinate2D(latitude: destinationLatitude, longitude: destinationLongitude)

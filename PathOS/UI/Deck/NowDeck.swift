@@ -222,9 +222,9 @@ struct NowDeck: View {
 
                     if state.transit.journey == nil {
                         Button {
-                            state.isJourneySheetPresented = true
+                            state.planJourney(from: nil)
                         } label: {
-                            Label("Start a metro journey", systemImage: "tram.fill")
+                            Label("Plan a metro or bus journey", systemImage: "tram.fill")
                                 .font(.subheadline.weight(.semibold))
                                 .frame(maxWidth: .infinity, minHeight: 32)
                         }

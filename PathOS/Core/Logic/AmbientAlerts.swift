@@ -11,6 +11,7 @@ nonisolated struct AmbientAlert: Identifiable, Equatable, Sendable {
         case pointTo(CompassTarget)
         case endGuidance
         case endJourney
+        case endTrip
     }
 
     nonisolated struct Button: Hashable, Sendable {
@@ -57,6 +58,19 @@ nonisolated struct AlertSnapshot: Sendable {
         var stopsRemaining: Int
         var minutesRemaining: Int
         var isArrivingNext: Bool
+        var symbol = "tram.fill"
+        /// Where the next change is and what to do there, when it's the next stop.
+        var changeStation: String? = nil
+        var changeInstruction: String? = nil
+    }
+
+    nonisolated struct Trip: Sendable {
+        var title: String
+        var destination: String
+        var symbol: String
+        var summary: String
+        var minutesRemaining: Int?
+        var isLate: Bool
     }
 
     nonisolated struct Commute: Sendable {
@@ -84,6 +98,7 @@ nonisolated struct AlertSnapshot: Sendable {
     var pressureTrend: PressureTrend
     var guidance: Guidance?
     var journey: Journey?
+    var trip: Trip? = nil
     var commute: Commute?
     var nextEvent: Event?
     var weather: Weather?
@@ -199,19 +214,38 @@ nonisolated enum AmbientAlerts {
         }
 
         if let journey = snapshot.journey {
+            let changingNext = journey.changeStation != nil
+            let actNow = journey.isArrivingNext || changingNext
             alerts.append(AmbientAlert(
                 id: "journey",
-                role: journey.isArrivingNext ? .attention : .you,
-                // Getting off at the right stop matters more than anything else en route.
-                priority: journey.isArrivingNext ? 9 : 19,
-                symbol: "tram.fill",
-                compactText: journey.isArrivingNext ? "Get off next" : "To \(journey.destination)",
-                metric: journey.isArrivingNext ? nil : "\(journey.stopsRemaining) stops",
-                headline: journey.isArrivingNext ? "Get off next: \(journey.destination)" : "\(journey.lineName) to \(journey.destination)",
+                role: actNow ? .attention : .you,
+                // Getting off or changing at the right stop matters more than anything else en route.
+                priority: actNow ? 9 : 19,
+                symbol: changingNext ? "arrow.triangle.swap" : journey.symbol,
+                compactText: journey.isArrivingNext ? "Get off next" : (changingNext ? "Change next" : "To \(journey.destination)"),
+                metric: actNow ? nil : "\(journey.stopsRemaining) stops",
+                headline: journey.isArrivingNext
+                    ? "Get off next: \(journey.destination)"
+                    : (journey.changeStation.map { "Change next: \($0)" } ?? "\(journey.lineName) to \(journey.destination)"),
                 detail: journey.isArrivingNext
                     ? "About \(journey.minutesRemaining) min to go."
-                    : "\(journey.stopsRemaining) stops · about \(journey.minutesRemaining) min (estimated).",
+                    : (journey.changeInstruction.map { "\($0)." } ?? "\(journey.stopsRemaining) stops · about \(journey.minutesRemaining) min (estimated)."),
                 buttons: [AmbientAlert.Button(title: "End", symbol: "xmark", action: .endJourney)],
+                isDismissible: false
+            ))
+        }
+
+        if let trip = snapshot.trip {
+            alerts.append(AmbientAlert(
+                id: "trip",
+                role: trip.isLate ? .attention : .you,
+                priority: trip.isLate ? 12 : 19,
+                symbol: trip.symbol,
+                compactText: "To \(trip.destination)",
+                metric: trip.minutesRemaining.map { "\($0) min" },
+                headline: trip.title,
+                detail: trip.summary,
+                buttons: [AmbientAlert.Button(title: "End", symbol: "xmark", action: .endTrip)],
                 isDismissible: false
             ))
         }

@@ -115,6 +115,7 @@ struct WorldView: View {
             },
             radar: radar.items,
             assistantPlaces: state.assistantTurns.first?.places ?? [],
+            transit: state.transit.nearbyStops,
             origin: state.location.location?.coordinate,
             layers: state.mapLayers
         )

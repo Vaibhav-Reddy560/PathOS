@@ -73,6 +73,18 @@ extension AppState {
             weather.seedDemoSnapshot()
             barometer.seedDemoAltitude()
         }
+        // `-PathOSChangeProposal YES` shows a drafted change on the assistant, without the model.
+        if arguments.bool(forKey: "PathOSChangeProposal") {
+            let start = Calendar.current.date(bySettingHour: 15, minute: 0, second: 0, of: Date().addingTimeInterval(86_400)) ?? Date()
+            pendingChange = PendingChange(
+                request: "Move tomorrow's DBMS class to 4",
+                change: .moveClass(slotID: UUID(), subject: "DBMS", room: "304",
+                                   from: DateInterval(start: start, duration: 55 * 60),
+                                   to: DateInterval(start: start.addingTimeInterval(3_600), duration: 55 * 60),
+                                   everyWeek: false)
+            )
+            isAssistantActive = true
+        }
         switch arguments.string(forKey: "PathOSDeckDetent") {
         case "medium": deckDetent = .medium
         case "large": deckDetent = .large

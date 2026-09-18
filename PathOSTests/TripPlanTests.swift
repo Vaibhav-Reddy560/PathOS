@@ -1,3 +1,4 @@
+import CoreLocation
 import Foundation
 import Testing
 @testable import PathOS
@@ -72,6 +73,66 @@ struct TripPlanTests {
         let onTrip = DaySummary(distanceMeters: 120_000, eventCount: 0, classCount: 0, legCount: 2,
                                 memoryCount: 0, tripName: "Goa", tripDayNumber: 2, tripDayCount: 5)
         #expect(onTrip.sentence == "Goa, day 2 of 5: Travelled 120.0 km and 2 trip legs.")
+    }
+
+    // MARK: Following a leg
+
+    private let majestic = CLLocationCoordinate2D(latitude: 12.9767, longitude: 77.5713)
+    private let mysuru = CLLocationCoordinate2D(latitude: 12.3052, longitude: 76.6552)
+
+    @Test func progressIsMeasuredByWhereYouAre() {
+        let train = leg(.train, from: "Bengaluru", to: "Mysuru", at: 0, arrivesAfter: 2.5)
+        let halfway = CLLocationCoordinate2D(latitude: (majestic.latitude + mysuru.latitude) / 2,
+                                             longitude: (majestic.longitude + mysuru.longitude) / 2)
+        let progress = TripTracker.progress(leg: train, origin: majestic, destination: mysuru, location: halfway,
+                                            now: morning.addingTimeInterval(3_600))
+        #expect(!progress.hasArrived)
+        #expect(!progress.isLate)
+        #expect(abs((progress.fractionDone ?? 0) - 0.5) < 0.02)
+        #expect(progress.eta == train.arrival)
+        #expect(progress.minutesRemaining == 90)
+    }
+
+    @Test func arrivingCountsAStationsWorthOfDistance() {
+        let train = leg(.train, from: "Bengaluru", to: "Mysuru", at: 0, arrivesAfter: 2.5)
+        // 400 m short of the pin is the station forecourt for a train, not for a cab.
+        let forecourt = CLLocationCoordinate2D(latitude: mysuru.latitude + 0.0036, longitude: mysuru.longitude)
+        #expect(TripTracker.progress(leg: train, origin: majestic, destination: mysuru, location: forecourt, now: morning).hasArrived)
+        let cab = leg(.cab, from: "Bengaluru", to: "Mysuru", at: 0, arrivesAfter: 2.5)
+        #expect(!TripTracker.progress(leg: cab, origin: majestic, destination: mysuru, location: forecourt, now: morning).hasArrived)
+    }
+
+    @Test func runningLateIsSaidOutLoud() {
+        let train = leg(.train, from: "Bengaluru", to: "Mysuru", at: 0, arrivesAfter: 2.5)
+        // Still near Bengaluru when you should be arriving.
+        let late = TripTracker.progress(leg: train, origin: majestic, destination: mysuru, location: majestic,
+                                        now: morning.addingTimeInterval(2.5 * 3_600 + 60))
+        #expect(late.isLate)
+        #expect(TripTracker.summary(late).hasPrefix("Running late"))
+        #expect((late.minutesRemaining ?? 0) > 60)
+    }
+
+    @Test func withoutALocationTheClockCarriesIt() {
+        let flight = leg(.flight, from: "BLR", to: "GOI", at: 0, arrivesAfter: 1.5)
+        let progress = TripTracker.progress(leg: flight, origin: nil, destination: nil, location: nil,
+                                            now: morning.addingTimeInterval(45 * 60))
+        #expect(progress.distanceRemaining == nil)
+        #expect(abs((progress.fractionDone ?? 0) - 0.5) < 0.01)
+        #expect(progress.minutesRemaining == 45)
+        #expect(TripTracker.summary(progress).hasPrefix("Arrives"))
+    }
+
+    @Test func aTripLegShowsOnTheIsland() {
+        let snapshot = AlertSnapshot(
+            location: .always, exitAdvice: nil, pressureTrend: .steady, guidance: nil, journey: nil,
+            trip: AlertSnapshot.Trip(title: "Train to Mysuru", destination: "Mysuru", symbol: "train.side.front.car",
+                                     summary: "Running late · about 25 min to go", minutesRemaining: 25, isLate: true),
+            commute: nil, nextEvent: nil, weather: nil, venueName: "Here", venueSymbol: "mappin", now: morning
+        )
+        let alert = AmbientAlerts.prioritized(snapshot).first { $0.id == "trip" }
+        #expect(alert?.role == .attention)
+        #expect(alert?.metric == "25 min")
+        #expect(alert?.buttons.first?.action == .endTrip)
     }
 
     @Test func tripDaysAreCountedInclusively() {

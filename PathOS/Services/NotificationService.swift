@@ -11,10 +11,13 @@ final class NotificationService: NSObject {
         static let ambient = "pathos.ambient"
         static let event = "pathos.event"
         static let journey = "pathos.journey"
+        static let mail = "pathos.mail"
+        static let tripLeg = "pathos.tripLeg"
     }
 
     nonisolated enum Action {
         static let startCommute = "pathos.action.startCommute"
+        static let trackLeg = "pathos.action.trackLeg"
     }
 
     private(set) var isAuthorized = false
@@ -38,6 +41,12 @@ final class NotificationService: NSObject {
             UNNotificationCategory(identifier: Category.ambient, actions: [], intentIdentifiers: []),
             UNNotificationCategory(identifier: Category.event, actions: [], intentIdentifiers: []),
             UNNotificationCategory(identifier: Category.journey, actions: [], intentIdentifiers: []),
+            UNNotificationCategory(identifier: Category.mail, actions: [], intentIdentifiers: []),
+            UNNotificationCategory(
+                identifier: Category.tripLeg,
+                actions: [UNNotificationAction(identifier: Action.trackLeg, title: "Start tracking", options: [.foreground])],
+                intentIdentifiers: []
+            ),
         ])
     }
 
@@ -140,9 +149,12 @@ extension NotificationService: UNUserNotificationCenterDelegate {
     ) {
         let action = response.actionIdentifier
         let link = response.notification.request.content.userInfo["link"] as? String
-        let target: URL? = action == Action.startCommute
-            ? URL(string: "pathos://commute/start")
-            : link.flatMap(URL.init(string:))
+        let target: URL? = switch action {
+        case Action.startCommute: URL(string: "pathos://commute/start")
+        // The leg's own link, with "/track" to start following it rather than just show it.
+        case Action.trackLeg: link.flatMap { URL(string: $0 + "/track") }
+        default: link.flatMap(URL.init(string:))
+        }
         if let target {
             Task { @MainActor in
                 self.onOpenURL?(target)

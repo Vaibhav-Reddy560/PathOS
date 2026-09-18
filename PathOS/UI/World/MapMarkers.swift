@@ -138,6 +138,17 @@ struct SignalMarker: View {
                 .frame(width: 30, height: 30)
                 .background(Color.void, in: .circle)
                 .overlay { Circle().strokeBorder(Color.aurora, lineWidth: 1.5) }
+        case .transitStop:
+            // Infrastructure, not a destination: a small square, quieter than a place.
+            Image(systemName: signal.symbol)
+                .font(.system(size: 9, weight: .bold))
+                .foregroundStyle(signal.role.color)
+                .frame(width: 20, height: 20)
+                .background(Color.void.opacity(0.85), in: .rect(cornerRadius: 5, style: .continuous))
+                .overlay {
+                    RoundedRectangle(cornerRadius: 5, style: .continuous)
+                        .strokeBorder(signal.role.color.opacity(0.6), lineWidth: 1)
+                }
         case .place, .event, .assistantPick:
             ZStack {
                 if signal.isHighlighted {

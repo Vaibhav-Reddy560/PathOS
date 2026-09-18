@@ -13,10 +13,19 @@ nonisolated struct TimetableSlot: Identifiable, Hashable, Sendable {
     var isActive: Bool = true
 }
 
+/// A day off, one cancelled class, or one class moved for a single day.
 nonisolated struct TimetableSkip: Hashable, Sendable {
     var dayStart: Date
     var entryID: UUID?
     var reason: String
+    var startMinutesOverride: Int? = nil
+    var endMinutesOverride: Int? = nil
+    var roomOverride: String? = nil
+
+    /// A class that still happens that day, just differently, rather than not at all.
+    var isMove: Bool {
+        entryID != nil && (startMinutesOverride != nil || roomOverride != nil)
+    }
 }
 
 /// One class on one real date.
@@ -28,12 +37,15 @@ nonisolated struct ClassSession: Identifiable, Hashable, Sendable {
     var teacher: String?
     var start: Date
     var end: Date
+    /// Moved or relocated for this day only.
+    var isMoved = false
 
     var notificationID: String { "pathos.class.\(id)" }
 }
 
 nonisolated enum TimetableRoutine {
-    /// Classes on `day`, earliest first, with days off and cancelled classes removed.
+    /// Classes on `day`, earliest first, with days off and cancelled classes removed and
+    /// one-day moves applied.
     static func sessions(
         slots: [TimetableSlot],
         skips: [TimetableSkip] = [],
@@ -44,23 +56,28 @@ nonisolated enum TimetableRoutine {
         let todaysSkips = skips.filter { calendar.isDate($0.dayStart, inSameDayAs: dayStart) }
         if todaysSkips.contains(where: { $0.entryID == nil }) { return [] }
 
-        let cancelled = Set(todaysSkips.compactMap(\.entryID))
+        let cancelled = Set(todaysSkips.filter { !$0.isMove }.compactMap(\.entryID))
+        let moves = Dictionary(todaysSkips.filter(\.isMove).map { ($0.entryID!, $0) }, uniquingKeysWith: { _, latest in latest })
         let weekday = calendar.component(.weekday, from: dayStart)
 
         return slots
             .filter { $0.isActive && $0.weekday == weekday && !cancelled.contains($0.id) }
-            .sorted { $0.startMinutes < $1.startMinutes }
             .map { slot in
-                ClassSession(
+                let move = moves[slot.id]
+                let start = move?.startMinutesOverride ?? slot.startMinutes
+                let end = move?.endMinutesOverride ?? (start + slot.endMinutes - slot.startMinutes)
+                return ClassSession(
                     id: "\(slot.id.uuidString)@\(dayKey(for: dayStart, calendar: calendar))",
                     slotID: slot.id,
                     subject: slot.subject,
-                    room: slot.room,
+                    room: move?.roomOverride ?? slot.room,
                     teacher: slot.teacher,
-                    start: dayStart.addingTimeInterval(Double(slot.startMinutes) * 60),
-                    end: dayStart.addingTimeInterval(Double(slot.endMinutes) * 60)
+                    start: dayStart.addingTimeInterval(Double(start) * 60),
+                    end: dayStart.addingTimeInterval(Double(end) * 60),
+                    isMoved: move != nil
                 )
             }
+            .sorted { $0.start < $1.start }
     }
 
     /// `2026-09-17` — a stable id suffix without needing a shared formatter.

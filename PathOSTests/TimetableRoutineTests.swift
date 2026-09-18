@@ -42,6 +42,38 @@ struct TimetableRoutineTests {
         #expect(sessions.map(\.subject) == ["Networks"])
     }
 
+    @Test func aClassMovedForOneDayKeepsItsPlaceInTheWeek() {
+        let movedID = UUID()
+        let slots = [
+            slot("DBMS", weekday: thursdayWeekday, from: 9 * 60, to: 10 * 60, id: movedID),
+            slot("Networks", weekday: thursdayWeekday, from: 11 * 60, to: 12 * 60),
+        ]
+        let move = TimetableSkip(dayStart: calendar.startOfDay(for: thursday), entryID: movedID, reason: "Moved",
+                                 startMinutesOverride: 14 * 60, endMinutesOverride: 15 * 60, roomOverride: "Lab 2")
+        let sessions = TimetableRoutine.sessions(slots: slots, skips: [move], on: thursday, calendar: calendar)
+        #expect(sessions.map(\.subject) == ["Networks", "DBMS"])
+        #expect(calendar.component(.hour, from: sessions[1].start) == 14)
+        #expect(sessions[1].room == "Lab 2")
+        #expect(sessions[1].isMoved)
+        #expect(!sessions[0].isMoved)
+
+        // Next week it's back at nine.
+        let nextWeek = thursday.addingTimeInterval(7 * 86_400)
+        let later = TimetableRoutine.sessions(slots: slots, skips: [move], on: nextWeek, calendar: calendar)
+        #expect(later.first?.subject == "DBMS")
+        #expect(calendar.component(.hour, from: later[0].start) == 9)
+    }
+
+    @Test func aRoomChangeAloneKeepsTheTime() {
+        let id = UUID()
+        let slots = [slot("DBMS", weekday: thursdayWeekday, from: 9 * 60, to: 10 * 60, id: id)]
+        let relocation = TimetableSkip(dayStart: calendar.startOfDay(for: thursday), entryID: id, reason: "Moved", roomOverride: "Seminar Hall")
+        let session = TimetableRoutine.sessions(slots: slots, skips: [relocation], on: thursday, calendar: calendar).first
+        #expect(session?.room == "Seminar Hall")
+        #expect(session.map { calendar.component(.hour, from: $0.start) } == 9)
+        #expect(session.map { $0.end.timeIntervalSince($0.start) } == 3_600)
+    }
+
     @Test func currentAndNextTrackTheClock() {
         let slots = [
             slot("DBMS", weekday: thursdayWeekday, from: 9 * 60, to: 10 * 60),

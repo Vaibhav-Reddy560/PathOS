@@ -85,7 +85,7 @@ final class RadarModel {
             longitude: event.longitude,
             distanceMeters: event.distanceMeters,
             start: event.start,
-            isEvent: event.source == .scanned
+            isEvent: event.source.isEvent
         )
     }
 

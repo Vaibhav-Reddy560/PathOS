@@ -18,6 +18,8 @@ nonisolated struct EventSheetRequest: Identifiable, Hashable, Sendable {
     var editing: UUID?
     /// Text to read into a draft (pasted or shared), if any.
     var text: String?
+    /// A mail suggestion to start from, when you chose to edit it before adding.
+    var mailSuggestion: UUID?
 }
 
 /// A short confirmation shown at the top of the deck.
@@ -55,6 +57,20 @@ nonisolated struct CommuteInfo: Sendable {
     }
 }
 
+/// Where the journey planner should start, when it's opened from a stop on the map.
+nonisolated enum JourneyPreset: Hashable, Sendable {
+    case metro(from: String, to: String? = nil)
+    case bus(from: String, to: String? = nil)
+}
+
+/// A change waiting on the assistant card for you to approve, edit or drop.
+nonisolated struct PendingChange: Identifiable, Sendable {
+    var id = UUID()
+    /// What you said, kept for the assistant's history.
+    var request: String
+    var change: ProposedChange
+}
+
 nonisolated struct AssistantTurn: Identifiable, Sendable {
     var id = UUID()
     var question: String
@@ -90,6 +106,8 @@ final class AppState {
     let transit: TransitService
     let trips: TripStore
     let snap: SnapToActionService
+    let mail: MailService
+    let changes: ChangeService
 
     var selectedTab: AppTab = .now
     var deckDetent: PresentationDetent = .deckPeek
@@ -99,13 +117,15 @@ final class AppState {
     var isAddingNote = false
     var isTimetablePresented = false
     var isJourneySheetPresented = false
+    /// Read and cleared by the journey planner when it opens.
+    var journeyPreset: JourneyPreset?
     var isTripsPresented = false
     /// Presents the event sheet: nil id means a new event.
     var eventSheet: EventSheetRequest?
     var isScannerPresented = false
     var isPhotoPickerPresented = false
     private(set) var toast: Toast?
-    var mapLayers = MapLayers(rawValue: UserDefaults.standard.object(forKey: "pathos.mapLayers") as? Int ?? MapLayers.all.rawValue) {
+    var mapLayers = AppState.savedMapLayers() {
         didSet { UserDefaults.standard.set(mapLayers.rawValue, forKey: "pathos.mapLayers") }
     }
     /// Where guidance is pointing. Setting it hides the deck and shows the guidance HUD over the map.
@@ -137,8 +157,14 @@ final class AppState {
     /// Target of the Lock Screen pointer; outlives the in-app compass screen.
     private(set) var pinnedCompassTarget: CompassTarget?
     private(set) var commute: CommuteInfo?
+    /// The trip leg being followed on the Lock Screen, and how it's going.
+    private(set) var trackedLegID: UUID?
+    private(set) var legProgress: LegProgress?
     private(set) var assistantTurns: [AssistantTurn] = []
     private(set) var isAnswering = false
+    /// A change the assistant has proposed and is waiting on you for.
+    var pendingChange: PendingChange?
+    private(set) var isApplyingChange = false
 
     var preferredCab: CabProvider = CabProvider(rawValue: UserDefaults.standard.string(forKey: "pathos.preferredCab") ?? "") ?? .uber {
         didSet { UserDefaults.standard.set(preferredCab.rawValue, forKey: "pathos.preferredCab") }
@@ -159,6 +185,10 @@ final class AppState {
     @ObservationIgnored private var assistantPlaces: [PlaceSummary] = []
     @ObservationIgnored private var loopTask: Task<Void, Never>?
     @ObservationIgnored private var compassTask: Task<Void, Never>?
+    /// Runs while a metro journey or a trip leg is being followed, in the foreground or not.
+    @ObservationIgnored private var travelTask: Task<Void, Never>?
+    /// Legs you ended by hand, so opening the app doesn't start following them again.
+    @ObservationIgnored private var declinedLegIDs: Set<UUID> = []
     @ObservationIgnored private var lastGeofenceSyncLocation: CLLocation?
     @ObservationIgnored private var lastDistanceLocation: CLLocation?
     @ObservationIgnored private var isForeground = false
@@ -173,7 +203,7 @@ final class AppState {
             modelContainer = try ModelContainer(
                 for: SavedPlace.self, SpatialNote.self, ScanRecord.self, Expense.self, DepartureLog.self,
                 PathEvent.self, DayLog.self, NotePhoto.self, TimetableEntry.self, TimetableException.self,
-                Trip.self, TripLeg.self
+                Trip.self, TripLeg.self, MailSuggestion.self
             )
         } catch {
             fatalError("PathOS couldn't open its storage: \(error)")
@@ -208,21 +238,39 @@ final class AppState {
         self.eventStore = eventStore
         let timetable = TimetableService(context: modelContext, ai: ai, notifications: notifications)
         self.timetable = timetable
-        transit = TransitService(places: places, notifications: notifications)
+        transit = TransitService(notifications: notifications)
         trips = TripStore(context: modelContext, notifications: notifications)
+        let geocoder = PlaceGeocoder(places: places)
         events = EventsService(sources: [
             PathOSEventSource(store: eventStore),
             TimetableEventSource(service: timetable),
+            TripEventSource(store: trips),
+            CalendarEventSource(store: eventStore, geocoder: geocoder),
+            MailEventSource(context: modelContext, geocoder: geocoder),
             ScannedEventSource(context: modelContext),
             VenueEventSource(places: places),
         ])
         snap = SnapToActionService(ai: ai, context: modelContext)
+        mail = MailService(context: modelContext, ai: ai, eventStore: eventStore, places: places, notifications: notifications)
+        changes = ChangeService(ai: ai, timetable: timetable, eventStore: eventStore, trips: trips, places: places)
 
         haptics.isAdaptive = adaptiveSound
         notifications.onOpenURL = { [weak self] url in
             self?.handle(url: url)
         }
         Task { await bootstrap() }
+    }
+
+    /// Layers saved before the transit layer existed get it switched on, once.
+    private static func savedMapLayers() -> MapLayers {
+        let defaults = UserDefaults.standard
+        guard let raw = defaults.object(forKey: "pathos.mapLayers") as? Int else { return .all }
+        var layers = MapLayers(rawValue: raw)
+        if !defaults.bool(forKey: "pathos.mapLayers.transitAdded") {
+            layers.insert(.transit)
+            defaults.set(true, forKey: "pathos.mapLayers.transitAdded")
+        }
+        return layers
     }
 
     // MARK: Lifecycle
@@ -254,13 +302,20 @@ final class AppState {
                 Task { await sound.start() }
             }
             startForegroundLoop()
+            followCurrentLegIfAny()
+            Task {
+                let found = await mail.checkIfDue(every: 10 * 60)
+                if found > 0 {
+                    showToast(found == 1 ? "1 new thing from your mail" : "\(found) new things from your mail", role: .world, symbol: "envelope.fill")
+                }
+            }
         case .background:
             isForeground = false
             loopTask?.cancel()
             loopTask = nil
             sound.stop()
             barometer.stop()
-            if pinnedCompassTarget == nil && liveActivities.currentMode != .commute {
+            if !needsBackgroundLocation && liveActivities.currentMode != .commute {
                 location.stopUpdates()
             }
             scheduleBackgroundRefresh()
@@ -274,9 +329,9 @@ final class AppState {
         loopTask = Task {
             while !Task.isCancelled {
                 haptics.update(scene: sound.scene)
-                transit.update(location: location.location)
                 if let here = location.location {
                     recordDistance(to: here)
+                    await transit.refreshNearby(location: here)
                     await context.refresh(location: here)
                     if lastGeofenceSyncLocation.map({ here.distance(from: $0) > 1_000 }) ?? true {
                         lastGeofenceSyncLocation = here
@@ -303,6 +358,8 @@ final class AppState {
         timetable.refreshReminders()
         trips.refreshReminders()
         notifyNewAlerts()
+        // Few messages, so the check fits in the half-minute or so iOS allows.
+        await mail.checkIfDue(every: 20 * 60, limit: 6, notify: true)
     }
 
     func scheduleBackgroundRefresh() {
@@ -433,6 +490,19 @@ final class AppState {
         case "radar": showDeck(.radar)
         case "scan": beginScan()
         case "vault": showDeck(.vault)
+        case "settings": isSettingsPresented = true
+        case "journey":
+            // pathos://journey?from=Indiranagar&to=Majestic, or &by=bus with stop names.
+            let from = value("from").flatMap { MetroNetwork.station(matching: $0) ?? $0 } ?? ""
+            let to = value("to").flatMap { MetroNetwork.station(matching: $0) ?? $0 }
+            planJourney(from: value("by") == "bus" ? .bus(from: value("from") ?? "", to: value("to")) : .metro(from: from, to: to))
+        case "leg":
+            if let id = path.first.flatMap(UUID.init(uuidString:)) {
+                showDeck(.day)
+                if path.dropFirst().first == "track" {
+                    Task { await startLegTracking(id) }
+                }
+            }
         case "voice":
             activateAssistant(listen: true)
         case "compass":
@@ -524,7 +594,22 @@ final class AppState {
                         lineName: journey.lineName,
                         stopsRemaining: progress.stopsRemaining,
                         minutesRemaining: progress.estimatedMinutesRemaining,
-                        isArrivingNext: progress.isArrivingNext
+                        isArrivingNext: progress.isArrivingNext,
+                        symbol: journey.symbol,
+                        changeStation: progress.isChangingNext ? progress.nextStationIndex.map(journey.stationName(at:)) : nil,
+                        changeInstruction: progress.isChangingNext ? progress.nextStationIndex.flatMap { journey.stops[safe: $0]?.changeInstruction } : nil
+                    )
+                }
+            },
+            trip: trackedLeg.flatMap { leg in
+                legProgress.map { progress in
+                    AlertSnapshot.Trip(
+                        title: "\(leg.mode.label) to \(leg.destination)",
+                        destination: leg.destination,
+                        symbol: leg.mode.symbol,
+                        summary: TripTracker.summary(progress),
+                        minutesRemaining: progress.minutesRemaining,
+                        isLate: progress.isLate
                     )
                 }
             },
@@ -578,38 +663,189 @@ final class AppState {
             compassTarget = nil
         case .endJourney:
             endJourney()
+        case .endTrip:
+            Task { await stopLegTracking(declined: true) }
         }
     }
 
     // MARK: Journeys
 
-    func startJourney(lineID: String, fromIndex: Int, toIndex: Int) {
-        transit.start(lineID: lineID, fromIndex: fromIndex, toIndex: toIndex)
+    func startJourney(_ journey: Journey) {
+        transit.start(journey)
         location.startUpdates()
-        location.setBackgroundSessionActive(true)
-        Task { await updateJourneyActivity() }
+        refreshBackgroundSession()
+        startTravelLoop()
     }
 
     func endJourney() {
         transit.end()
-        location.setBackgroundSessionActive(pinnedCompassTarget != nil)
-        Task { await liveActivities.end(ifMode: .journey) }
+        refreshBackgroundSession()
+        Task {
+            await liveActivities.end(ifMode: .journey)
+            // A trip leg that was waiting behind the journey gets the Lock Screen back.
+            await updateLegActivity()
+        }
+    }
+
+    func planJourney(from preset: JourneyPreset?) {
+        journeyPreset = preset
+        selectedSignalID = nil
+        isJourneySheetPresented = true
+    }
+
+    /// Location keeps flowing in the background while anything is being followed.
+    private var needsBackgroundLocation: Bool {
+        pinnedCompassTarget != nil || transit.journey != nil || trackedLegID != nil
+    }
+
+    /// Also stops location entirely when nothing needs it and PathOS isn't on screen, so a trip
+    /// that ends in your pocket doesn't leave GPS running until you next open the app.
+    private func refreshBackgroundSession() {
+        location.setBackgroundSessionActive(needsBackgroundLocation)
+        if !isForeground && !needsBackgroundLocation && liveActivities.currentMode != .commute {
+            location.stopUpdates()
+        }
+    }
+
+    /// One loop for everything that moves with you. It keeps running with the app in the
+    /// background, where the old foreground-only loop couldn't: that's what lets "get off next"
+    /// and trip arrivals fire with the phone in your pocket.
+    private func startTravelLoop() {
+        guard travelTask == nil else { return }
+        travelTask = Task {
+            while !Task.isCancelled, transit.journey != nil || trackedLegID != nil {
+                if transit.journey != nil {
+                    transit.update(location: location.location)
+                    await updateJourneyActivity()
+                }
+                if trackedLegID != nil {
+                    await updateLegProgress()
+                }
+                try? await Task.sleep(for: .seconds(10))
+            }
+            travelTask = nil
+        }
+    }
+
+    // MARK: Trip legs
+
+    var trackedLeg: TripLeg? {
+        trackedLegID.flatMap { trips.leg(id: $0) }
+    }
+
+    /// Follows a trip leg on the Lock Screen until you arrive. iOS only lets this start while
+    /// PathOS is open, which is why the departure reminder has a Start tracking button.
+    func startLegTracking(_ id: UUID) async {
+        guard let leg = trips.leg(id: id) else { return }
+        // A metro leg between two stations is better followed stop by stop.
+        if leg.mode == .metro, transit.journey == nil,
+           let from = MetroNetwork.station(matching: leg.origin),
+           let to = MetroNetwork.station(matching: leg.destination),
+           let route = MetroRouter.route(from: from, to: to) {
+            startJourney(.metro(route))
+            return
+        }
+        trackedLegID = id
+        declinedLegIDs.remove(id)
+        location.startUpdates()
+        refreshBackgroundSession()
+        await updateLegProgress()
+        startTravelLoop()
+    }
+
+    func stopLegTracking(declined: Bool = false) async {
+        if declined, let trackedLegID {
+            declinedLegIDs.insert(trackedLegID)
+        }
+        trackedLegID = nil
+        legProgress = nil
+        refreshBackgroundSession()
+        await liveActivities.end(ifMode: .trip)
+    }
+
+    /// Opening PathOS during a leg starts following it, unless you already ended it.
+    private func followCurrentLegIfAny(now: Date = Date()) {
+        guard trackedLegID == nil, transit.journey == nil else { return }
+        let legs = trips.all().flatMap(\.legs).filter { !declinedLegIDs.contains($0.id) }
+        let planned = legs.map(TripStore.plannedLeg)
+        // Underway, or leaving within a quarter of an hour.
+        let current = TripPlan.current(in: planned, now: now)
+            ?? planned.first { $0.departure > now && $0.departure.timeIntervalSince(now) <= 15 * 60 }
+        guard let current else { return }
+        Task { await startLegTracking(current.id) }
+    }
+
+    private func updateLegProgress(now: Date = Date()) async {
+        guard let leg = trackedLeg else {
+            await stopLegTracking()
+            return
+        }
+        let planned = TripStore.plannedLeg(leg)
+        let progress = TripTracker.progress(
+            leg: planned,
+            origin: leg.originCoordinate,
+            destination: leg.destinationCoordinate,
+            location: location.location?.coordinate,
+            now: now
+        )
+        legProgress = progress
+
+        if progress.hasArrived {
+            if !isForeground {
+                notifications.post(
+                    id: "pathos.leg.\(leg.id.uuidString).arrived",
+                    title: "You've arrived: \(leg.destination)",
+                    body: "\(leg.mode.label) from \(leg.origin).",
+                    category: NotificationService.Category.tripLeg,
+                    link: URL(string: "pathos://day")
+                )
+            }
+            await stopLegTracking()
+            return
+        }
+        // Give up a while after the planned arrival if there's no location to prove otherwise.
+        let giveUp = (planned.arrivalEstimate() ?? leg.departure.addingTimeInterval(12 * 3_600)).addingTimeInterval(2 * 3_600)
+        if now > giveUp {
+            await stopLegTracking()
+            return
+        }
+        await updateLegActivity()
+    }
+
+    /// The metro journey has the Lock Screen while it runs; a leg shows otherwise.
+    private func updateLegActivity() async {
+        guard transit.journey == nil, let leg = trackedLeg, let progress = legProgress else { return }
+        await liveActivities.showIfChanged(
+            .init(
+                mode: .trip,
+                title: "\(leg.mode.label) to \(leg.destination)",
+                subtitle: TripTracker.summary(progress),
+                symbol: leg.mode.symbol,
+                distanceMeters: progress.distanceRemaining.map { ($0 / 100).rounded() * 100 },
+                etaMinutes: progress.minutesRemaining,
+                deepLink: URL(string: "pathos://day")
+            ),
+            staleAfter: 3_600,
+            relevance: progress.isLate ? 92 : 88
+        )
     }
 
     /// Mirrors journey progress onto the Lock Screen and Dynamic Island.
     func updateJourneyActivity() async {
         guard let journey = transit.journey, let progress = transit.progress else { return }
+        let changeHere = progress.isChangingNext ? progress.nextStationIndex.flatMap { journey.stops[safe: $0]?.changeInstruction } : nil
         let state = PathOSActivityAttributes.ContentState(
             mode: .journey,
             title: "To \(journey.destination)",
             subtitle: progress.hasArrived
                 ? "You've arrived"
-                : "\(journey.lineName) · \(JourneyTracker.summary(progress)) (estimated)",
-            symbol: "tram.fill",
+                : changeHere.map { "Next stop \(journey.stationName(at: progress.nextStationIndex ?? 0)): \($0.prefix(1).lowercased() + $0.dropFirst())" }
+                    ?? "\(journey.lineName) · \(JourneyTracker.summary(progress)) (estimated)",
+            symbol: changeHere == nil ? journey.symbol : "arrow.triangle.swap",
             etaMinutes: progress.estimatedMinutesRemaining,
             deepLink: URL(string: "pathos://dashboard")
         )
-        await liveActivities.show(state, staleAfter: 3_600, relevance: 95)
+        await liveActivities.showIfChanged(state, staleAfter: 3_600, relevance: 95)
     }
 
     /// Live Text camera where supported; the photo picker otherwise (e.g. the simulator).
@@ -668,7 +904,7 @@ final class AppState {
         compassTask?.cancel()
         compassTask = nil
         location.endHeadingUpdates()
-        location.setBackgroundSessionActive(false)
+        refreshBackgroundSession()
         await liveActivities.end(ifMode: .compass)
     }
 
@@ -678,9 +914,9 @@ final class AppState {
         guard let target = compassTarget else { return false }
         if pinnedCompassTarget == nil {
             location.beginHeadingUpdates()
-            location.setBackgroundSessionActive(true)
         }
         pinnedCompassTarget = target
+        refreshBackgroundSession()
         let shown = await liveActivities.show(compassState(for: target), staleAfter: 1_800, relevance: 70)
         compassTask?.cancel()
         compassTask = Task {
@@ -784,6 +1020,11 @@ final class AppState {
         isAnswering = true
         defer { isAnswering = false }
         assistantPlaces = []
+        pendingChange = nil
+
+        if ChangeIntent.looksLikeChange(question), await proposeChange(question) {
+            return
+        }
 
         let answer: String
         if ai.isAvailable {
@@ -801,6 +1042,56 @@ final class AppState {
 
         assistantTurns.insert(AssistantTurn(question: question, answer: answer, places: assistantPlaces), at: 0)
         speech.speak(answer)
+    }
+
+    /// Reads a change and puts it on the assistant card. Returns false when it wasn't a change
+    /// after all, so the text is answered as a question instead.
+    private func proposeChange(_ request: String) async -> Bool {
+        let reply: String
+        if !ai.isAvailable {
+            reply = "Apple Intelligence is off, so I can't make changes from what you say. You can edit from the Day tab."
+        } else {
+            switch await changes.propose(request) {
+            case .proposal(let change):
+                pendingChange = PendingChange(request: request, change: change)
+                reply = "Here's the change. Approve it and I'll update your day."
+            case .needs(let message):
+                reply = message
+            case .notAChange:
+                return false
+            }
+        }
+        assistantTurns.insert(AssistantTurn(question: request, answer: reply, places: []), at: 0)
+        speech.speak(reply)
+        return true
+    }
+
+    func approvePendingChange() async {
+        guard let pending = pendingChange, !isApplyingChange else { return }
+        isApplyingChange = true
+        defer { isApplyingChange = false }
+        let summary = await changes.apply(pending.change, near: location.location)
+        pendingChange = nil
+        haptics.success()
+        showToast(summary)
+        assistantTurns.insert(AssistantTurn(question: pending.request, answer: summary, places: []), at: 0)
+    }
+
+    /// Opens the change in its usual editor instead of applying it as proposed.
+    func editPendingChange() {
+        guard let pending = pendingChange else { return }
+        pendingChange = nil
+        isAssistantActive = false
+        switch pending.change {
+        case .moveClass, .cancelClass, .dayOff, .classesOn:
+            isTimetablePresented = true
+        case .moveEvent(let id, _, _, _), .cancelEvent(let id, _, _), .renameEvent(let id, _, _):
+            eventSheet = EventSheetRequest(editing: id, text: nil)
+        case .addEvent:
+            eventSheet = EventSheetRequest(editing: nil, text: pending.request)
+        case .moveLeg, .cancelLeg:
+            isTripsPresented = true
+        }
     }
 
     func searchPlacesForAssistant(query: String, maxWalkMinutes: Int) async -> [PlaceSummary] {

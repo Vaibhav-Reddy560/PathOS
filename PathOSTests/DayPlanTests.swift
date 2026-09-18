@@ -59,6 +59,23 @@ struct DayPlanTests {
         #expect(DayPlan.reminderDate(start: start, minutesBefore: 90, now: noon) == nil)
     }
 
+    @Test func aDeadlineAtMidnightStaysOnItsDay() {
+        // A task is a moment with no length; at exactly midnight it touches no time on either side.
+        let midnight = calendar.startOfDay(for: noon.addingTimeInterval(24 * 3_600))
+        let deadline = PlannedEvent(id: UUID(), title: "Fees due", start: midnight, end: midnight, isAllDay: false,
+                                    placeName: nil, latitude: nil, longitude: nil)
+        #expect(DayPlan.events([deadline], on: midnight, calendar: calendar).map(\.title) == ["Fees due"])
+        #expect(DayPlan.events([deadline], on: noon, calendar: calendar).isEmpty)
+    }
+
+    @Test func allDayRemindersCountBackFromTheMorning() {
+        let day = calendar.startOfDay(for: noon)
+        let anchor = DayPlan.reminderAnchor(start: day, isAllDay: true, calendar: calendar)
+        #expect(calendar.component(.hour, from: anchor) == 9)
+        #expect(calendar.isDate(anchor, inSameDayAs: day))
+        #expect(DayPlan.reminderAnchor(start: noon, isAllDay: false, calendar: calendar) == noon)
+    }
+
     @Test func distanceIgnoresJitterAndTeleports() {
         #expect(DayDistance.step(fromDistance: 4) == 0)
         #expect(DayDistance.step(fromDistance: 120) == 120)

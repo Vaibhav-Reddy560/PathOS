@@ -4,83 +4,126 @@ import Testing
 @testable import PathOS
 
 struct JourneyTrackingTests {
-    // Indiranagar (15) → Majestic (22) on the Purple Line.
-    private let fromIndex = 15
-    private let toIndex = 22
+    private let indiranagar = "Indiranagar"
+    private let majestic = "Nadaprabhu Kempegowda Station, Majestic"
+    /// A Tuesday at 14:00, off-peak.
+    private var afternoon: Date {
+        var parts = DateComponents(year: 2026, month: 9, day: 15, hour: 14)
+        parts.timeZone = TimeZone(identifier: "Asia/Kolkata")
+        return Calendar.current.date(from: parts)!
+    }
+
+    private var purpleRide: Journey {
+        Journey.metro(MetroRouter.route(from: indiranagar, to: majestic, at: afternoon)!, startedAt: afternoon)
+    }
+
+    // MARK: The bundled network
 
     @Test func theNetworkMatchesWhatBMRCLRuns() {
-        #expect(MetroNetwork.purple.stations.count == 37)
-        #expect(MetroNetwork.green.stations.count == 32)
-        #expect(MetroNetwork.yellow.stations.count == 16)
-        #expect(MetroNetwork.purple.stations.first == "Whitefield (Kadugodi)")
-        #expect(MetroNetwork.yellow.stations.last == "Delta Electronics Bommasandra")
+        let lines = MetroNetwork.lines.map(\.id)
+        #expect(lines == ["purple", "green", "yellow"])
+        #expect(MetroNetwork.line(id: "purple")?.stations.count == 37)
+        #expect(MetroNetwork.line(id: "green")?.stations.count == 32)
+        #expect(MetroNetwork.line(id: "yellow")?.stations.count == 16)
+        #expect(MetroNetwork.line(id: "purple")?.stations.first == "Whitefield (Kadugodi)")
+        #expect(MetroNetwork.line(id: "yellow")?.stations.last == "Delta Electronics Bommasandra")
+    }
+
+    @Test func everyStationHasARealPlaceInBengaluru() {
+        for line in MetroNetwork.lines {
+            for station in line.stops {
+                #expect((12.7...13.3).contains(station.lat) && (77.3...77.9).contains(station.lon), "\(station.name)")
+            }
+            for (a, b) in zip(line.stops, line.stops.dropFirst()) {
+                let gap = GeoMath.distance(from: a.coordinate, to: b.coordinate)
+                #expect(gap > 300 && gap < 3_500, "\(a.name) → \(b.name) is \(Int(gap)) m")
+            }
+        }
     }
 
     @Test func majesticAndRVRoadAreInterchanges() {
-        #expect(MetroNetwork.interchangeLines(for: "Nadaprabhu Kempegowda Station, Majestic").map(\.id) == ["purple", "green"])
+        #expect(MetroNetwork.interchangeLines(for: majestic).map(\.id) == ["purple", "green"])
         #expect(MetroNetwork.interchangeLines(for: "Rashtreeya Vidyalaya Road").map(\.id) == ["green", "yellow"])
-        #expect(MetroNetwork.interchangeLines(for: "Indiranagar").map(\.id) == ["purple"])
+        #expect(MetroNetwork.interchangeLines(for: indiranagar).map(\.id) == ["purple"])
     }
 
+    @Test func typedNamesFindTheirStation() {
+        #expect(MetroNetwork.station(matching: "MG Road") == "Mahatma Gandhi Road")
+        #expect(MetroNetwork.station(matching: "Majestic metro station") == majestic)
+        #expect(MetroNetwork.station(matching: "whitefield") == "Whitefield (Kadugodi)")
+        #expect(MetroNetwork.station(matching: "Silk Board") == "Central Silk Board")
+        // "Peenya" is inside "Peenya Industry" too, but an exact name wins.
+        #expect(MetroNetwork.station(matching: "Peenya") == "Peenya")
+        #expect(MetroNetwork.station(matching: "Koramangala") == nil)
+    }
+
+    // MARK: Following a journey
+
     @Test func aJustStartedJourneyCountsEveryStop() {
-        let progress = JourneyTracker.progress(fromIndex: fromIndex, toIndex: toIndex, nearestIndex: fromIndex, elapsed: 0)
+        let journey = purpleRide
+        let progress = JourneyTracker.progress(stops: journey.stops, nearestIndex: 0, elapsed: 0)
+        #expect(journey.stops.count == 8)
         #expect(progress.stopsRemaining == 7)
-        #expect(progress.nextStationIndex == 16)
+        #expect(progress.nextStationIndex == 1)
         #expect(!progress.isArrivingNext)
         #expect(!progress.hasArrived)
+        #expect(progress.nextChangeIndex == nil)
     }
 
     @Test func gpsMovesYouAlongTheLine() {
-        let progress = JourneyTracker.progress(fromIndex: fromIndex, toIndex: toIndex, nearestIndex: 21, elapsed: 8 * 60)
-        #expect(progress.currentIndex == 21)
-        #expect(progress.stopsRemaining == 1)
+        let progress = JourneyTracker.progress(stops: purpleRide.stops, nearestIndex: 6, elapsed: 8 * 60)
+        #expect(progress.currentIndex == 6)
         #expect(progress.isArrivingNext)
         #expect(progress.isTrackingByLocation)
     }
 
     @Test func undergroundTheClockKeepsTheEstimateGoing() {
-        // No usable fix: 9 minutes at ~2.2 min per stop is about 4 stops.
-        let progress = JourneyTracker.progress(fromIndex: fromIndex, toIndex: toIndex, nearestIndex: nil, elapsed: 9 * 60)
-        #expect(progress.currentIndex == 19)
-        #expect(progress.stopsRemaining == 3)
+        let stops = purpleRide.stops
+        // No usable fix: the clock says you've just passed the fifth stop.
+        let progress = JourneyTracker.progress(stops: stops, nearestIndex: nil, elapsed: (stops[4].minutesFromStart + 0.1) * 60)
+        #expect(progress.currentIndex == 4)
         #expect(!progress.isTrackingByLocation)
+        // The first stop takes longest to reach: it includes waiting for a train.
+        #expect(stops[1].minutesFromStart > stops[2].minutesFromStart - stops[1].minutesFromStart)
     }
 
     @Test func aStrayFixBehindYouIsIgnored() {
-        // A fix snapping back to the start after 8 minutes shouldn't rewind the journey.
-        let progress = JourneyTracker.progress(fromIndex: fromIndex, toIndex: toIndex, nearestIndex: fromIndex, elapsed: 8 * 60)
-        #expect(progress.currentIndex >= 18)
-    }
-
-    @Test func journeysRunBackwardsToo() {
-        // Majestic → Indiranagar is the same line the other way.
-        let progress = JourneyTracker.progress(fromIndex: toIndex, toIndex: fromIndex, nearestIndex: 17, elapsed: 10 * 60)
-        #expect(progress.currentIndex == 17)
-        #expect(progress.nextStationIndex == 16)
-        #expect(progress.stopsRemaining == 2)
+        let stops = purpleRide.stops
+        let progress = JourneyTracker.progress(stops: stops, nearestIndex: 0, elapsed: stops[5].minutesFromStart * 60)
+        #expect(progress.currentIndex == 5)
     }
 
     @Test func arrivalEndsTheJourney() {
-        let progress = JourneyTracker.progress(fromIndex: fromIndex, toIndex: toIndex, nearestIndex: toIndex, elapsed: 16 * 60)
+        let progress = JourneyTracker.progress(stops: purpleRide.stops, nearestIndex: 7, elapsed: 20 * 60)
         #expect(progress.hasArrived)
         #expect(progress.nextStationIndex == nil)
         #expect(JourneyTracker.summary(progress) == "You've arrived")
     }
 
-    @Test func nearestStationNeedsYouToBeNearIt() {
-        let stations = [
-            StationFix(name: "Indiranagar", latitude: 12.9784, longitude: 77.6408),
-            StationFix(name: "Halasuru", latitude: 12.9761, longitude: 77.6266),
-        ]
-        let atIndiranagar = CLLocationCoordinate2D(latitude: 12.9785, longitude: 77.6410)
-        #expect(JourneyTracker.nearestStationIndex(to: atIndiranagar, stations: stations) == 0)
+    @Test func aChangeIsFlaggedTheStopBefore() {
+        // Indiranagar → Lalbagh: Purple to Majestic, then Green.
+        let journey = Journey.metro(MetroRouter.route(from: indiranagar, to: "Lalbagh", at: afternoon)!, startedAt: afternoon)
+        let changeIndex = journey.stops.firstIndex { $0.name == majestic }!
+        #expect(journey.stops[changeIndex].changeInstruction == "Change to the Green Line towards Silk Institute")
+        let before = JourneyTracker.progress(stops: journey.stops, nearestIndex: changeIndex - 1, elapsed: 0)
+        #expect(before.isChangingNext)
+        #expect(before.nextChangeIndex == changeIndex)
+        let after = JourneyTracker.progress(stops: journey.stops, nearestIndex: changeIndex, elapsed: 0)
+        #expect(!after.isChangingNext)
+        #expect(after.nextChangeIndex == nil)
+    }
 
+    @Test func nearestStopNeedsYouToBeNearIt() {
+        let stops = purpleRide.stops
+        let atIndiranagar = CLLocationCoordinate2D(latitude: stops[0].latitude + 0.0005, longitude: stops[0].longitude)
+        #expect(JourneyTracker.nearestStopIndex(to: atIndiranagar, stops: stops, radius: 700) == 0)
         let farAway = CLLocationCoordinate2D(latitude: 12.90, longitude: 77.50)
-        #expect(JourneyTracker.nearestStationIndex(to: farAway, stations: stations) == nil)
+        #expect(JourneyTracker.nearestStopIndex(to: farAway, stops: stops, radius: 700) == nil)
     }
 
     @Test func summaryAlwaysReadsAsAnEstimate() {
-        let progress = JourneyTracker.progress(fromIndex: fromIndex, toIndex: toIndex, nearestIndex: 18, elapsed: 6 * 60)
-        #expect(JourneyTracker.summary(progress) == "4 stops · about 9 min")
+        let progress = JourneyTracker.progress(stops: purpleRide.stops, nearestIndex: 3, elapsed: 0)
+        #expect(JourneyTracker.summary(progress).hasPrefix("4 stops · about "))
+        #expect(JourneyTracker.summary(progress).hasSuffix(" min"))
     }
 }

@@ -7,6 +7,12 @@ nonisolated struct LocalEvent: Identifiable, Hashable, Sendable {
     nonisolated enum Source: String, Sendable {
         case venue
         case scanned
+        case trip
+        case calendar
+        case mail
+
+        /// Has a time, as opposed to a place you could go.
+        var isEvent: Bool { self != .venue }
     }
 
     var id: String
@@ -25,7 +31,8 @@ protocol EventSource {
     func events(near location: CLLocation) async -> [LocalEvent]
 }
 
-/// Entertainment venues from Apple Maps (India has no free public events API).
+/// Entertainment venues from Apple Maps. They're places, not events: India has no free events
+/// API, so real events come from your calendars, your mail, and what you scan or add.
 final class VenueEventSource: EventSource {
     private let places: PlacesService
 
@@ -39,7 +46,7 @@ final class VenueEventSource: EventSource {
             LocalEvent(
                 id: "venue:\(venue.id)",
                 title: venue.name,
-                subtitle: "\(venue.categoryName) · check today's shows",
+                subtitle: venue.categoryName,
                 start: nil,
                 latitude: venue.latitude,
                 longitude: venue.longitude,

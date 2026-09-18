@@ -71,6 +71,13 @@ final class TripStore {
         refreshReminders()
     }
 
+    /// Saves a changed leg and moves its departure reminder with it.
+    func update(_ leg: TripLeg) {
+        Task { await notifications.removePending(withPrefix: leg.notificationID) }
+        persist()
+        refreshReminders()
+    }
+
     func delete(_ leg: TripLeg) {
         Task { await notifications.removePending(withPrefix: leg.notificationID) }
         context.delete(leg)
@@ -97,15 +104,76 @@ final class TripStore {
                     at: fireDate,
                     title: "\(leg.mode.label) to \(leg.destination)",
                     body: "Leaves \(leg.departure.formatted(date: .omitted, time: .shortened)) from \(leg.origin)",
-                    category: NotificationService.Category.journey,
-                    link: URL(string: "pathos://day"),
+                    category: NotificationService.Category.tripLeg,
+                    link: URL(string: "pathos://leg/\(leg.id.uuidString)"),
                     timeSensitive: true
                 )
             }
         }
     }
 
+    func leg(id: UUID) -> TripLeg? {
+        all().flatMap(\.legs).first { $0.id == id }
+    }
+
+    /// Puts both ends of a leg on the map from what you typed. "Home" and "Work" use your saved
+    /// places; anything else is looked up in Apple Maps. Ends you've already pinned are kept.
+    func pinEnds(of leg: TripLeg, places: PlacesService, vault: SpatialVaultService, near here: CLLocation?) async {
+        let search = here ?? CLLocation(latitude: 12.9716, longitude: 77.5946)
+        func locate(_ name: String) async -> CLLocationCoordinate2D? {
+            let key = name.trimmingCharacters(in: .whitespaces).lowercased()
+            if key == "home", let home = vault.place(ofKind: .home) { return home.coordinate }
+            if key == "work", let work = vault.place(ofKind: .work) { return work.coordinate }
+            if key == "here" || key == "current location" { return here?.coordinate }
+            return (try? await places.search(name, near: search, radius: 200_000))?.first?.coordinate
+        }
+        if leg.originCoordinate == nil, let origin = await locate(leg.origin) {
+            leg.originLatitude = origin.latitude
+            leg.originLongitude = origin.longitude
+        }
+        if leg.destinationCoordinate == nil, let destination = await locate(leg.destination) {
+            leg.destinationLatitude = destination.latitude
+            leg.destinationLongitude = destination.longitude
+        }
+        persist()
+    }
+
     private func persist() {
         try? context.save()
+    }
+}
+
+/// Trip legs on the map and in Radar: where you need to be before a leg leaves, and where
+/// you're headed once it has.
+final class TripEventSource: EventSource {
+    private let store: TripStore
+
+    /// Legs further ahead than this stay in the Day tab, not on today's map.
+    static let horizon: TimeInterval = 36 * 3_600
+
+    init(store: TripStore) {
+        self.store = store
+    }
+
+    func events(near location: CLLocation) async -> [LocalEvent] {
+        let now = Date()
+        return store.all().flatMap(\.legs).compactMap { leg in
+            let arrival = TripStore.plannedLeg(leg).arrivalEstimate() ?? leg.departure.addingTimeInterval(3_600)
+            guard arrival > now, leg.departure < now.addingTimeInterval(Self.horizon) else { return nil }
+            let isUnderway = leg.departure <= now
+            let pin = isUnderway ? leg.destinationCoordinate : (leg.originCoordinate ?? leg.destinationCoordinate)
+            let time = (isUnderway ? arrival : leg.departure).formatted(date: .omitted, time: .shortened)
+            return LocalEvent(
+                id: "leg:\(leg.id.uuidString)",
+                title: "\(leg.mode.label) to \(leg.destination)",
+                subtitle: isUnderway ? "Arrives about \(time)" : "Leaves \(time) from \(leg.origin)",
+                start: leg.departure,
+                latitude: pin?.latitude,
+                longitude: pin?.longitude,
+                distanceMeters: pin.map { location.distance(from: CLLocation(latitude: $0.latitude, longitude: $0.longitude)) },
+                source: .trip,
+                symbol: leg.mode.symbol
+            )
+        }
     }
 }

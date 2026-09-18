@@ -9,6 +9,7 @@ struct IslandAssistantPanel: View {
 
     private let suggestions = [
         "Top cafés within a 5-minute walk",
+        "No classes tomorrow",
         "Where did I park?",
         "Will it rain in the next two hours?",
         "Nearest metro station",
@@ -30,6 +31,10 @@ struct IslandAssistantPanel: View {
                 suggestionChips
             }
 
+            if let pending = state.pendingChange, !state.voice.isListening, !state.isAnswering {
+                ChangeProposalCard(pending: pending)
+            }
+
             if case .unavailable(let reason) = state.ai.status {
                 Label(reason, systemImage: "apple.intelligence")
                     .font(.caption)
@@ -37,7 +42,7 @@ struct IslandAssistantPanel: View {
             }
 
             HStack(spacing: 8) {
-                TextField("Or type a question", text: $typedQuestion)
+                TextField("Ask, or say what to change", text: $typedQuestion)
                     .focused($isTyping)
                     .submitLabel(.send)
                     .onSubmit(submitTyped)
@@ -189,7 +194,7 @@ struct IslandAssistantPanel: View {
         if !state.voice.transcript.isEmpty { return state.voice.transcript }
         if state.voice.isListening { return "Go ahead…" }
         if state.isAnswering { return "Working it out…" }
-        return state.assistantTurns.first?.question ?? "What do you need around here?"
+        return state.assistantTurns.first?.question ?? "What do you need, or what should change?"
     }
 
     private func submitTyped() {

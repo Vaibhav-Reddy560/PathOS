@@ -36,10 +36,16 @@ struct EventSheet: View {
         return state.eventStore.all().first { $0.id == id }
     }
 
+    private var mailSuggestion: MailSuggestion? {
+        request.mailSuggestion.flatMap { state.mail.suggestion(id: $0) }
+    }
+
     var body: some View {
         NavigationStack {
             Form {
-                if editingEvent == nil {
+                if let suggestion = mailSuggestion {
+                    mailSourceSection(suggestion)
+                } else if editingEvent == nil {
                     captureSection
                 }
                 detailsSection
@@ -126,6 +132,30 @@ struct EventSheet: View {
             InstrumentLabel("Capture")
         } footer: {
             Text("Reading happens on your iPhone. Nothing is saved until you tap Save.")
+        }
+    }
+
+    private func mailSourceSection(_ suggestion: MailSuggestion) -> some View {
+        Section {
+            Label {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(suggestion.subject.isEmpty ? "(No subject)" : suggestion.subject)
+                        .foregroundStyle(.ice)
+                        .lineLimit(2)
+                    Text(suggestion.senderName)
+                        .font(.footnote)
+                        .foregroundStyle(.mist)
+                }
+            } icon: {
+                Image(systemName: "envelope")
+                    .foregroundStyle(.ion)
+            }
+        } header: {
+            InstrumentLabel("From your mail")
+        } footer: {
+            Text(suggestion.usedAI
+                 ? "Read by Apple Intelligence on your iPhone. Check the details below."
+                 : "Read with on-device rules. Check the details below.")
         }
     }
 
@@ -271,8 +301,33 @@ struct EventSheet: View {
             tags = Set(event.tags)
             reminderMinutes = event.reminderMinutesBefore
             origin = event.origin
+        } else if let suggestion = mailSuggestion {
+            load(suggestion)
         } else if let text = request.text, !text.isEmpty {
             sourceText = text
+        }
+    }
+
+    private func load(_ suggestion: MailSuggestion) {
+        title = suggestion.title
+        notes = MailService.notes(for: suggestion)
+        if let date = suggestion.start {
+            start = date
+        }
+        isAllDay = suggestion.isAllDay
+        if let end = suggestion.endsAt, let date = suggestion.start {
+            // The picker only offers set lengths; an unmatched value would leave it blank.
+            let minutes = Int(end.timeIntervalSince(date) / 60)
+            durationMinutes = [30, 60, 90, 120, 180, 300].min { abs($0 - minutes) < abs($1 - minutes) } ?? 60
+        }
+        placeName = suggestion.placeName ?? ""
+        if suggestion.kind == .task {
+            tags = ["Task"]
+            reminderMinutes = 60
+        }
+        origin = .mail
+        if let place = suggestion.placeName, !MailTriage.isOnline(place) {
+            Task { await findOnMap() }
         }
     }
 
@@ -350,6 +405,9 @@ struct EventSheet: View {
         event.origin = origin
 
         state.eventStore.save(event)
+        if let id = request.mailSuggestion {
+            state.mail.markAdded(id: id, eventID: event.id)
+        }
         state.haptics.success()
         state.showToast(editingEvent == nil ? "Event saved" : "Event updated")
         dismiss()

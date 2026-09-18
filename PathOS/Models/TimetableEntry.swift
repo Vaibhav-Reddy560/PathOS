@@ -26,8 +26,8 @@ final class TimetableEntry {
     }
 }
 
-/// A day the timetable doesn't apply: a holiday, a strike, a day you're away.
-/// Without one, the timetable runs every week, which is what a college term looks like.
+/// A day the timetable doesn't apply as written: a holiday, a cancelled class, or a class moved
+/// for just that day. Without one, the timetable runs every week, which is what a college term looks like.
 @Model
 final class TimetableException {
     var id: UUID = UUID()
@@ -36,11 +36,26 @@ final class TimetableException {
     var reason: String = "No classes"
     /// nil means the whole day is off; otherwise just this class.
     var entryID: UUID?
+    /// Set when the class is moved rather than cancelled: its times on this one day.
+    var startMinutesOverride: Int?
+    var endMinutesOverride: Int?
+    /// Set when the class meets somewhere else on this one day.
+    var roomOverride: String?
     var createdAt: Date = Date()
 
-    init(dayStart: Date, reason: String = "No classes", entryID: UUID? = nil) {
+    init(
+        dayStart: Date,
+        reason: String = "No classes",
+        entryID: UUID? = nil,
+        startMinutesOverride: Int? = nil,
+        endMinutesOverride: Int? = nil,
+        roomOverride: String? = nil
+    ) {
         self.dayStart = dayStart
         self.reason = reason
         self.entryID = entryID
+        self.startMinutesOverride = startMinutesOverride
+        self.endMinutesOverride = endMinutesOverride
+        self.roomOverride = roomOverride
     }
 }

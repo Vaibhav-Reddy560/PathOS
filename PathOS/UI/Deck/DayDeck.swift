@@ -34,6 +34,9 @@ struct DayDeck: View {
                 if isToday, let next = nextItem {
                     nextUp(next)
                 }
+                if isToday {
+                    MailInbox()
+                }
                 schedule
                 actions
             }
@@ -391,8 +394,11 @@ enum DayItem: Identifiable {
     }
 
     var tags: [String] {
-        if case .event(let event) = self { return event.tags }
-        return []
+        switch self {
+        case .event(let event): event.tags
+        case .classSession(let session): session.isMoved ? ["Changed today"] : []
+        case .leg: []
+        }
     }
 
     var symbol: String {
@@ -403,8 +409,12 @@ enum DayItem: Identifiable {
         }
     }
 
+    /// A deadline has no length, so it shows as a single time.
+    var isMoment: Bool { !isAllDay && end <= start }
+
     var timeRange: String {
         if isAllDay { return "All day" }
+        if isMoment { return "Due \(start.formatted(date: .omitted, time: .shortened))" }
         return "\(start.formatted(date: .omitted, time: .shortened))–\(end.formatted(date: .omitted, time: .shortened))"
     }
 
@@ -426,7 +436,7 @@ private struct DayItemRow: View {
                 Text(item.isAllDay ? "All" : item.start.formatted(date: .omitted, time: .shortened))
                     .font(.subheadline.weight(.semibold).monospacedDigit())
                     .foregroundStyle(isDone ? .mist : .ice)
-                if !item.isAllDay {
+                if !item.isAllDay && !item.isMoment {
                     Text(item.end.formatted(date: .omitted, time: .shortened))
                         .font(.caption.monospacedDigit())
                         .foregroundStyle(.mist)

@@ -73,6 +73,9 @@ struct SignalDetailView: View {
                         }
                     }
                 }
+                if signal.kind == .transitStop {
+                    TransitStopDetail(signal: signal)
+                }
                 placeInfo
                 actions
             }
@@ -172,6 +175,24 @@ struct SignalDetailView: View {
             }
             .pathPrimaryAction()
 
+            if let legID {
+                let isFollowing = state.trackedLegID == legID
+                Button {
+                    Task {
+                        if isFollowing {
+                            await state.stopLegTracking(declined: true)
+                        } else {
+                            await state.startLegTracking(legID)
+                        }
+                    }
+                } label: {
+                    Label(isFollowing ? "Stop tracking this leg" : "Track this leg on the Lock Screen",
+                          systemImage: isFollowing ? "stop.circle" : "location.fill.viewfinder")
+                        .frame(maxWidth: .infinity, minHeight: 32)
+                }
+                .pathSecondaryAction()
+            }
+
             if isApplePlace {
                 Button {
                     isShowingFullDetails = true
@@ -231,6 +252,12 @@ struct SignalDetailView: View {
 
     private var memoryPhotos: [Data] {
         memoryNote?.allPhotoData ?? []
+    }
+
+    /// Set when the signal is a trip leg.
+    private var legID: UUID? {
+        guard signal.id.hasPrefix("leg:") else { return nil }
+        return UUID(uuidString: String(signal.id.dropFirst(4)))
     }
 
     private var memoryNote: SpatialNote? {
