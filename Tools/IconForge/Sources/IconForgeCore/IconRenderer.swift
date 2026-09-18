@@ -72,7 +72,23 @@ public struct IconRenderer {
         let clearOfMark = Raster.inverted(Raster.combine(nearMark, nearMark) { value, _ in
             UInt8(min(255, Int(value) * 6))
         })
-        CityMap.drawRoute(plan, in: ctx, palette: palette, scale: k, ink: ink, clearance: clearOfMark)
+        // A marker is a solid object and needs more room than a dashed line does: set well inside
+        // the rounded shape iOS masks the icon to — not the square edge of the file — and further
+        // from the mark, so it never looks crowded against either.
+        let insideIcon = Raster.mask(size: size) { inner in
+            inner.addPath(Squircle.path(size: s, inset: 82 * k))
+            inner.fillPath()
+        }
+        let farFromMark = Raster.blurred(logoMask, radius: 60 * k)
+        let markerRoom = Raster.combine(
+            insideIcon,
+            Raster.inverted(Raster.combine(farFromMark, farFromMark) { value, _ in
+                UInt8(min(255, Int(value) * 6))
+            })
+        ) { inside, away in min(inside, away) }
+
+        CityMap.drawRoute(plan, in: ctx, palette: palette, scale: k, ink: ink,
+                          clearance: clearOfMark, markerClearance: markerRoom)
 
         // 4 — the route through the city. The soft green pools that used to sit here are gone:
         // a blur of colour reads as a smudge at icon size, where a line with stops on it reads as

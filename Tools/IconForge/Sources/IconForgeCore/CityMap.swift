@@ -26,6 +26,10 @@ public struct CityPlan {
     /// most literal thing it can mean — drawn as a line with stops, never as a glow.
     public var route: [CGPoint]
     public var routeStops: [CGPoint]
+    /// Routes through other pairs of roads. Which one gets drawn depends on how much clear space
+    /// each has once the mark and the icon's rounded edge are taken into account, and that is only
+    /// known at draw time — so the choice is made there, from these.
+    public var routeCandidates: [[CGPoint]]
     public var transform: CGAffineTransform
 }
 
@@ -183,36 +187,42 @@ public enum CityMap {
             }
         }
 
-        // A short route with stops, sitting in a clear corner rather than crossing the whole icon.
-        // Long enough to read as a path, short enough not to compete with the mark.
-        //
-        // Placed by working backwards through the map's own transform: pick where it should appear
-        // in the icon, convert that to map space, and take the roads nearest to it. Guessing at row
-        // and column indices says nothing about where a rotated, oversized map actually lands.
-        let placement = CGAffineTransform(translationX: size / 2, y: size / 2)
-            .rotated(by: rotation)
-            .translatedBy(x: -span / 2, y: -span / 2)
-        // Kept outside the mark's bounding box. A bright green line running alongside the mark
-        // collapses the contrast at that edge, which is the one thing the icon cannot afford.
-        let corner = CGPoint(x: size * 0.815, y: size * 0.155).applying(placement.inverted())
+        // Routes through several pairs of roads, all generated long. Which one is drawn, and how
+        // much of it, is decided at draw time against the clear space available — hand-placing a
+        // single route means re-tuning it every time the mark or the street layout changes, and
+        // the position snaps to the nearest road anyway, so small adjustments do nothing.
         func nearest(_ values: [Double], to target: Double) -> Double {
             values.min { abs($0 - target) < abs($1 - target) } ?? target
         }
-        let routeRow = nearest(rows, to: corner.y)
-        let routeColumn = nearest(columns, to: corner.x)
+        func lRoute(row: Double, column: Double, before: Double, after: Double) -> [CGPoint] {
+            var points: [CGPoint] = []
+            var u = column - before
+            while u <= column { points.append(warp(CGPoint(x: u, y: row))); u += span * 0.006 }
+            var v = row
+            while v <= row + after { points.append(warp(CGPoint(x: column, y: v))); v += span * 0.006 }
+            return points
+        }
 
-        var route: [CGPoint] = []
-        // Short enough that both ends stay clear of the mark: an origin dot hidden under the
-        // figure is worse than no origin dot, because the route then just fades in from nowhere.
-        let approach = span * 0.215, departure = span * 0.235
-        var u = routeColumn - approach
-        while u <= routeColumn { route.append(warp(CGPoint(x: u, y: routeRow))); u += span * 0.006 }
-        var v = routeRow
-        while v <= routeRow + departure { route.append(warp(CGPoint(x: routeColumn, y: v))); v += span * 0.006 }
-        let routeStops = [route.first!, warp(CGPoint(x: routeColumn, y: routeRow)), route.last!]
+        var routeCandidates: [[CGPoint]] = []
+        for rowTarget in [0.26, 0.40, 0.56, 0.70] {
+            for columnTarget in [0.30, 0.46, 0.62, 0.76] {
+                let row = nearest(rows, to: span * rowTarget)
+                let column = nearest(columns, to: span * columnTarget)
+                routeCandidates.append(lRoute(row: row, column: column,
+                                              before: span * 0.42, after: span * 0.34))
+            }
+        }
+        let route = routeCandidates[0]
+        let routeStops = [route.first!, route[route.count / 2], route.last!]
+
+        // Centre the oversized map, rotate it, then bring it back into icon space.
+        let placement = CGAffineTransform(translationX: size / 2, y: size / 2)
+            .rotated(by: rotation)
+            .translatedBy(x: -span / 2, y: -span / 2)
 
         return CityPlan(streets: streets, blocks: blocks, openAreas: openAreas,
-                        junctions: junctions, route: route, routeStops: routeStops, transform: placement)
+                        junctions: junctions, route: route, routeStops: routeStops,
+                        routeCandidates: routeCandidates, transform: placement)
     }
 
     // MARK: Drawing
@@ -302,8 +312,14 @@ public enum CityMap {
         return path
     }
 
+    /// - Parameters:
+    ///   - clearance: where the path may show — white is allowed.
+    ///   - markerClearance: where an end marker may sit. Stricter than `clearance`: a marker is a
+    ///     solid object that needs room around it, and it has to stay inside the rounded shape iOS
+    ///     masks the icon to, not merely inside the square the file happens to be.
     public static func drawRoute(_ plan: CityPlan, in ctx: CGContext, palette: Palette,
-                                 scale: Double, ink: Ink = Ink(), clearance: CGImage? = nil) {
+                                 scale: Double, ink: Ink = Ink(), clearance: CGImage? = nil,
+                                 markerClearance: CGImage? = nil) {
         guard ink.route > 0, ink.style != .none else { return }
         let bounds = CGRect(x: 0, y: 0, width: Double(ctx.width), height: Double(ctx.height))
         let canvas = bounds.insetBy(dx: 22 * scale, dy: 22 * scale)
@@ -321,13 +337,46 @@ public enum CityMap {
         // clearance back means the route sizes itself to whatever room it has.
         let n = ctx.width
         let clear: [Double]? = clearance.map { GlassShading.gray($0, size: n) }
-        func isClear(_ iconPoint: CGPoint) -> Bool {
+        let markerRoom: [Double]? = markerClearance.map { GlassShading.gray($0, size: n) }
+
+        func sample(_ buffer: [Double]?, at iconPoint: CGPoint) -> Bool {
             guard canvas.contains(iconPoint) else { return false }
-            guard let clear else { return true }
+            guard let buffer else { return true }
             // Bitmap row 0 is the top of the image; user space has y growing upward.
             let column = Int(iconPoint.x), row = n - 1 - Int(iconPoint.y)
             guard column >= 0, column < n, row >= 0, row < n else { return false }
-            return clear[row * n + column] > 0.94
+            return buffer[row * n + column] > 0.94
+        }
+
+        func isClear(_ iconPoint: CGPoint) -> Bool { sample(clear, at: iconPoint) }
+
+        /// Every marker is tested by its whole footprint, not by the one point it sits on. A pin
+        /// stands well above its tip, so a tip with room is no guarantee the head has any.
+        func hasRoom(for footprint: [CGPoint]) -> Bool {
+            footprint.allSatisfy { sample(markerRoom, at: $0) }
+        }
+
+        func ring(_ centre: CGPoint, _ radius: Double) -> [CGPoint] {
+            [centre] + (0..<10).map { step in
+                let angle = Double(step) / 10 * 2 * .pi
+                return CGPoint(x: centre.x + cos(angle) * radius, y: centre.y + sin(angle) * radius)
+            }
+        }
+
+        func dotFootprint(_ point: CGPoint, radius: Double) -> [CGPoint] {
+            ring(point, radius * scale)
+        }
+
+        func pinFootprint(tip: CGPoint, radius: Double) -> [CGPoint] {
+            let r = radius * scale
+            return [tip] + ring(CGPoint(x: tip.x, y: tip.y + r * 2.35), r)
+        }
+
+        /// Slides a marker in from one end of the route until its footprint fits, and reports
+        /// where it stopped so the path can be cut to meet it.
+        func settle(_ points: [CGPoint], fromEnd: Bool, footprint: (CGPoint) -> [CGPoint]) -> Int? {
+            let order = fromEnd ? Array(points.indices.reversed()) : Array(points.indices)
+            return order.first { hasRoom(for: footprint(points[$0].applying(plan.transform))) }
         }
 
         func longestClearRun(_ points: [CGPoint]) -> ArraySlice<CGPoint> {
@@ -342,7 +391,36 @@ public enum CityMap {
             return points[best]
         }
 
-        let visibleRoute = Array(longestClearRun(plan.route))
+        // Pick the candidate with the most drawn length left after trimming, so the route uses
+        // whatever corridor the map and the mark actually leave open.
+        var clearRoute: [CGPoint] = []
+        var routeEndsFor: (dot: Int, pin: Int)?
+        for candidate in plan.routeCandidates {
+            let run = Array(longestClearRun(candidate))
+            guard let first = run.first, let last = run.last else { continue }
+            let startIsLower = first.applying(plan.transform).y < last.applying(plan.transform).y
+            guard let dot = settle(run, fromEnd: !startIsLower, footprint: { dotFootprint($0, radius: 33) }),
+                  let pin = settle(run, fromEnd: startIsLower, footprint: { pinFootprint(tip: $0, radius: 26) }),
+                  abs(pin - dot) > run.count / 8
+            else { continue }
+            // Below the figure's waist. The longest corridor is often the strip across the top,
+            // but a route up there reads as a banner hung above the mark rather than as ground
+            // the mark is moving over.
+            let middle = run[(dot + pin) / 2].applying(plan.transform)
+            guard middle.y < Double(ctx.height) * 0.54 else { continue }
+            if abs(pin - dot) > (routeEndsFor.map { abs($0.pin - $0.dot) } ?? 0) {
+                clearRoute = run
+                routeEndsFor = (dot, pin)
+            }
+        }
+
+        // Where the two ends settle decides where the path stops. Drawing the path to its own
+        // extent and then sliding the markers inward leaves the route running past its own
+        // destination, which is not what a route does.
+        let routeEnds = routeEndsFor
+        let visibleRoute = routeEnds.map { ends in
+            Array(clearRoute[min(ends.dot, ends.pin)...max(ends.dot, ends.pin)])
+        } ?? clearRoute
 
         // MARK: the path itself, drawn in the map's own space so it follows the streets
 
@@ -436,27 +514,28 @@ public enum CityMap {
 
         switch ink.style {
         case .line, .dashed, .trail:
-            if let first = visibleRoute.first, let last = visibleRoute.last {
-                // Whichever end is higher gets the pin: it needs headroom above its point, and it
-                // is also the end the eye travels to.
-                let start = first.applying(plan.transform), finish = last.applying(plan.transform)
-                let (dot, pin) = start.y < finish.y ? (start, finish) : (finish, start)
+            if let ends = routeEnds {
                 // Wider than the path itself, or the dot merges into the first dash and the route
                 // looks like it simply starts nowhere.
-                origin(at: dot, radius: 33)
-                if pin.y < canvas.maxY - 110 * scale {
-                    destination(at: pin, radius: 26, colour: palette.amber)
-                }
+                origin(at: clearRoute[ends.dot].applying(plan.transform), radius: 33)
+                destination(at: clearRoute[ends.pin].applying(plan.transform), radius: 26,
+                            colour: palette.amber)
             }
+
         case .points:
             let centre = CGPoint(x: bounds.midX, y: bounds.midY)
             let reach = Double(ctx.width)
-            let outer = plan.junctions.compactMap(placed).filter { p in
+            let outer = plan.junctions.map { $0.applying(plan.transform) }.filter { p in
                 let d = ((p.x - centre.x) * (p.x - centre.x) + (p.y - centre.y) * (p.y - centre.y)).squareRoot()
-                return d > reach * 0.30 && d < reach * 0.46 && p.y < canvas.maxY - 110 * scale
+                return d > reach * 0.30 && d < reach * 0.46
             }
-            if let first = outer.first { destination(at: first, radius: 26, colour: palette.amber) }
-            if outer.count > 1 { origin(at: outer[outer.count / 2], radius: 30) }
+            if let pin = outer.first(where: { hasRoom(for: pinFootprint(tip: $0, radius: 26)) }) {
+                destination(at: pin, radius: 26, colour: palette.amber)
+            }
+            if let dot = outer.last(where: { hasRoom(for: dotFootprint($0, radius: 30)) }) {
+                origin(at: dot, radius: 30)
+            }
+
         case .none:
             break
         }

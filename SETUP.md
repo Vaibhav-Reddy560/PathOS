@@ -142,8 +142,18 @@ Green in the map is a route, not a glow: `CityMap.drawRoute`. Its ends follow th
 map app uses — a solid dot inside a dark collar where you start, and an Amber pin whose point sits
 on the destination. The pin's sides are the real tangents from its tip to its head, and the markers
 are drawn in icon space rather than map space so the pin stays upright instead of leaning with the
-map's rotation. The route trims itself to whatever stretch is both on the icon and clear of the mark, and the
-markers hang off the trimmed ends — otherwise its length has to be hand-tuned until the ends happen
+map's rotation. The route places itself. `CityMap.plan` generates sixteen candidate routes through different pairs
+of roads, all deliberately longer than anything that will be used, and `drawRoute` picks whichever
+keeps the most length once the mark and the icon's rounded edge are accounted for — subject to
+sitting below the figure's waist, since the longest corridor is often the strip across the top and a
+route up there reads as a banner hung above the mark. Hand-placing one route means re-tuning it
+whenever the mark or the street layout changes, and the position snaps to the nearest road anyway,
+so small adjustments do nothing.
+
+Each end marker is tested by its whole footprint against a stricter safe area than the path gets: a
+marker is a solid object, it needs room, and it has to stay inside the rounded shape iOS masks to
+rather than the square edge of the file. A marker slides inward along the route until it fits, and
+the path is then cut to meet it — otherwise the route runs past its own destination — otherwise its length has to be hand-tuned until the ends happen
 to miss the figure, and any later change to the mark quietly leaves a marker half-dissolved by the
 clearance mask. `--route-style` picks how the path between them is drawn — `dashed` (the default), `line`, `trail`, `points` or `none` — and the far stop is Amber,
 the one point on the map worth a glance. It's clipped away from the mark (`clearance`), both because

@@ -142,15 +142,65 @@ struct RouteStyleTests {
         }
     }
 
-    @Test func theRouteIsShortEnoughToStayOutOfTheMarksWay() {
-        // A route that crosses the whole icon reads as a crack through it rather than as a path.
+    @Test func candidatesAreGeneratedLongEnoughToTrim() {
+        // The drawn length is whatever the clear space allows, so the raw candidates have to be
+        // longer than anything that will actually be used — there has to be slack to trim.
         let plan = plan()
-        let points = plan.route.map { $0.applying(plan.transform) }
-        let xs = points.map(\.x), ys = points.map(\.y)
-        let width = xs.max()! - xs.min()!, height = ys.max()! - ys.min()!
-        #expect(width < 1024 * 0.55)
-        #expect(height < 1024 * 0.55)
-        #expect(plan.routeStops.count == 3)
+        #expect(plan.routeCandidates.count >= 12)
+        for candidate in plan.routeCandidates {
+            #expect(candidate.count > 100)
+        }
+    }
+
+    @Test func theEndMarkersKeepClearOfTheEdgeAndTheMark() throws {
+        // A pin crowded into the corner or leaning on the figure is the thing that keeps going
+        // wrong by eye, so it is measured: distance from the pin to the rounded edge iOS masks
+        // the icon to, and to the mark itself.
+        let n = 512
+        let root = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+            .deletingLastPathComponent().deletingLastPathComponent()
+        let logo = try SVGParser.parse(contentsOf: root.appendingPathComponent("PathOS_Logo.svg"))
+        let palette = try Palette(contentsOf: root.appendingPathComponent("Shared/PathOSPalette.swift"))
+
+        var settings = IconRenderer.Settings()
+        settings.size = n
+        let icon = IconRenderer.render(logo: logo, palette: palette, settings: settings)
+        let mark = Raster.mask(path: IconRenderer.place(logo, in: Double(n), scale: settings.logoScale),
+                               size: n, fillRule: logo.fillRule)
+
+        let rect = CGRect(x: 0, y: 0, width: n, height: n)
+        let iconCtx = Raster.context(size: n); iconCtx.draw(icon, in: rect)
+        let markCtx = Raster.grayContext(size: n); markCtx.draw(mark, in: rect)
+        let pixels = iconCtx.data!.assumingMemoryBound(to: UInt8.self)
+        let alpha = markCtx.data!.assumingMemoryBound(to: UInt8.self)
+
+        var amberX = 0.0, amberY = 0.0, amberCount = 0.0
+        var markPoints: [(Double, Double)] = []
+        for y in 0..<n {
+            for x in 0..<n {
+                let i = y * n + x
+                let r = Int(pixels[i * 4]), g = Int(pixels[i * 4 + 1]), b = Int(pixels[i * 4 + 2])
+                if r > 200, g > 140, g < 215, b < 140 {
+                    amberX += Double(x); amberY += Double(y); amberCount += 1
+                }
+                if alpha[i] > 200, (x + y) % 5 == 0 { markPoints.append((Double(x), Double(y))) }
+            }
+        }
+        #expect(amberCount > 150)
+        let pin = (x: amberX / amberCount, y: amberY / amberCount)
+
+        // How far short of the icon's rounded outline the pin sits, along the ray from the centre.
+        let half = Double(n) / 2
+        let dx = (pin.x - half) / half, dy = (pin.y - half) / half
+        let reach = pow(pow(abs(dx), Squircle.exponent) + pow(abs(dy), Squircle.exponent),
+                        1 / Squircle.exponent)
+        let radial = (pow(pin.x - half, 2) + pow(pin.y - half, 2)).squareRoot()
+        let toEdge = reach > 0 ? radial / reach - radial : half
+        #expect(toEdge > Double(n) * 0.07)
+
+        let toMark = markPoints.map { (pow($0.0 - pin.x, 2) + pow($0.1 - pin.y, 2)).squareRoot() }.min() ?? .infinity
+        #expect(toMark > Double(n) * 0.13)
     }
 
     @Test func onlyTheFarStopIsAmber() {
