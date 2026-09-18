@@ -142,10 +142,17 @@ Green in the map is a route, not a glow: `CityMap.drawRoute`. Its ends follow th
 map app uses — a solid dot inside a dark collar where you start, and an Amber pin whose point sits
 on the destination. The pin's sides are the real tangents from its tip to its head, and the markers
 are drawn in icon space rather than map space so the pin stays upright instead of leaning with the
-map's rotation. `--route-style` picks how the path between them is drawn — `dashed` (the default), `line`, `trail`, `points` or `none` — and the far stop is Amber,
+map's rotation. The route trims itself to whatever stretch is both on the icon and clear of the mark, and the
+markers hang off the trimmed ends — otherwise its length has to be hand-tuned until the ends happen
+to miss the figure, and any later change to the mark quietly leaves a marker half-dissolved by the
+clearance mask. `--route-style` picks how the path between them is drawn — `dashed` (the default), `line`, `trail`, `points` or `none` — and the far stop is Amber,
 the one point on the map worth a glance. It's clipped away from the mark (`clearance`), both because
 the mark sits above the map and because a bright stop touching the outline collapses the contrast
 right there, which is how it was found.
+
+**Sizing.** Everything here is authored at 1024 and almost only ever looked at near 180, so sizes
+are chosen backwards from there: the pin is ~80px tall at 1024 because anything under about 11px on
+a home screen is a speck. Judge changes from the `--previews` output, not the master.
 
 **Legibility.****Legibility.** `MarkLegibilityTests` renders the icon and measures contrast across the mark's
 outline, along the outline's own normal. It holds the worst edge at or above 3:1 (WCAG 1.4.11 for

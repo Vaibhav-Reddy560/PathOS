@@ -194,7 +194,7 @@ public enum CityMap {
             .translatedBy(x: -span / 2, y: -span / 2)
         // Kept outside the mark's bounding box. A bright green line running alongside the mark
         // collapses the contrast at that edge, which is the one thing the icon cannot afford.
-        let corner = CGPoint(x: size * 0.775, y: size * 0.20).applying(placement.inverted())
+        let corner = CGPoint(x: size * 0.815, y: size * 0.155).applying(placement.inverted())
         func nearest(_ values: [Double], to target: Double) -> Double {
             values.min { abs($0 - target) < abs($1 - target) } ?? target
         }
@@ -204,7 +204,7 @@ public enum CityMap {
         var route: [CGPoint] = []
         // Short enough that both ends stay clear of the mark: an origin dot hidden under the
         // figure is worse than no origin dot, because the route then just fades in from nowhere.
-        let approach = span * 0.115, departure = span * 0.165
+        let approach = span * 0.215, departure = span * 0.235
         var u = routeColumn - approach
         while u <= routeColumn { route.append(warp(CGPoint(x: u, y: routeRow))); u += span * 0.006 }
         var v = routeRow
@@ -226,7 +226,7 @@ public enum CityMap {
         public var junction = 0.150
         public var route = 0.95
         public var style: RouteStyle = .line
-        public var routeWidth = 21.0
+        public var routeWidth = 27.0
         /// One dial for the whole layer, so the map can be pulled back if it crowds the logo.
         public var intensity = 1.0
 
@@ -312,6 +312,38 @@ public enum CityMap {
             if let clearance { context.clip(to: bounds, mask: clearance) }
         }
 
+        // Trim the route to the longest stretch that is both on the icon and clear of the mark,
+        // then hang the markers off the trimmed ends.
+        //
+        // Placing them at the route's own ends means hand-tuning its length until they happen to
+        // miss the mark, and any later change to the mark or its size silently breaks it: an end
+        // marker half-dissolved by the clearance mask, or off the icon altogether. Reading the
+        // clearance back means the route sizes itself to whatever room it has.
+        let n = ctx.width
+        let clear: [Double]? = clearance.map { GlassShading.gray($0, size: n) }
+        func isClear(_ iconPoint: CGPoint) -> Bool {
+            guard canvas.contains(iconPoint) else { return false }
+            guard let clear else { return true }
+            // Bitmap row 0 is the top of the image; user space has y growing upward.
+            let column = Int(iconPoint.x), row = n - 1 - Int(iconPoint.y)
+            guard column >= 0, column < n, row >= 0, row < n else { return false }
+            return clear[row * n + column] > 0.94
+        }
+
+        func longestClearRun(_ points: [CGPoint]) -> ArraySlice<CGPoint> {
+            var best = 0..<0, current = 0
+            for index in points.indices {
+                if isClear(points[index].applying(plan.transform)) {
+                    if index - current + 1 > best.count { best = current..<(index + 1) }
+                } else {
+                    current = index + 1
+                }
+            }
+            return points[best]
+        }
+
+        let visibleRoute = Array(longestClearRun(plan.route))
+
         // MARK: the path itself, drawn in the map's own space so it follows the streets
 
         ctx.saveGState()
@@ -336,13 +368,13 @@ public enum CityMap {
 
         switch ink.style {
         case .line, .dashed:
-            stroke(plan.route, colour: palette.aurora, width: ink.routeWidth, dashed: ink.style == .dashed)
+            stroke(visibleRoute, colour: palette.aurora, width: ink.routeWidth, dashed: ink.style == .dashed)
         case .trail:
             // Breadcrumbs survive being shrunk better than a thin line: each one stays a shape
             // instead of thinning away to nothing.
-            let spacing = max(1, plan.route.count / 9)
-            for index in stride(from: 0, to: plan.route.count, by: spacing) {
-                let point = plan.route[index]
+            let spacing = max(1, visibleRoute.count / 9)
+            for index in stride(from: 0, to: visibleRoute.count, by: spacing) {
+                let point = visibleRoute[index]
                 let r = 7.0 * scale
                 ctx.addEllipse(in: CGRect(x: point.x - r, y: point.y - r, width: r * 2, height: r * 2))
                 ctx.setFillColor(palette.void.cg(0.6 * ink.intensity))
@@ -384,7 +416,7 @@ public enum CityMap {
             let pin = pinPath(tip: point, radius: r)
             ctx.addPath(pin)
             ctx.setStrokeColor(palette.void.cg(0.8 * ink.intensity))
-            ctx.setLineWidth(4 * scale)
+            ctx.setLineWidth(6 * scale)
             ctx.setLineJoin(.round)
             ctx.strokePath()
             ctx.addPath(pin)
@@ -404,22 +436,27 @@ public enum CityMap {
 
         switch ink.style {
         case .line, .dashed, .trail:
-            // Wider than the path itself, or the dot merges into the first dash and the route
-            // looks like it simply starts nowhere.
-            if let from = placed(plan.routeStops[0]) { origin(at: from, radius: 20) }
-            // A pin stands above its point, so it needs headroom the dot does not.
-            if let to = placed(plan.routeStops[2]), to.y < canvas.maxY - 44 * scale {
-                destination(at: to, radius: 15, colour: palette.amber)
+            if let first = visibleRoute.first, let last = visibleRoute.last {
+                // Whichever end is higher gets the pin: it needs headroom above its point, and it
+                // is also the end the eye travels to.
+                let start = first.applying(plan.transform), finish = last.applying(plan.transform)
+                let (dot, pin) = start.y < finish.y ? (start, finish) : (finish, start)
+                // Wider than the path itself, or the dot merges into the first dash and the route
+                // looks like it simply starts nowhere.
+                origin(at: dot, radius: 33)
+                if pin.y < canvas.maxY - 110 * scale {
+                    destination(at: pin, radius: 26, colour: palette.amber)
+                }
             }
         case .points:
             let centre = CGPoint(x: bounds.midX, y: bounds.midY)
             let reach = Double(ctx.width)
             let outer = plan.junctions.compactMap(placed).filter { p in
                 let d = ((p.x - centre.x) * (p.x - centre.x) + (p.y - centre.y) * (p.y - centre.y)).squareRoot()
-                return d > reach * 0.30 && d < reach * 0.46 && p.y < canvas.maxY - 44 * scale
+                return d > reach * 0.30 && d < reach * 0.46 && p.y < canvas.maxY - 110 * scale
             }
-            if let first = outer.first { destination(at: first, radius: 16, colour: palette.amber) }
-            if outer.count > 1 { origin(at: outer[outer.count / 2], radius: 14) }
+            if let first = outer.first { destination(at: first, radius: 26, colour: palette.amber) }
+            if outer.count > 1 { origin(at: outer[outer.count / 2], radius: 30) }
         case .none:
             break
         }

@@ -176,4 +176,45 @@ struct RouteStyleTests {
         #expect(amber > 0)
         #expect(green > amber * 2)     // green leads, amber accents
     }
+
+    @Test func theEndMarkersSurviveTheClearanceMask() throws {
+        // The failure this guards against is subtle: the marker is still drawn, but half of it is
+        // dissolved by the mask that keeps the route away from the mark, so it reads as broken
+        // rather than missing. Easy to miss in a full-size preview, obvious on a home screen.
+        let root = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+            .deletingLastPathComponent().deletingLastPathComponent()
+        let logo = try SVGParser.parse(contentsOf: root.appendingPathComponent("PathOS_Logo.svg"))
+        let palette = try Palette(contentsOf: root.appendingPathComponent("Shared/PathOSPalette.swift"))
+
+        var settings = IconRenderer.Settings()
+        settings.size = 512
+        let icon = IconRenderer.render(logo: logo, palette: palette, settings: settings)
+        let ctx = Raster.context(size: 512)
+        ctx.draw(icon, in: CGRect(x: 0, y: 0, width: 512, height: 512))
+        let data = ctx.data!.assumingMemoryBound(to: UInt8.self)
+
+        // Amber and Aurora at close to full strength — a faded marker misses these.
+        var amber = 0, aurora = 0
+        for i in 0..<(512 * 512) {
+            let r = Int(data[i * 4]), g = Int(data[i * 4 + 1]), b = Int(data[i * 4 + 2])
+            if r > 200, g > 140, g < 215, b < 140 { amber += 1 }
+            if g > 210, r > 140, r < 215, b < 140 { aurora += 1 }
+        }
+        // The pin head alone is a few hundred pixels at this size; the route adds more green.
+        #expect(amber > 150)
+        #expect(aurora > 600)
+    }
+
+    @Test func markersAreBigEnoughToSeeOnAHomeScreen() {
+        // Everything in the icon is authored at 1024 and almost only ever looked at near 180.
+        // These were once sized by eye on the master, where a pin under two pixels tall on the
+        // home screen still looked fine.
+        let ink = CityMap.Ink()
+        let onHomeScreen = 180.0 / 1024
+        let pinHeight = 26.0 * 2.35 + 26.0        // head centre reach plus its radius
+        #expect(pinHeight * onHomeScreen > 11)
+        #expect(33.0 * 2 * onHomeScreen > 9)      // the origin disc across
+        #expect(ink.routeWidth * onHomeScreen > 4)
+    }
 }
