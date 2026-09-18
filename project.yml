@@ -1,0 +1,112 @@
+name: PathOS
+options:
+  bundleIdPrefix: com.vaibhavreddy
+  deploymentTarget:
+    iOS: "26.0"
+  createIntermediateGroups: true
+  generateEmptyDirectories: true
+
+settings:
+  base:
+    SWIFT_VERSION: "6.0"
+    SWIFT_APPROACHABLE_CONCURRENCY: YES
+    SWIFT_DEFAULT_ACTOR_ISOLATION: MainActor
+    CODE_SIGN_STYLE: Automatic
+    # Fill in after adding your Apple ID in Xcode → Settings → Accounts.
+    DEVELOPMENT_TEAM: "RQW7A36F5L"
+    MARKETING_VERSION: "1.0"
+    CURRENT_PROJECT_VERSION: "1"
+    TARGETED_DEVICE_FAMILY: "1"
+
+targets:
+  PathOS:
+    type: application
+    platform: iOS
+    sources:
+      - path: PathOS
+      - path: Shared
+    dependencies:
+      - target: PathOSWidgets
+        embed: true
+    settings:
+      base:
+        PRODUCT_NAME: PathOS
+        PRODUCT_BUNDLE_IDENTIFIER: com.vaibhavreddy.pathos
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
+    info:
+      path: PathOS/Info.plist
+      properties:
+        CFBundleDisplayName: PathOS
+        CFBundleURLTypes:
+          - CFBundleURLName: com.vaibhavreddy.pathos
+            CFBundleURLSchemes:
+              - pathos
+        UILaunchScreen:
+          UIColorName: LaunchBackground
+        UIUserInterfaceStyle: Dark
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+        NSLocationWhenInUseUsageDescription: "PathOS uses your location to provide directional spatial guidance and geofenced memory alerts."
+        NSLocationAlwaysAndWhenInUseUsageDescription: "PathOS tracks geofences to surface context-aware departure warnings and parking memory."
+        NSMotionUsageDescription: "PathOS reads barometric pressure changes to predict local rain shifts upon departure."
+        NSCameraUsageDescription: "PathOS uses the camera to scan posters, receipts, and parking indicators into spatial actions."
+        NSMicrophoneUsageDescription: "PathOS analyzes ambient noise levels to adjust alert haptics and listens to your voice questions."
+        NSSpeechRecognitionUsageDescription: "PathOS transcribes your voice questions on-device."
+        NSCalendarsWriteOnlyAccessUsageDescription: "PathOS adds events scanned from posters to your calendar."
+        NSPhotoLibraryUsageDescription: "PathOS can scan posters and receipts from your photos."
+        NSSupportsLiveActivities: true
+        NSSupportsLiveActivitiesFrequentUpdates: true
+        UIBackgroundModes:
+          - location
+          - fetch
+          - processing
+        BGTaskSchedulerPermittedIdentifiers:
+          - com.vaibhavreddy.pathos.refresh
+        LSApplicationQueriesSchemes:
+          - uber
+          - olacabs
+          - rapido
+
+  PathOSWidgets:
+    type: app-extension
+    platform: iOS
+    sources:
+      - path: PathOSWidgets
+      - path: Shared
+    settings:
+      base:
+        PRODUCT_NAME: PathOSWidgets
+        PRODUCT_BUNDLE_IDENTIFIER: com.vaibhavreddy.pathos.widgets
+        SKIP_INSTALL: YES
+    info:
+      path: PathOSWidgets/Info.plist
+      properties:
+        CFBundleDisplayName: PathOS Widgets
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.widgetkit-extension
+
+  PathOSTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources:
+      - path: PathOSTests
+    dependencies:
+      - target: PathOS
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.vaibhavreddy.pathos.tests
+        GENERATE_INFOPLIST_FILE: YES
+
+schemes:
+  PathOS:
+    build:
+      targets:
+        PathOS: all
+        PathOSTests: [test]
+    run:
+      config: Debug
+    test:
+      config: Debug
+      targets:
+        - PathOSTests
