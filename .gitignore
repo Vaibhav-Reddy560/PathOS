@@ -11,3 +11,7 @@ xcuserdata/
 # 150+ MB of compiled output; `swift build` recreates it.
 .build/
 .swiftpm/
+
+# Views replaced during the map-first redesign. Kept on disk as a local reference,
+# not compiled and not part of the project.
+.retired-ui/
