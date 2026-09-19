@@ -5,35 +5,52 @@ import SwiftData
 
 /// Gmail, read on the phone: new mail is checked in the background, each message is read by the
 /// on-device model, and anything worth your time waits in the Day deck until you approve it.
+/// Several accounts can be read, such as a personal one and a college one; each has its own
+/// sign-in and its own place in the mail.
 @Observable
 final class MailService {
     enum Connection: Equatable {
         case disconnected
         case connected
-        /// Google withdrew the sign-in — every 7 days while the Cloud project is in Testing.
+        /// Google withdrew a sign-in — every 7 days while the Cloud project is in Testing.
         case expired
     }
 
-    private(set) var connection: Connection
+    /// A Gmail account PathOS reads.
+    struct Account: Identifiable, Equatable {
+        var email: String
+        var isSignedIn: Bool
+        /// When a check of it last finished without an error.
+        var lastCheckedAt: Date?
+
+        var id: String { email }
+    }
+
+    private(set) var accounts: [Account] = []
     private(set) var isChecking = false
     private(set) var isConnecting = false
     private(set) var lastError: String?
-    /// The Gmail address, for Settings and for opening messages in the right account.
-    private(set) var account: String? = UserDefaults.standard.string(forKey: Keys.account) {
-        didSet { UserDefaults.standard.set(account, forKey: Keys.account) }
+    /// Senders whose mail comes first: addresses, or "@college.edu" for everyone there.
+    private(set) var prioritySenders: [String] = UserDefaults.standard.stringArray(forKey: Keys.prioritySenders) ?? [] {
+        didSet { UserDefaults.standard.set(prioritySenders, forKey: Keys.prioritySenders) }
     }
-    /// When a check last finished without an error.
-    private(set) var lastCheckedAt: Date? = UserDefaults.standard.object(forKey: Keys.lastChecked) as? Date {
-        didSet { UserDefaults.standard.set(lastCheckedAt, forKey: Keys.lastChecked) }
-    }
-
-    /// Where the next search starts. Only moves once everything before it has been read.
-    @ObservationIgnored private var cursor: Date? {
-        get { UserDefaults.standard.object(forKey: Keys.cursor) as? Date }
-        set { UserDefaults.standard.set(newValue, forKey: Keys.cursor) }
+    /// Senders you don't want to hear from: their mail isn't read and doesn't show.
+    private(set) var mutedSenders: [String] = UserDefaults.standard.stringArray(forKey: Keys.mutedSenders) ?? [] {
+        didSet { UserDefaults.standard.set(mutedSenders, forKey: Keys.mutedSenders) }
     }
 
-    @ObservationIgnored private let session: GoogleSession
+    /// Connected when every account is signed in; expired while one needs signing in again.
+    var connection: Connection {
+        if accounts.isEmpty { return .disconnected }
+        return accounts.contains { !$0.isSignedIn } ? .expired : .connected
+    }
+
+    /// The account whose check is oldest, so a check is due as soon as any account needs one.
+    var lastCheckedAt: Date? {
+        accounts.filter(\.isSignedIn).map { $0.lastCheckedAt ?? .distantPast }.min()
+    }
+
+    @ObservationIgnored private var sessions: [String: GoogleSession] = [:]
     @ObservationIgnored private let context: ModelContext
     @ObservationIgnored private let ai: AIClient
     @ObservationIgnored private let eventStore: EventStore
@@ -41,10 +58,18 @@ final class MailService {
     @ObservationIgnored private let notifications: NotificationService
 
     private nonisolated enum Keys {
-        static let account = "pathos.mail.account"
-        static let lastChecked = "pathos.mail.lastChecked"
-        static let cursor = "pathos.mail.cursor"
-        static let wasConnected = "pathos.mail.wasConnected"
+        static let accounts = "pathos.mail.accounts"
+        static let prioritySenders = "pathos.mail.prioritySenders"
+        static let mutedSenders = "pathos.mail.mutedSenders"
+        static func lastChecked(_ email: String) -> String { "pathos.mail.lastChecked." + email }
+        /// Where the next search of that account starts. Only moves once everything before it has been read.
+        static func cursor(_ email: String) -> String { "pathos.mail.cursor." + email }
+
+        // From before there could be more than one account.
+        static let legacyAccount = "pathos.mail.account"
+        static let legacyLastChecked = "pathos.mail.lastChecked"
+        static let legacyCursor = "pathos.mail.cursor"
+        static let legacyWasConnected = "pathos.mail.wasConnected"
     }
 
     /// The newest messages a single check looks at. Mail beyond this in one gap is left unread.
@@ -55,54 +80,123 @@ final class MailService {
         ai: AIClient,
         eventStore: EventStore,
         places: PlacesService,
-        notifications: NotificationService,
-        session: GoogleSession = GoogleSession()
+        notifications: NotificationService
     ) {
         self.context = context
         self.ai = ai
         self.eventStore = eventStore
         self.places = places
         self.notifications = notifications
-        self.session = session
-        if session.isSignedIn {
-            connection = .connected
-        } else {
-            connection = UserDefaults.standard.bool(forKey: Keys.wasConnected) ? .expired : .disconnected
+        Self.moveSingleAccountSetUp()
+
+        let defaults = UserDefaults.standard
+        for email in defaults.stringArray(forKey: Keys.accounts) ?? [] {
+            let session = GoogleSession(keychainAccount: GoogleSession.keychainAccount(for: email))
+            sessions[email] = session
+            accounts.append(Account(
+                email: email,
+                isSignedIn: session.isSignedIn,
+                lastCheckedAt: defaults.object(forKey: Keys.lastChecked(email)) as? Date
+            ))
         }
     }
 
-    // MARK: Connecting
+    /// The one account PathOS used to keep, moved into the list of accounts, once.
+    private static func moveSingleAccountSetUp() {
+        let defaults = UserDefaults.standard
+        guard defaults.stringArray(forKey: Keys.accounts) == nil else { return }
+        var emails: [String] = []
+        if let email = defaults.string(forKey: Keys.legacyAccount)?.lowercased() {
+            GoogleSession(keychainAccount: GoogleSession.legacyKeychainAccount).rekey(to: GoogleSession.keychainAccount(for: email))
+            defaults.set(defaults.object(forKey: Keys.legacyCursor), forKey: Keys.cursor(email))
+            defaults.set(defaults.object(forKey: Keys.legacyLastChecked), forKey: Keys.lastChecked(email))
+            emails = [email]
+        }
+        defaults.set(emails, forKey: Keys.accounts)
+        for key in [Keys.legacyAccount, Keys.legacyCursor, Keys.legacyLastChecked, Keys.legacyWasConnected] {
+            defaults.removeObject(forKey: key)
+        }
+    }
 
-    func connect(present: GoogleSession.Presenter) async {
+    // MARK: Accounts
+
+    /// Adds a Gmail account, or signs one back in when `email` names it.
+    func connect(present: GoogleSession.Presenter, reconnecting email: String? = nil) async {
         isConnecting = true
         defer { isConnecting = false }
+        let session = GoogleSession(keychainAccount: "google.tokens.signing-in")
         do {
-            try await session.signIn(present: present)
-            account = try? await session.profile().emailAddress
-            UserDefaults.standard.set(true, forKey: Keys.wasConnected)
-            connection = .connected
+            try await session.signIn(present: present, loginHint: email)
+            let address = try await session.profile().emailAddress.lowercased()
+            session.rekey(to: GoogleSession.keychainAccount(for: address))
+            sessions[address] = session
+            if let index = accounts.firstIndex(where: { $0.email == address }) {
+                accounts[index].isSignedIn = true
+            } else {
+                accounts.append(Account(email: address, isSignedIn: true))
+                UserDefaults.standard.set(accounts.map(\.email), forKey: Keys.accounts)
+            }
             lastError = nil
             await check()
         } catch GoogleOAuthError.cancelled {
             return
         } catch {
+            await session.signOut()
             lastError = error.localizedDescription
         }
     }
 
-    /// Signs out and forgets what the mail said. Events you already approved stay on your Day.
-    func disconnect() async {
-        await session.signOut()
-        UserDefaults.standard.set(false, forKey: Keys.wasConnected)
-        account = nil
-        lastCheckedAt = nil
-        cursor = nil
+    /// Signs one account out and forgets what its mail said. Events you already approved stay on
+    /// your Day.
+    func disconnect(_ email: String) async {
+        await sessions[email]?.signOut()
+        sessions[email] = nil
+        accounts.removeAll { $0.email == email }
+        let defaults = UserDefaults.standard
+        defaults.set(accounts.map(\.email), forKey: Keys.accounts)
+        defaults.removeObject(forKey: Keys.cursor(email))
+        defaults.removeObject(forKey: Keys.lastChecked(email))
         lastError = nil
-        connection = .disconnected
-        for suggestion in (try? context.fetch(FetchDescriptor<MailSuggestion>())) ?? [] where suggestion.status != .added {
+        for suggestion in (try? context.fetch(FetchDescriptor<MailSuggestion>())) ?? []
+        where suggestion.status != .added && (suggestion.account == email || (suggestion.account == nil && accounts.isEmpty)) {
             context.delete(suggestion)
         }
         try? context.save()
+    }
+
+    /// The account a suggestion arrived at: its own, or for mail read before there could be more
+    /// than one, the first.
+    func account(of suggestion: MailSuggestion) -> String? {
+        suggestion.account ?? accounts.first?.email
+    }
+
+    // MARK: Senders
+
+    func isPriority(_ address: String) -> Bool { SenderRules.matchesAny(prioritySenders, address: address) }
+    func isMuted(_ address: String) -> Bool { SenderRules.matchesAny(mutedSenders, address: address) }
+
+    /// Adds or removes a priority sender. Returns false when `rule` is neither an address nor a domain.
+    @discardableResult
+    func setPriority(_ rule: String, _ isOn: Bool) -> Bool {
+        guard let rule = SenderRules.normalized(rule) else { return false }
+        prioritySenders.removeAll { $0 == rule }
+        if isOn {
+            prioritySenders.append(rule)
+            mutedSenders.removeAll { $0 == rule }
+        }
+        return true
+    }
+
+    /// Mutes or unmutes a sender. Returns false when `rule` is neither an address nor a domain.
+    @discardableResult
+    func setMuted(_ rule: String, _ isOn: Bool) -> Bool {
+        guard let rule = SenderRules.normalized(rule) else { return false }
+        mutedSenders.removeAll { $0 == rule }
+        if isOn {
+            mutedSenders.append(rule)
+            prioritySenders.removeAll { $0 == rule }
+        }
+        return true
     }
 
     // MARK: Checking
@@ -116,16 +210,32 @@ final class MailService {
         return await check(limit: limit, notify: notify)
     }
 
-    /// Reads mail that arrived since the last check. `limit` caps how many messages are read, so a
-    /// background check fits in the time iOS gives it; the rest are picked up next time.
+    /// Reads mail that arrived since the last check, account by account. `limit` caps how many
+    /// messages each account has read, so a background check fits in the time iOS gives it; the
+    /// rest are picked up next time.
     @discardableResult
     func check(limit: Int = 25, notify: Bool = false) async -> Int {
-        guard connection == .connected, !isChecking else { return 0 }
+        guard !isChecking else { return 0 }
         isChecking = true
         defer { isChecking = false }
 
+        var found: [MailSuggestion] = []
+        for account in accounts where account.isSignedIn {
+            found += await check(account.email, limit: limit, notify: notify)
+        }
+        if notify {
+            announce(found)
+        }
+        pruneSkipped()
+        return found.count
+    }
+
+    private func check(_ email: String, limit: Int, notify: Bool) async -> [MailSuggestion] {
+        guard let session = sessions[email] else { return [] }
+        let defaults = UserDefaults.standard
         let startedAt = Date()
         do {
+            let cursor = defaults.object(forKey: Keys.cursor(email)) as? Date
             let ids = try await session.messageIDs(matching: MailParsing.searchQuery(since: cursor), max: Self.searchWindow)
             let known = knownMessageIDs()
             let unread = ids.filter { !known.contains($0) }
@@ -134,12 +244,18 @@ final class MailService {
             var readAll = unread.count <= limit
             for id in unread.prefix(limit) {
                 let message = MailParsing.message(from: try await session.message(id: id))
-                guard let proposal = await triage(message) else {
+                // Muted senders' mail isn't read at all; it's noted only so it's never fetched again.
+                let proposal: MailProposal
+                if isMuted(message.senderAddress) {
+                    proposal = MailProposal(kind: .ignore, title: message.subject, summary: "", usedAI: false)
+                } else if let read = await triage(message) {
+                    proposal = read
+                } else {
                     // The model is busy. Leave this and the rest for the next check.
                     readAll = false
                     break
                 }
-                let suggestion = MailSuggestion(message: message, proposal: proposal)
+                let suggestion = MailSuggestion(message: message, proposal: proposal, account: email)
                 context.insert(suggestion)
                 try? context.save()
                 if suggestion.status == .pending {
@@ -148,30 +264,31 @@ final class MailService {
             }
 
             if readAll {
-                cursor = startedAt
+                defaults.set(startedAt, forKey: Keys.cursor(email))
             }
-            lastCheckedAt = startedAt
+            defaults.set(startedAt, forKey: Keys.lastChecked(email))
+            if let index = accounts.firstIndex(where: { $0.email == email }) {
+                accounts[index].lastCheckedAt = startedAt
+            }
             lastError = nil
-            if notify {
-                announce(found)
-            }
-            pruneSkipped()
-            return found.count
+            return found
         } catch GoogleOAuthError.signInExpired {
-            connection = .expired
+            if let index = accounts.firstIndex(where: { $0.email == email }) {
+                accounts[index].isSignedIn = false
+            }
             if notify {
                 notifications.post(
-                    id: "pathos.mail.expired",
+                    id: "pathos.mail.expired.\(email)",
                     title: "Reconnect Gmail",
-                    body: "Google signs PathOS out every 7 days while it's a test app. Tap to sign in again.",
+                    body: "Google signed PathOS out of \(email), as it does every 7 days while PathOS is a test app. Tap to sign in again.",
                     category: NotificationService.Category.mail,
                     link: URL(string: "pathos://settings")
                 )
             }
         } catch {
-            lastError = error.localizedDescription
+            lastError = "\(email): \(error.localizedDescription)"
         }
-        return 0
+        return []
     }
 
     /// The on-device model when it's available, rules when it isn't. Nil means try again later.
@@ -205,6 +322,8 @@ final class MailService {
     }
 
     private func announce(_ found: [MailSuggestion]) {
+        let arranged = SenderRules.arrange(found, address: \.senderAddress, priority: prioritySenders, muted: mutedSenders)
+        let found = arranged.priority + arranged.others
         guard let first = found.first else { return }
         let title: String
         let body: String
@@ -220,7 +339,7 @@ final class MailService {
             title: title,
             body: body + ". Tap to review.",
             category: NotificationService.Category.mail,
-            link: URL(string: "pathos://day")
+            link: URL(string: "pathos://mail")
         )
     }
 

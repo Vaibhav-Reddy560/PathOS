@@ -7,7 +7,8 @@ struct SettingsView: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.webAuthenticationSession) private var webAuthenticationSession
     @State private var testResult: String?
-    @State private var isConfirmingDisconnect = false
+    /// The Gmail account you asked to disconnect, while you confirm.
+    @State private var accountToDisconnect: String?
     @AppStorage(CalendarEventSource.enabledKey) private var showsCalendarEvents = false
     @State private var calendarNote: String?
 
@@ -218,24 +219,40 @@ struct SettingsView: View {
     private var gmailSection: some View {
         let mail = state.mail
         Section {
-            switch mail.connection {
-            case .disconnected:
+            if mail.accounts.isEmpty {
                 Text("PathOS can read new mail on your iPhone and pick out events, deadlines and updates. You approve each one before it goes on your Day.")
-                Button(mail.isConnecting ? "Connecting…" : "Connect Gmail", action: connectGmail)
-                    .disabled(mail.isConnecting)
-            case .connected:
-                LabeledContent("Account", value: mail.account ?? "Connected")
-                LabeledContent("Last checked", value: mail.lastCheckedAt.map { $0.formatted(.relative(presentation: .named)) } ?? "Not yet")
+            }
+            ForEach(mail.accounts) { account in
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(account.email)
+                        .foregroundStyle(.ice)
+                    Text(account.isSignedIn
+                         ? "Checked " + (account.lastCheckedAt.map { $0.formatted(.relative(presentation: .named)) } ?? "not yet")
+                         : "Signed out by Google")
+                        .font(.footnote)
+                        .foregroundStyle(account.isSignedIn ? .mist : .amber)
+                    if !account.isSignedIn {
+                        Button(mail.isConnecting ? "Connecting…" : "Sign in again") { connectGmail(account.email) }
+                            .disabled(mail.isConnecting)
+                    }
+                }
+                .swipeActions {
+                    Button("Disconnect", role: .destructive) { accountToDisconnect = account.email }
+                }
+                .contextMenu {
+                    Button("Disconnect", systemImage: "xmark", role: .destructive) { accountToDisconnect = account.email }
+                }
+            }
+            Button(mail.isConnecting ? "Connecting…" : mail.accounts.isEmpty ? "Connect Gmail" : "Add another Gmail account") {
+                connectGmail(nil)
+            }
+            .disabled(mail.isConnecting)
+            if !mail.accounts.isEmpty {
                 Button(mail.isChecking ? "Checking…" : "Check now") {
                     Task { await mail.check() }
                 }
                 .disabled(mail.isChecking)
-                Button("Disconnect", role: .destructive) { isConfirmingDisconnect = true }
-            case .expired:
-                Text("Google signed PathOS out. It does this every 7 days while PathOS is a test app.")
-                Button(mail.isConnecting ? "Connecting…" : "Reconnect Gmail", action: connectGmail)
-                    .disabled(mail.isConnecting)
-                Button("Disconnect", role: .destructive) { isConfirmingDisconnect = true }
+                NavigationLink("Priority and muted senders") { MailSendersView() }
             }
             if let error = mail.lastError {
                 Text(error)
@@ -245,19 +262,25 @@ struct SettingsView: View {
         } header: {
             InstrumentLabel("Gmail")
         } footer: {
-            Text("Read-only: PathOS can't send, change or delete mail. Messages are read on your iPhone and only a one-line summary is kept. Promotions and social mail are skipped.")
+            Text("Read-only: PathOS can't send, change or delete mail. Messages are read on your iPhone and only a one-line summary is kept. Promotions and social mail are skipped. Swipe an account to disconnect it.")
         }
-        .confirmationDialog("Disconnect Gmail?", isPresented: $isConfirmingDisconnect, titleVisibility: .visible) {
+        .confirmationDialog(
+            "Disconnect \(accountToDisconnect ?? "Gmail")?",
+            isPresented: Binding { accountToDisconnect != nil } set: { if !$0 { accountToDisconnect = nil } },
+            titleVisibility: .visible
+        ) {
             Button("Disconnect", role: .destructive) {
-                Task { await mail.disconnect() }
+                if let email = accountToDisconnect {
+                    Task { await mail.disconnect(email) }
+                }
             }
         } message: {
-            Text("Suggestions waiting for you are cleared. Events you've already added stay on your Day.")
+            Text("Suggestions from this account that are waiting for you are cleared. Events you've already added stay on your Day.")
         }
     }
 
-    private func connectGmail() {
-        Task { await state.mail.connect(present: webAuthenticationSession.googleSignIn) }
+    private func connectGmail(_ email: String?) {
+        Task { await state.mail.connect(present: webAuthenticationSession.googleSignIn, reconnecting: email) }
     }
 
     private var versionLine: String {

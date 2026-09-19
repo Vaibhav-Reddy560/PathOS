@@ -12,6 +12,7 @@ struct DayDeck: View {
     @Query private var timetableEntries: [TimetableEntry]
     @Query private var timetableExceptions: [TimetableException]
     @Query private var trips: [Trip]
+    @Query(filter: #Predicate<MailSuggestion> { $0.statusRaw == "pending" }) private var pendingMail: [MailSuggestion]
 
     @State private var day = Calendar.current.startOfDay(for: Date())
     @State private var now = Date()
@@ -25,9 +26,10 @@ struct DayDeck: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 20) {
+                // Your schedule, a day or a month at a time, or what your mail is waiting on you for.
                 Picker("View", selection: $mode) {
                     ForEach(DayViewMode.allCases) { mode in
-                        Text(mode.title).tag(mode)
+                        Text(mode == .mail && mailCount > 0 ? "Mail · \(mailCount)" : mode.title).tag(mode)
                     }
                 }
                 .pickerStyle(.segmented)
@@ -35,12 +37,14 @@ struct DayDeck: View {
                 switch mode {
                 case .day: dayView
                 case .month: monthView
+                case .mail: MailInbox()
                 }
             }
             .padding(.horizontal, 20)
             .padding(.bottom, 32)
         }
         .scrollIndicators(.hidden)
+        .deckScroll()
         .task {
             // Keeps "in 12 min" honest without a Combine timer.
             while !Task.isCancelled {
@@ -62,11 +66,23 @@ struct DayDeck: View {
 
     // MARK: Views
 
+    /// What to add comes first, under the date, then what's next and the schedule; how the day
+    /// added up is last. Mail has its own tab, so it never pushes the schedule down.
     @ViewBuilder
     private var dayView: some View {
         dayPicker
+        if !isPast {
+            quickActions
+        }
         if let trip = tripForDay {
             tripBanner(trip)
+        }
+        if isToday, let next = nextItem {
+            nextUp(next)
+        }
+        schedule(title: isPast ? "What happened" : "Schedule")
+        if !timetableEntries.isEmpty, !isPast {
+            classesToggle
         }
         summary
         if isPast || (isToday && !daySummary.isEmpty) {
@@ -76,14 +92,11 @@ struct DayDeck: View {
                 .padding(.horizontal, 4)
                 .accessibilityLabel("Day summary: \(daySummary.sentence)")
         }
-        if isToday, let next = nextItem {
-            nextUp(next)
-        }
-        if isToday {
-            MailInbox()
-        }
-        schedule(title: isPast ? "What happened" : "Schedule")
-        actions
+    }
+
+    /// Mail still waiting on you, less muted senders.
+    private var mailCount: Int {
+        pendingMail.filter { !state.mail.isMuted($0.senderAddress) }.count
     }
 
     @ViewBuilder
@@ -249,56 +262,78 @@ struct DayDeck: View {
         }
     }
 
-    private var actions: some View {
-        VStack(spacing: 10) {
-            Button {
-                state.eventSheet = EventSheetRequest(editing: nil, text: nil)
-            } label: {
-                Label("Add an event", systemImage: "calendar.badge.plus")
-                    .font(.headline)
-                    .frame(maxWidth: .infinity, minHeight: 36)
-            }
-            .pathPrimaryAction()
-
-            Button {
-                state.eventSheet = EventSheetRequest(editing: nil, text: UIPasteboard.general.string)
-            } label: {
-                Label("Paste a message", systemImage: "doc.on.clipboard")
-                    .frame(maxWidth: .infinity, minHeight: 32)
-            }
-            .pathSecondaryAction()
-
-            // Two to a row, each label on one line; stacked when the text is too large for that.
-            ViewThatFits(in: .horizontal) {
-                HStack(spacing: 10) { tripAndTimetableButtons }
-                VStack(spacing: 10) { tripAndTimetableButtons }
-            }
-
-            if !timetableEntries.isEmpty {
-                Button {
-                    state.timetable.setDayOff(day, isOff: !isDayOff)
-                } label: {
-                    OneLineButtonLabel(title: isDayOff ? "Classes are on today" : "No classes today",
-                                       symbol: isDayOff ? "arrow.uturn.backward" : "xmark.circle")
+    /// Adding to the day, one tap each: four across, or two by two when the text is large.
+    private var quickActions: some View {
+        ViewThatFits(in: .horizontal) {
+            HStack(spacing: 8) { quickActionButtons }
+            VStack(spacing: 8) {
+                HStack(spacing: 8) {
+                    addEventButton
+                    pasteButton
                 }
-                .pathSecondaryAction()
+                HStack(spacing: 8) {
+                    timetableButton
+                    tripButton
+                }
             }
         }
+        // Tiles rather than capsules: at this height a capsule turns into a blob.
+        .buttonBorderShape(.roundedRectangle(radius: 16))
     }
 
     @ViewBuilder
-    private var tripAndTimetableButtons: some View {
+    private var quickActionButtons: some View {
+        addEventButton
+        pasteButton
+        timetableButton
+        tripButton
+    }
+
+    private var addEventButton: some View {
         Button {
-            state.isTripsPresented = true
+            state.eventSheet = EventSheetRequest(editing: nil, text: nil)
         } label: {
-            OneLineButtonLabel(title: trips.isEmpty ? "Plan a trip" : "Trips", symbol: "suitcase.rolling")
+            QuickActionLabel(title: "Add event", symbol: "calendar.badge.plus")
+        }
+        .pathPrimaryAction()
+    }
+
+    private var pasteButton: some View {
+        Button {
+            state.eventSheet = EventSheetRequest(editing: nil, text: UIPasteboard.general.string)
+        } label: {
+            QuickActionLabel(title: "Paste", symbol: "doc.on.clipboard")
         }
         .pathSecondaryAction()
+        .accessibilityLabel("Paste a message")
+    }
 
+    private var timetableButton: some View {
         Button {
             state.isTimetablePresented = true
         } label: {
-            OneLineButtonLabel(title: timetableEntries.isEmpty ? "Add timetable" : "Timetable", symbol: "graduationcap")
+            QuickActionLabel(title: "Timetable", symbol: "graduationcap")
+        }
+        .pathSecondaryAction()
+        .accessibilityLabel(timetableEntries.isEmpty ? "Add timetable" : "Timetable")
+    }
+
+    private var tripButton: some View {
+        Button {
+            state.isTripsPresented = true
+        } label: {
+            QuickActionLabel(title: trips.isEmpty ? "Trip" : "Trips", symbol: "suitcase.rolling")
+        }
+        .pathSecondaryAction()
+        .accessibilityLabel(trips.isEmpty ? "Plan a trip" : "Trips")
+    }
+
+    private var classesToggle: some View {
+        Button {
+            state.timetable.setDayOff(day, isOff: !isDayOff)
+        } label: {
+            OneLineButtonLabel(title: isDayOff ? "Classes are on this day" : "No classes this day",
+                               symbol: isDayOff ? "arrow.uturn.backward" : "xmark.circle")
         }
         .pathSecondaryAction()
     }
@@ -618,7 +653,32 @@ private struct DayItemRow: View {
 enum DayViewMode: String, CaseIterable, Identifiable {
     case day
     case month
+    case mail
 
     var id: String { rawValue }
-    var title: String { self == .day ? "Day" : "Month" }
+    var title: String {
+        switch self {
+        case .day: "Day"
+        case .month: "Month"
+        case .mail: "Mail"
+        }
+    }
+}
+
+/// A symbol over a word, so four fit across the deck.
+private struct QuickActionLabel: View {
+    let title: String
+    let symbol: String
+
+    var body: some View {
+        VStack(spacing: 4) {
+            Image(systemName: symbol)
+                .font(.body.weight(.semibold))
+            Text(title)
+                .font(.caption.weight(.semibold))
+                .lineLimit(1)
+                .fixedSize()
+        }
+        .frame(maxWidth: .infinity, minHeight: 52)
+    }
 }

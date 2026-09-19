@@ -175,14 +175,15 @@ nonisolated enum LockScreenContext {
         return "\(start) to \(entry.end.formatted(date: .omitted, time: .shortened))"
     }
 
-    /// Whether to take an umbrella, from the same rules as the exit check.
+    /// Whether to take an umbrella: exactly when the exit check says so, which weighs a station's
+    /// report and how much rain the forecasts expect, not just the odds.
     private static func umbrellaLine(_ inputs: Inputs) -> (detail: String, note: String)? {
+        guard let advice = inputs.exitAdvice else { return nil }
         let chance = inputs.weather?.rainChanceNext2h ?? 0
-        let rainLikely = chance >= ExitCheckEvaluator.rainChanceThreshold
-        guard rainLikely || inputs.exitAdvice != nil else { return nil }
-        let detail = inputs.exitAdvice?.detail ?? "There's a \(chance)% chance of rain in the next 2 hours."
-        let note = rainLikely ? "Take an umbrella · \(chance)% rain in 2 h" : "Take an umbrella · the weather may turn"
-        return (detail, note)
+        let note = advice.headline.hasPrefix("Raining nearby")
+            ? "Take an umbrella · raining nearby"
+            : chance >= ExitCheckEvaluator.rainChanceThreshold ? "Take an umbrella · \(chance)% rain in 2 h" : "Take an umbrella · the weather may turn"
+        return (advice.detail, note)
     }
 
     /// The travel time, around when you usually leave.

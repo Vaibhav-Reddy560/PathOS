@@ -25,9 +25,12 @@ final class MailSuggestion {
     var statusRaw: String = MailStatus.pending.rawValue
     /// The event it became, once you approved it.
     var eventID: UUID?
+    /// The Gmail address it arrived at, when PathOS reads more than one. Nil from before that.
+    var account: String?
     var createdAt: Date = Date()
 
-    init(message: MailMessage, proposal: MailProposal) {
+    init(message: MailMessage, proposal: MailProposal, account: String? = nil) {
+        self.account = account
         messageID = message.id
         senderName = message.senderName
         senderAddress = message.senderAddress

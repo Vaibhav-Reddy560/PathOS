@@ -72,6 +72,7 @@ struct ScanReviewView: View {
             .padding(.bottom, 24)
         }
         .scrollIndicators(.hidden)
+        .deckScroll()
     }
 
     @ViewBuilder

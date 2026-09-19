@@ -39,6 +39,17 @@ struct GoogleOAuthTests {
         #expect(!url.absoluteString.contains(pkce.verifier))
     }
 
+    /// Adding an account shows Google's chooser; reconnecting one goes straight to it.
+    @Test func signInChoosesOrNamesTheAccount() {
+        let pkce = PKCE(verifier: "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk")
+        func items(_ url: URL) -> [URLQueryItem] { URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems ?? [] }
+        let adding = items(GoogleOAuth.authorizationURL(pkce: pkce, state: "abc"))
+        #expect(adding.contains(URLQueryItem(name: "prompt", value: "select_account")))
+        let reconnecting = items(GoogleOAuth.authorizationURL(pkce: pkce, state: "abc", loginHint: "me@college.edu"))
+        #expect(reconnecting.contains(URLQueryItem(name: "login_hint", value: "me@college.edu")))
+        #expect(!reconnecting.contains { $0.name == "prompt" })
+    }
+
     @Test func aRedirectIsOnlyAcceptedForTheRequestWeMade() throws {
         #expect(try GoogleOAuth.code(from: URL(string: "\(redirect)?state=abc&code=4/0Axyz")!, expectedState: "abc") == "4/0Axyz")
         #expect(throws: GoogleOAuthError.stateMismatch) {

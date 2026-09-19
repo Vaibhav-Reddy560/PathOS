@@ -60,29 +60,8 @@ final class ContextEngine {
         ExitCheckEvaluator.evaluate(
             trend: barometer.trend,
             rainChanceNext2h: snapshot?.rainChanceNext2h,
-            precipitationNowMM: snapshot?.precipitationNowMM
-        )
-    }
-
-    /// Lock Screen layout for the current venue type.
-    func venueActivityState() -> PathOSActivityAttributes.ContentState {
-        let name = venue.name ?? venue.kind.label
-        let subtitle: String = switch venue.kind {
-        case .home: weather.snapshot.map { "\($0.summary), \(Int($0.temperatureC.rounded()))° · \($0.rainChanceNext2h)% rain" } ?? "Welcome home"
-        case .work: "Tap for your commute home"
-        case .transit: "Metro & cabs one tap away"
-        case .shopping: "Save your parking spot · scan receipts"
-        case .dining: "Scan the bill to log it"
-        case .outdoors: weather.snapshot.map { "\($0.summary) · \($0.rainChanceNext2h)% rain soon" } ?? "Enjoy the outdoors"
-        case .entertainment: "Snap posters to save events"
-        case .unknown: "PathOS is watching the way"
-        }
-        return PathOSActivityAttributes.ContentState(
-            mode: .venue,
-            title: name,
-            subtitle: subtitle,
-            symbol: venue.kind.symbol,
-            deepLink: URL(string: "pathos://dashboard")
+            expectedRainMM: snapshot?.expectedRainMM,
+            observation: snapshot?.observation
         )
     }
 }

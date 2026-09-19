@@ -17,22 +17,11 @@ struct WorldView: View {
     @State private var placeDetails = PlaceDetailsService()
     @State private var screenCornerRadius: CGFloat = 0
     @State private var bottomSafeArea: CGFloat = 34
-    @State private var screenWidth: CGFloat = 0
-    /// Whether the deck's sheet is up. Collapsing, it rests where the card will be and then hands
-    /// over to the card, which can sit higher than iOS holds a sheet.
-    @State private var isDeckSheetUp = false
-    /// Taking over, the card is drawn as the resting sheet was, glass and rows, then tucks its
-    /// bottom edge up. It keeps the sheet's top and rows exactly, rather than easing to where the
-    /// arithmetic says they should be: iOS rounds the sheet's height to the pixel grid, a point
-    /// either way, and easing that away moved the strip. See `DeckCard`.
-    @State private var cardExtraTop: CGFloat = 0
-    @State private var cardExtraBottom: CGFloat = 0
-    @State private var cardContentShift: CGFloat = 0
-    @State private var handOver: Task<Void, Never>?
+    @State private var topSafeArea: CGFloat = 59
+    @State private var screenHeight: CGFloat = 0
     @Namespace private var mapScope
 
     var body: some View {
-        @Bindable var state = state
         let alerts = state.ambientAlerts
         let signals = currentSignals
 
@@ -70,25 +59,10 @@ struct WorldView: View {
                     .transition(.move(edge: .bottom).combined(with: .opacity))
             }
         }
-        .overlay(alignment: .bottom) {
-            if isCardShowing {
-                DeckCard(
-                    cornerRadius: DeckLayout.cornerRadius(screen: screenCornerRadius, margin: DeckLayout.sideMargin),
-                    scale: sheetScale,
-                    screenWidth: screenWidth,
-                    extraTop: cardExtraTop,
-                    extraBottom: cardExtraBottom,
-                    contentShift: cardContentShift
-                )
-                    .padding(.bottom, DeckLayout.cardBottomMargin - cardExtraBottom)
-                    .ignoresSafeArea(edges: .bottom)
-                    // Appearing, it takes the resting sheet's place in the same frame. Opening, it
-                    // waits for the sheet to rise over it before fading. The animations ride on the
-                    // transition rather than on a change to the whole screen, which moved the map.
-                    .transition(.asymmetric(
-                        insertion: .identity,
-                        removal: .opacity.animation(.easeIn(duration: 0.15).delay(0.12))
-                    ))
+        .overlay {
+            if isDeckShowing, screenHeight > 0 {
+                DeckPanel(signals: signals, screenCornerRadius: screenCornerRadius, screenHeight: screenHeight, topSafeArea: topSafeArea)
+                    .transition(.move(edge: .bottom))
             }
         }
         .overlay(alignment: .top) {
@@ -105,12 +79,14 @@ struct WorldView: View {
             .ignoresSafeArea()
         }
         // Inside the environment below, which what it presents needs.
-        .modifier(CollapsedDeckPresentations(isCollapsed: isCardShowing))
+        .modifier(DeckPresentations())
         .environment(radar)
         .environment(scanFlow)
         .environment(placeDetails)
         .onGeometryChange(for: CGFloat.self) { $0.safeAreaInsets.bottom } action: { bottomSafeArea = $0 }
-        .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { screenWidth = $0 }
+        .onGeometryChange(for: CGFloat.self) { $0.safeAreaInsets.top } action: { topSafeArea = $0 }
+        // The whole screen, the keyboard included: the safe areas grow as the view shrinks.
+        .onGeometryChange(for: CGFloat.self) { $0.size.height + $0.safeAreaInsets.top + $0.safeAreaInsets.bottom } action: { screenHeight = $0 }
         .task(id: RadarRefreshKey(category: radar.category, location: state.location.location?.coordinate)) {
             await radar.refresh(state: state)
         }
@@ -132,80 +108,12 @@ struct WorldView: View {
             state.selectedSignalID = place.id
         }
         #endif
-        // Pulling the sheet down shrinks it to the card's size, where it rests; it can't be pulled
-        // away. It waits for the launch view to lift.
-        .sheet(isPresented: Binding {
-            isDeckSheetUp && state.compassTarget == nil && state.isLaunchComplete
-        } set: { isPresented in
-            if !isPresented {
-                isDeckSheetUp = false
-                state.deckDetent = .deckPeek
-            }
-        }) {
-            DeckView(signals: signals, screenCornerRadius: screenCornerRadius, onRestCollapsed: handOverToCard(from:))
-                .environment(radar)
-                .environment(scanFlow)
-                .environment(placeDetails)
-                .presentationDetents([.deckPeek, .medium, .large], selection: $state.deckDetent)
-                .presentationBackgroundInteraction(.enabled(upThrough: .medium))
-                .interactiveDismissDisabled()
-        }
-        .onChange(of: state.deckDetent, initial: true) { _, detent in
-            handOver?.cancel()
-            if detent == .deckPeek {
-                // The sheet says when it has come to rest (`SheetRestProbe`); this is only in case
-                // it never does, so the card can't be left waiting.
-                handOver = Task {
-                    try? await Task.sleep(for: .seconds(1.2))
-                    guard !Task.isCancelled else { return }
-                    handOverToCard(from: nil)
-                }
-            } else {
-                isDeckSheetUp = true
-            }
-        }
+        .animation(PathMotion.resolve(PathMotion.signal, reduceMotion: reduceMotion), value: isDeckShowing)
     }
 
-    /// Swaps the resting sheet for the card in the same frame, drawn exactly as the sheet was, glass
-    /// and rows, then tucks up the few points of glass iOS holds a sheet lower than the card.
-    private func handOverToCard(from rest: SheetRest?) {
-        guard isDeckSheetUp, state.deckDetent == .deckPeek else { return }
-        handOver?.cancel()
-        // A sheet drawn some other way than expected, such as iOS's compact style, can't be matched,
-        // so the card just takes its own place.
-        if let rest, abs(rest.scale - sheetScale) < 0.005 {
-            let bottom = rest.screenHeight - DeckLayout.cardBottomMargin
-            let top = bottom - DeckLayout.restingCardHeight(for: dynamicTypeSize) * sheetScale
-            cardExtraTop = top - rest.glass.minY
-            cardExtraBottom = rest.glass.maxY - bottom
-            cardContentShift = (rest.contentTop - rest.glass.minY) / sheetScale
-        } else {
-            cardExtraTop = 0
-            cardExtraBottom = DeckLayout.sheetOverhang
-            cardContentShift = 0
-        }
-        var instantly = Transaction()
-        instantly.disablesAnimations = true
-        withTransaction(instantly) { isDeckSheetUp = false }
-        handOver = Task {
-            try? await Task.sleep(for: .milliseconds(40))
-            guard !Task.isCancelled else { return }
-            withAnimation(PathMotion.resolve(.smooth(duration: 0.25), reduceMotion: reduceMotion)) {
-                cardExtraBottom = 0
-            }
-        }
-    }
-
-    private var sheetScale: CGFloat {
-        DeckLayout.sheetScale(screenWidth: screenWidth)
-    }
-
-    private var isCardShowing: Bool {
-        isDeckCollapsed && !isDeckSheetUp
-    }
-
-    private var isDeckCollapsed: Bool {
-        state.compassTarget == nil && state.isLaunchComplete && state.deckDetent == .deckPeek
+    /// The deck steps aside while guiding, and waits for the launch view to lift.
+    private var isDeckShowing: Bool {
+        state.compassTarget == nil && state.isLaunchComplete
     }
 
     /// The map keeps you centred above the collapsed card, and stays put while the deck opens and
@@ -218,7 +126,7 @@ struct WorldView: View {
         }
         // The card's top, above the safe area the map already keeps clear, and a little more so
         // Apple's map logo sits clear of the card instead of on its edge.
-        return DeckLayout.restingCardHeight(for: dynamicTypeSize) * sheetScale + DeckLayout.cardBottomMargin - bottomSafeArea + 8
+        return DeckLayout.cardHeight(for: dynamicTypeSize) + DeckLayout.bottomMargin - bottomSafeArea + 8
     }
 
     private var currentSignals: [WorldSignal] {

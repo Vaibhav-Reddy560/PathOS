@@ -33,6 +33,7 @@ struct NowDeck: View {
             .padding(.bottom, 32)
         }
         .scrollIndicators(.hidden)
+        .deckScroll()
         .task {
             await state.refreshCommute()
         }
@@ -151,7 +152,6 @@ struct NowDeck: View {
     private var environmentSection: some View {
         let snapshot = state.weather.snapshot
         let barometer = state.barometer
-        let rainChance = snapshot?.rainChanceNext2h
 
         return VStack(alignment: .leading, spacing: 10) {
             DeckSectionHeader(title: "Environment", trailing: snapshot.map { "Updated \($0.fetchedAt.formatted(date: .omitted, time: .shortened))" })
@@ -166,10 +166,10 @@ struct NowDeck: View {
                 EnvironmentTile(
                     symbol: "cloud.rain.fill",
                     label: "Rain · 2 h",
-                    value: rainChance.map { "\($0)" } ?? "—",
+                    value: snapshot.map { "\($0.rainChanceNext2h)" } ?? "—",
                     unit: "%",
-                    detail: (rainChance ?? 0) >= ExitCheckEvaluator.rainChanceThreshold ? "Take an umbrella" : "Unlikely",
-                    role: (rainChance ?? 0) >= ExitCheckEvaluator.rainChanceThreshold ? .attention : .world
+                    detail: snapshot.map(rainVerdict) ?? "Loading…",
+                    role: snapshot?.isRainLikely == true ? .attention : .world
                 )
                 if barometer.isAvailable {
                     EnvironmentTile(
@@ -195,6 +195,12 @@ struct NowDeck: View {
                     unit: "dB",
                     detail: state.sound.scene.label
                 )
+            }
+            if let snapshot {
+                Text(weatherSources(snapshot))
+                    .font(.caption)
+                    .foregroundStyle(.mist)
+                    .padding(.horizontal, 4)
             }
         }
     }
@@ -250,32 +256,42 @@ struct NowDeck: View {
 
     @ViewBuilder
     private var travelTimes: some View {
-        if let commute = state.commute {
-            VStack(alignment: .leading, spacing: 10) {
-                if let name = commute.destinationName {
+        VStack(alignment: .leading, spacing: 14) {
+            if let commute = state.commute, let name = commute.destinationName {
+                VStack(alignment: .leading, spacing: 10) {
                     Text("To \(name)")
                         .font(.headline)
                         .foregroundStyle(.ice)
-                }
-                if let transit = commute.transitMinutes {
-                    CommuteLine(symbol: "tram.fill", value: "\(transit)", unit: "min", text: "by transit")
-                }
-                if let walk = commute.walkMinutes {
-                    CommuteLine(symbol: "figure.walk", value: "\(walk)", unit: "min", text: "walk")
-                }
-                if let station = commute.stationName, let distance = commute.stationDistanceMeters {
-                    // Past a couple of kilometres nobody walks it, so it's the distance that helps.
-                    if distance > 2_000 {
-                        CommuteLine(symbol: "tram.circle", value: String(format: "%.1f", distance / 1_000), unit: "km", text: "to \(station) metro")
-                    } else {
-                        CommuteLine(symbol: "tram.circle", value: "\(commute.stationWalkMinutes ?? 1)", unit: "min", text: "walk to \(station) metro")
+                    if let transit = commute.transitMinutes {
+                        CommuteLine(symbol: "tram.fill", value: "\(transit)", unit: "min", text: "by transit")
+                    }
+                    if let walk = commute.walkMinutes {
+                        CommuteLine(symbol: "figure.walk", value: "\(walk)", unit: "min", text: "walk")
                     }
                 }
+            } else if !hasHomeAndWork {
+                Text("Set Home and Work below for travel times between them.")
+                    .font(.subheadline)
+                    .foregroundStyle(.mist)
             }
-        } else {
-            Text(hasHomeAndWork ? "Working out travel times…" : "Set Home and Work below for travel times between them.")
-                .font(.subheadline)
-                .foregroundStyle(.mist)
+            nearestMetro
+        }
+    }
+
+    /// From wherever you are right now, not from home: it moves with you.
+    @ViewBuilder
+    private var nearestMetro: some View {
+        if let here = state.location.location?.coordinate,
+           let nearest = MetroNetwork.nearbyStations(to: here, atLeast: 1).first {
+            VStack(alignment: .leading, spacing: 8) {
+                InstrumentLabel("Nearest metro to you")
+                // Past a couple of kilometres nobody walks it, so it's the distance that helps.
+                if nearest.distance > 2_000 {
+                    CommuteLine(symbol: "tram.circle", value: String(format: "%.1f", nearest.distance / 1_000), unit: "km", text: "to \(nearest.station.name)")
+                } else {
+                    CommuteLine(symbol: "tram.circle", value: "\(GeoMath.walkingMinutes(forDistance: nearest.distance))", unit: "min", text: "walk to \(nearest.station.name)")
+                }
+            }
         }
     }
 
@@ -350,6 +366,26 @@ struct NowDeck: View {
 
     // MARK: Helpers
 
+    private func rainVerdict(_ snapshot: WeatherSnapshot) -> String {
+        if snapshot.isRainingNearby { return "Raining nearby" }
+        if snapshot.isRainLikely { return "Take an umbrella" }
+        if snapshot.rainChanceNext2h >= ExitCheckEvaluator.rainChanceThreshold { return "A few drops at most" }
+        return "Unlikely"
+    }
+
+    /// Where the numbers come from, so you can judge them: a station's report, or forecasts.
+    private func weatherSources(_ snapshot: WeatherSnapshot) -> String {
+        let now: String = if let station = snapshot.observation {
+            "Now: reported at \(station.station), \(GeoMath.formatDistance(station.distanceMeters)) away, at \(station.observedAt.formatted(date: .omitted, time: .shortened))."
+        } else {
+            "Now: forecast, as no weather station is near enough."
+        }
+        let rain = snapshot.modelCount > 1
+            ? " Rain: the middle of \(snapshot.modelCount) forecasts, \(snapshot.modelsExpectingRain) of which expect rain."
+            : ""
+        return now + rain
+    }
+
     /// Two tiles side by side, or one column at accessibility sizes so captions never break mid-word.
     private var environmentColumns: [GridItem] {
         dynamicTypeSize.isAccessibilitySize
@@ -416,10 +452,11 @@ private struct CommuteLine: View {
                 .foregroundStyle(.ion)
                 .frame(width: 22)
             MetricText(value: value, unit: unit, role: .world)
+            // Station names run long ("Dr. B.R. Ambedkar Station, Vidhana Soudha").
             Text(text)
                 .font(.subheadline)
                 .foregroundStyle(.mist)
-                .lineLimit(1)
+                .lineLimit(2)
         }
         .accessibilityElement(children: .combine)
     }

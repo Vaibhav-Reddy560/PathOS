@@ -87,9 +87,12 @@ nonisolated enum GoogleOAuth {
     static let tokenEndpoint = URL(string: "https://oauth2.googleapis.com/token")!
     static let revokeEndpoint = URL(string: "https://oauth2.googleapis.com/revoke")!
 
-    static func authorizationURL(pkce: PKCE, state: String) -> URL {
+    /// `loginHint` signs a known account back in; without one, Google lists the accounts on the
+    /// phone to choose from, so a second one can be added.
+    static func authorizationURL(pkce: PKCE, state: String, loginHint: String? = nil) -> URL {
         var components = URLComponents(url: authorizationEndpoint, resolvingAgainstBaseURL: false)!
         components.queryItems = [
+            loginHint.map { URLQueryItem(name: "login_hint", value: $0) } ?? URLQueryItem(name: "prompt", value: "select_account"),
             URLQueryItem(name: "client_id", value: GoogleConfig.clientID),
             URLQueryItem(name: "redirect_uri", value: GoogleConfig.redirectURI),
             URLQueryItem(name: "response_type", value: "code"),

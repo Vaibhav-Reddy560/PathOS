@@ -32,6 +32,7 @@ struct VaultDeck: View {
                 .padding(.bottom, 32)
             }
             .scrollIndicators(.hidden)
+            .deckScroll()
             .task(id: state.focusedNoteID) {
                 guard let id = state.focusedNoteID else { return }
                 withAnimation { proxy.scrollTo(id, anchor: .center) }

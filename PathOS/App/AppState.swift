@@ -47,9 +47,6 @@ nonisolated struct CommuteInfo: Sendable {
     var destinationLongitude: Double?
     var walkMinutes: Int?
     var transitMinutes: Int?
-    var stationName: String?
-    var stationWalkMinutes: Int?
-    var stationDistanceMeters: Double?
     var updatedAt: Date
 
     var destination: CLLocationCoordinate2D? {
@@ -111,7 +108,7 @@ final class AppState {
     let changes: ChangeService
 
     var selectedTab: AppTab = .now
-    var deckDetent: PresentationDetent = .deckPeek
+    var deckStop: DeckStop = .collapsed
     /// The map signal whose details the deck is showing.
     var selectedSignalID: String?
     var isSettingsPresented = false
@@ -149,7 +146,7 @@ final class AppState {
         didSet {
             // Keep the island visible above the deck while you talk to it.
             if isAssistantActive {
-                deckDetent = .deckPeek
+                deckStop = .collapsed
             }
         }
     }
@@ -548,6 +545,10 @@ final class AppState {
         switch url.host() {
         case "dashboard": showDeck(.now)
         case "day": showDeck(.day)
+        case "mail":
+            // Day's own switch, which remembers its place.
+            UserDefaults.standard.set(DayViewMode.mail.rawValue, forKey: "pathos.dayViewMode")
+            showDeck(.day)
         case "radar": showDeck(.radar)
         case "scan": beginScan()
         case "vault": showDeck(.vault)
@@ -609,8 +610,8 @@ final class AppState {
     func showDeck(_ tab: AppTab) {
         selectedTab = tab
         selectedSignalID = nil
-        if deckDetent == .deckPeek {
-            deckDetent = .medium
+        if deckStop == .collapsed {
+            deckStop = .half
         }
     }
 
@@ -1012,8 +1013,8 @@ final class AppState {
 
     // MARK: Commute
 
-    /// Travel time to Work, or Home from work, and the nearest metro: for Now, and for the pinned
-    /// context around when you usually leave. Apple Maps is only asked again once you've moved or
+    /// Travel time to Work, or Home from work: for Now, and for the pinned context around when
+    /// you usually leave. Apple Maps is only asked again once you've moved or
     /// a while has passed.
     func refreshCommute(force: Bool = false) async {
         guard let here = location.location else { return }
@@ -1034,7 +1035,6 @@ final class AppState {
             walk = await places.eta(to: destination.coordinate, from: here, transport: .walking)
             transit = await places.eta(to: destination.coordinate, from: here, transport: .transit)
         }
-        let station = MetroNetwork.nearbyStations(to: here.coordinate, atLeast: 1).first
 
         commute = CommuteInfo(
             destinationName: destination?.name,
@@ -1042,9 +1042,6 @@ final class AppState {
             destinationLongitude: destination?.longitude,
             walkMinutes: walk,
             transitMinutes: transit,
-            stationName: station?.station.name,
-            stationWalkMinutes: station.map { GeoMath.walkingMinutes(forDistance: $0.distance) },
-            stationDistanceMeters: station?.distance,
             updatedAt: Date()
         )
     }

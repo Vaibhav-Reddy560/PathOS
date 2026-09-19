@@ -83,6 +83,7 @@ struct SignalDetailView: View {
             .padding(.bottom, 32)
         }
         .scrollIndicators(.hidden)
+        .deckScroll()
         .task(id: signal.id) {
             await details.load(id: signal.id, coordinate: signal.coordinate, name: signal.title)
         }

@@ -20,42 +20,62 @@ struct DeckLayoutTests {
         #expect(DeckLayout.cardBottomPadding < DeckLayout.cardTopPadding)
     }
 
-    /// Collapsing, the sheet rests with its top and its rows exactly where the card's are, and its
-    /// glass reaching down to where iOS holds a sheet. Handing over, the card only tucks its bottom
-    /// edge up: when the card rose as a whole, every readout in the strip jumped.
-    ///
-    /// iOS lays the sheet out at the screen's width and scales it down to float 8pt in from the
-    /// sides, so the sheet is `peek + glassBelowContent` tall before that scale; the card is drawn
-    /// at the same scale.
-    @Test(arguments: [(402.0, 0.9602), (430.0, 0.9628), (440.0, 0.9636)])
-    func theSheetRestsAsTheCard(width: Double, measured: Double) {
-        let rows = lineHeight(.headline) + DeckLayout.rowGap + DeckLayout.controlHeight
-        let peek = DeckPeekDetent.height(for: .large)
-        let card = DeckLayout.restingCardHeight(for: .large)
-        let scale = DeckLayout.sheetScale(screenWidth: width)
-        #expect(abs(scale - measured) < 0.0001)
-        // Tops on screen, measured up from the screen's bottom edge.
-        let sheetTop = DeckLayout.sheetBottomMargin + (peek + DeckLayout.glassBelowContent) * scale
-        let cardTop = DeckLayout.cardBottomMargin + card * scale
-        #expect(abs(sheetTop - cardTop) < 0.5)
-        #expect(DeckLayout.sheetOverhang == DeckLayout.cardBottomMargin - DeckLayout.sheetBottomMargin)
-        #expect(DeckLayout.headerTopPadding(reveal: 0) == DeckLayout.cardTopPadding)
-        // Everything drawn at rest fits the stop exactly, so nothing overflows or centres itself.
-        #expect(abs(DeckLayout.headerTopPadding(reveal: 0) + rows + DeckLayout.headerBottomPadding(reveal: 0, size: .large) - peek) < 0.5)
-        // Pulled up, the cards fade in over a short drag while the rows rise to the open padding.
-        #expect(DeckLayout.reveal(deckHeight: peek + 1, peekHeight: peek) == 0)
-        #expect(DeckLayout.reveal(deckHeight: 440, peekHeight: peek) == 1)
-        #expect(DeckLayout.headerTopPadding(reveal: 1) == DeckLayout.topPadding)
-        #expect(DeckLayout.headerBottomPadding(reveal: 1, size: .large) == DeckLayout.bottomPadding)
+    /// The deck's bottom never moves: every stop shares one bottom margin, so collapsing only
+    /// lowers the top. When iOS's sheet did the collapsing, its glass rested 8pt lower than the
+    /// card, which then rose into place with a flash.
+    @Test(arguments: [(874.0, 62.0), (932.0, 59.0), (956.0, 62.0)])
+    func theStopsRiseInOrderFromOneBottom(screen: Double, top: Double) {
+        let collapsed = DeckLayout.cardHeight(for: .large)
+        let heights = DeckStop.allCases.map { DeckLayout.height(of: $0, collapsed: collapsed, screen: screen, topSafeArea: top) }
+        #expect(heights == heights.sorted())
+        #expect(heights[0] == collapsed)
+        // Half open, the top is halfway up the screen.
+        #expect(abs(screen - DeckLayout.bottomMargin - heights[1] - screen / 2) < 0.5)
+        // Full, it stops clear of the island.
+        #expect(abs(screen - DeckLayout.bottomMargin - heights[2] - (top + DeckLayout.fullTopClearance)) < 0.5)
     }
 
-    /// Below about 100pt iOS 26 draws a sheet as a compact card, inset 28pt and scaled to 86%: at a
-    /// 98.7pt stop the card took over from that, and came up 22pt too low. The rows always fit the
-    /// card, which grows to match the sheet where the floor holds it taller.
-    @Test(arguments: [DynamicTypeSize.xSmall, .small, .medium, .large, .xxxLarge, .accessibility3])
-    func theRestingSheetIsNeverCompact(_ size: DynamicTypeSize) {
-        #expect(DeckPeekDetent.height(for: size) >= DeckLayout.smallestFullSheet)
-        #expect(DeckLayout.restingCardHeight(for: size) >= DeckLayout.cardHeight(for: size) - 0.01)
+    @Test func theKeyboardShortensTheDeckButNeverBelowCollapsed() {
+        let collapsed = DeckLayout.cardHeight(for: .large)
+        let open = DeckLayout.height(of: .full, collapsed: collapsed, screen: 874, topSafeArea: 62)
+        let typing = DeckLayout.height(of: .full, collapsed: collapsed, screen: 874, topSafeArea: 62, keyboard: 336)
+        #expect(open - typing == 336)
+        #expect(DeckLayout.height(of: .half, collapsed: collapsed, screen: 874, topSafeArea: 62, keyboard: 700) == collapsed)
+    }
+
+    /// A slow release settles on the nearest stop; a flick goes on to the next one its way, and
+    /// never falls back against it.
+    @Test func dragsSettleWhereAFlickWouldCarryThem() {
+        let stops: [DeckStop: CGFloat] = [.collapsed: 126, .half: 421, .full: 736]
+        #expect(DeckLayout.settle(height: 400, velocity: 0, stops: stops) == .half)
+        #expect(DeckLayout.settle(height: 250, velocity: 0, stops: stops) == .collapsed)
+        #expect(DeckLayout.settle(height: 300, velocity: 0, stops: stops) == .half)
+        // A quick flick up from just above collapsed opens it, however little it moved.
+        #expect(DeckLayout.settle(height: 140, velocity: 900, stops: stops) == .half)
+        // A hard flick carries past half to full.
+        #expect(DeckLayout.settle(height: 450, velocity: 2_000, stops: stops) == .full)
+        // Flicked down from near full, it doesn't bounce back up.
+        #expect(DeckLayout.settle(height: 720, velocity: -700, stops: stops) == .half)
+        #expect(DeckLayout.settle(height: 400, velocity: -1_500, stops: stops) == .collapsed)
+    }
+
+    @Test func pastItsEndsTheDeckGivesALittle() {
+        #expect(DeckLayout.rubberBand(100, lowest: 126, highest: 736) > 100)
+        #expect(DeckLayout.rubberBand(100, lowest: 126, highest: 736) < 126)
+        #expect(DeckLayout.rubberBand(800, lowest: 126, highest: 736) < 800)
+        #expect(DeckLayout.rubberBand(400, lowest: 126, highest: 736) == 400)
+    }
+
+    /// Collapsed, only the rows show, with the card's padding; pulled up, the cards fade in over a
+    /// short drag while the rows move to the open padding.
+    @Test func theCardsFadeInAsTheDeckOpens() {
+        let collapsed = DeckLayout.cardHeight(for: .large)
+        #expect(DeckLayout.reveal(deckHeight: collapsed + 1, collapsedHeight: collapsed) == 0)
+        #expect(DeckLayout.reveal(deckHeight: collapsed + 200, collapsedHeight: collapsed) == 1)
+        #expect(DeckLayout.headerTopPadding(reveal: 0) == DeckLayout.cardTopPadding)
+        #expect(DeckLayout.headerTopPadding(reveal: 1) == DeckLayout.topPadding)
+        #expect(DeckLayout.headerBottomPadding(reveal: 0) == DeckLayout.cardBottomPadding)
+        #expect(DeckLayout.headerBottomPadding(reveal: 1) == DeckLayout.bottomPadding)
     }
 
     /// iOS floats the open deck 8pt in from the screen's edges and gives it one radius for all
@@ -74,7 +94,7 @@ struct DeckLayoutTests {
     func theCardClearsTheScreensCornersByMore(_ screen: Double) {
         let radius = DeckLayout.cornerRadius(screen: screen, margin: DeckLayout.sideMargin)
         let clearance = DeckLayout.cornerClearance(radius: radius, screen: screen,
-                                                   side: DeckLayout.sideMargin, bottom: DeckLayout.cardBottomMargin)
+                                                   side: DeckLayout.sideMargin, bottom: DeckLayout.bottomMargin)
         #expect(clearance > DeckLayout.cornerGap)
     }
 
@@ -87,13 +107,13 @@ struct DeckLayoutTests {
         #expect(DeckLayout.cornerRadius(screen: 0, margin: 8) == DeckLayout.squareScreenCornerRadius)
     }
 
-    @Test func peekGrowsWithEveryTextSize() {
+    @Test func theCollapsedDeckGrowsWithEveryTextSize() {
         let sizes: [DynamicTypeSize] = [.xSmall, .medium, .large, .xxLarge, .accessibility1, .accessibility5]
-        let heights = sizes.map(DeckPeekDetent.height(for:))
+        let heights = sizes.map(DeckLayout.cardHeight(for:))
         #expect(heights == heights.sorted())
         #expect(heights.first != heights.last)
         // The venue moves onto its own line, so accessibility sizes need considerably more room.
-        #expect(DeckPeekDetent.height(for: .accessibility5) > DeckPeekDetent.height(for: .large) * 1.5)
+        #expect(DeckLayout.cardHeight(for: .accessibility5) > DeckLayout.cardHeight(for: .large) * 1.5)
     }
 
     @Test func controlGlyphsShareTheTextEdges() {

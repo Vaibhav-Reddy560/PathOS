@@ -64,7 +64,7 @@ struct InstrumentStrip: View {
                 id: "rain",
                 value: "\(snapshot.rainChanceNext2h)",
                 unit: "% rain",
-                role: snapshot.rainChanceNext2h >= ExitCheckEvaluator.rainChanceThreshold ? .attention : .world
+                role: snapshot.isRainLikely ? .attention : .world
             ))
         }
         if let meters = state.barometer.absoluteAltitudeMeters {

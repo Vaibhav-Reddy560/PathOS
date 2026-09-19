@@ -91,13 +91,13 @@ extension AppState {
                 while true {
                     try? await Task.sleep(for: .seconds(3))
                     guard isLaunchComplete else { continue }
-                    deckDetent = deckDetent == .deckPeek ? .medium : .deckPeek
+                    deckStop = deckStop == .collapsed ? .half : .collapsed
                 }
             }
         }
         switch arguments.string(forKey: "PathOSDeckDetent") {
-        case "medium": deckDetent = .medium
-        case "large": deckDetent = .large
+        case "medium": deckStop = .half
+        case "large": deckStop = .full
         default: break
         }
     }

@@ -142,7 +142,7 @@ struct IslandAssistantPanel: View {
                         ForEach(turn.places) { place in
                             Button {
                                 state.selectedSignalID = "place:\(place.id)"
-                                state.deckDetent = .medium
+                                state.deckStop = .half
                             } label: {
                                 HStack(spacing: 6) {
                                     Image(systemName: place.symbol)

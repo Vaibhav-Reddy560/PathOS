@@ -42,6 +42,7 @@ struct RadarDeck: View {
             .padding(.bottom, 32)
         }
         .scrollIndicators(.hidden)
+        .deckScroll(lowersOnPull: false)
         // Pulling down is the one way to scan an area again before its three days are up.
         .refreshable { await radar.refresh(state: state, force: true) }
     }

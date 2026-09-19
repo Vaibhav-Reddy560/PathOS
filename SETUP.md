@@ -222,13 +222,18 @@ covers the SVG parsing (including relative commands, shorthand curves, arcs and 
 ## Gmail
 
 PathOS reads Gmail directly from the phone: there's no server, and nothing but Google sees the
-mail. Connect it in **Settings → Gmail**.
+mail. Connect it in **Settings → Gmail**, or in **Day → Mail**. Several accounts can be read, such as a
+personal one and a college one: **Add another Gmail account** shows Google's account chooser.
 
 **The Google Cloud side** (project `PathOS`, done once):
 
 - The Gmail API is enabled.
-- **Google Auth Platform → Audience:** External, publishing status **Testing**, with your Gmail
-  address listed under Test users. Only listed test users can sign in.
+- **Google Auth Platform → Audience:** External, publishing status **Testing**, with every Gmail
+  address you'll connect listed under Test users. Only listed test users can sign in, so add a
+  second account there before connecting it.
+- **College or work accounts** (Google Workspace) can also be blocked by the organisation: if Google
+  says the app is blocked or needs admin approval, the organisation's admin has to allow the
+  PathOS client ID, or allow unverified apps, under Security → API controls.
 - **Data Access:** one scope, `https://www.googleapis.com/auth/gmail.readonly`.
 - **Clients:** an iOS client for bundle ID `com.vaibhavreddy.pathos`. Its client ID is in
   `PathOS/Core/Mail/GoogleOAuth.swift` (`GoogleConfig.clientID`). An iOS client has no secret, so the
@@ -240,8 +245,13 @@ in the Keychain, readable after the first unlock and never synced. PathOS search
 the last check, skipping Promotions, Social, Forums, spam and sent mail. It reads the newest 30
 matches, and each message is read by the on-device model in its own session. Without Apple
 Intelligence, date and keyword rules do the reading instead. Events, deadlines and updates wait in
-the Day deck until you choose **Add to Day**, **Edit** or **Not now**. Only the one-line summary is
+**Day → Mail** until you choose **Add to Day**, **Edit** or **Not now**. Only the one-line summary is
 stored, never the body.
+
+**Priority and muted senders** (a card's **…** menu, or **Settings → Gmail → Priority and muted
+senders**): an address, or `@college.edu` for everyone there and its departments. Priority senders'
+mail comes first; muted senders' mail isn't read, shown or announced. A muted address inside a
+priority domain stays muted.
 
 Checks run when the app opens, at most every 10 minutes, and in background refreshes, reading up to
 6 messages so the check fits in the time iOS allows.
@@ -319,4 +329,5 @@ xcrun simctl launch booted com.vaibhavreddy.pathos -PathOSDemoData YES \
   the Namma BMTC app, whose timetables its maintainer says are often wrong, and routes without live
   tracking are missing. BMTC's live tracking is private to its app. Only direct buses are planned,
   with no changes between buses.
-- The barometer runs only while PathOS is active or during background refreshes. Rain warnings also check the Open-Meteo forecast.
+- The barometer runs only while PathOS is active or during background refreshes. Rain warnings also check the forecast.
+- **Weather sources.** The chance of rain is the middle of three forecast models (ECMWF, GFS and ICON, through Open-Meteo), not one model's worst hour, and rain only counts as likely when the models also expect a measurable amount (0.2 mm in an hour). "Raining nearby", the temperature and the conditions come from the nearest airport weather station's report (METAR, from aviationweather.gov) when one within 20 km reported in the last 90 minutes; otherwise they're forecast. **Now** says which, under the weather. A forecast is for a 10–25 km square, so in the monsoon's patchy showers it can rain across town and not on your street.

@@ -22,16 +22,19 @@ struct LockScreenContextTests {
 
     private let dry = AlertSnapshot.Weather(temperatureC: 24, summary: "Cloudy", symbol: "cloud.fill", rainChanceNext2h: 10)
     private let wet = AlertSnapshot.Weather(temperatureC: 22, summary: "Showers", symbol: "cloud.rain.fill", rainChanceNext2h: 70)
+    private let rain = ExitAdvice(headline: "Rain likely — take an umbrella", detail: "There's a 70% chance of rain in the next 2 hours.",
+                                  symbol: "cloud.rain.fill", severity: .medium)
 
     private func content(
         now: Date,
         agenda: [LockScreenContext.Entry] = [],
         weather: AlertSnapshot.Weather? = nil,
+        advice: ExitAdvice? = nil,
         commute: LockScreenContext.Commute? = nil,
         memory: LockScreenContext.Memory? = nil
     ) -> LockScreenContext.Content {
         LockScreenContext.content(for: .init(
-            venueName: "Home", venueSymbol: "house.fill", weather: weather ?? dry, exitAdvice: nil,
+            venueName: "Home", venueSymbol: "house.fill", weather: weather ?? dry, exitAdvice: advice,
             agenda: agenda, commute: commute, memory: memory, now: now, calendar: calendar
         ))
     }
@@ -82,7 +85,7 @@ struct LockScreenContextTests {
     }
 
     @Test func rainLeadsWhenNothingElseDoes() {
-        let shown = content(now: at(9), weather: wet)
+        let shown = content(now: at(9), weather: wet, advice: rain)
         #expect(shown.state.title == "Take an umbrella")
         #expect(shown.state.tint == .attention)
         #expect(shown.state.notes == nil)
@@ -90,9 +93,15 @@ struct LockScreenContextTests {
 
     @Test func rainIsANoteWhenAClassLeads() {
         let physics = lesson("Physics", at(9, 30), at(10, 30))
-        let shown = content(now: at(9), agenda: [physics], weather: wet)
+        let shown = content(now: at(9), agenda: [physics], weather: wet, advice: rain)
         #expect(shown.state.title == "Physics")
         #expect(shown.state.notes?.first == .init(symbol: "umbrella.fill", text: "Take an umbrella · 70% rain in 2 h", role: .attention))
+    }
+
+    /// Odds alone don't mean an umbrella: that's the exit check's call, which also weighs how much
+    /// rain is expected and what stations report.
+    @Test func highOddsWithoutAdviceAreNoUmbrella() {
+        #expect(content(now: at(9), weather: wet).state.title == "Home")
     }
 
     @Test func dryAndFreeItShowsWhereYouAre() {
@@ -135,7 +144,7 @@ struct LockScreenContextTests {
         let physics = lesson("Physics", at(9, 15), at(10))
         let maths = lesson("Maths", at(10, 15), at(11))
         let commute = LockScreenContext.Commute(destination: "Work", minutes: 35, byTransit: true, usualDeparture: 9 * 60)
-        let shown = content(now: at(9), agenda: [physics, maths], weather: wet, commute: commute,
+        let shown = content(now: at(9), agenda: [physics, maths], weather: wet, advice: rain, commute: commute,
                             memory: .init(title: "Locker 12", body: ""))
         #expect(shown.state.notes?.count == 2)
     }

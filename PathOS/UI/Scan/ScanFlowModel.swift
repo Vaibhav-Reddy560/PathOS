@@ -21,7 +21,7 @@ final class ScanFlowModel {
         errorMessage = nil
         isAnalyzing = true
         state.selectedSignalID = nil
-        state.deckDetent = .large
+        state.deckStop = .full
         Task {
             defer { isAnalyzing = false }
             do {

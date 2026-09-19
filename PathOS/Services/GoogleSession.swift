@@ -8,28 +8,47 @@ final class GoogleSession {
     /// Shows Google's sign-in page and returns the redirect it finishes on.
     typealias Presenter = (_ url: URL, _ callbackScheme: String) async throws -> URL
 
-    private static let keychainAccount = "google.tokens"
+    /// Before PathOS could hold more than one account, the only sign-in was kept here.
+    static let legacyKeychainAccount = "google.tokens"
     private static let gmailBase = "https://gmail.googleapis.com/gmail/v1/users/me/"
 
     private var tokens: GoogleTokens?
     private var refreshTask: Task<GoogleTokens, Error>?
     private let urlSession: URLSession
+    /// Where this sign-in's tokens are kept in the Keychain.
+    private(set) var keychainAccount: String
 
-    init(urlSession: URLSession = .shared) {
+    /// Each Gmail account has its own sign-in, kept under its address.
+    static func keychainAccount(for email: String) -> String {
+        "google.tokens." + email.lowercased()
+    }
+
+    init(keychainAccount: String, urlSession: URLSession = .shared) {
+        self.keychainAccount = keychainAccount
         self.urlSession = urlSession
-        tokens = Keychain.load(GoogleTokens.self, account: Self.keychainAccount)
+        tokens = Keychain.load(GoogleTokens.self, account: keychainAccount)
+    }
+
+    /// Moves the sign-in to another Keychain entry, once it's known whose it is.
+    func rekey(to account: String) {
+        guard account != keychainAccount else { return }
+        Keychain.delete(account: keychainAccount)
+        keychainAccount = account
+        if let tokens {
+            Keychain.save(tokens, account: account)
+        }
     }
 
     var isSignedIn: Bool { tokens != nil }
 
     // MARK: Signing in and out
 
-    func signIn(present: Presenter) async throws {
+    func signIn(present: Presenter, loginHint: String? = nil) async throws {
         let pkce = PKCE.random()
         let state = UUID().uuidString
         let callback: URL
         do {
-            callback = try await present(GoogleOAuth.authorizationURL(pkce: pkce, state: state), GoogleConfig.redirectScheme)
+            callback = try await present(GoogleOAuth.authorizationURL(pkce: pkce, state: state, loginHint: loginHint), GoogleConfig.redirectScheme)
         } catch let error as ASWebAuthenticationSessionError where error.code == .canceledLogin {
             throw GoogleOAuthError.cancelled
         }
@@ -50,14 +69,14 @@ final class GoogleSession {
 
     private func store(_ tokens: GoogleTokens) {
         self.tokens = tokens
-        Keychain.save(tokens, account: Self.keychainAccount)
+        Keychain.save(tokens, account: keychainAccount)
     }
 
     private func clear() {
         tokens = nil
         refreshTask?.cancel()
         refreshTask = nil
-        Keychain.delete(account: Self.keychainAccount)
+        Keychain.delete(account: keychainAccount)
     }
 
     // MARK: Tokens

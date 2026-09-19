@@ -1,233 +1,148 @@
-import PhotosUI
 import SwiftUI
 
-extension PresentationDetent {
-    /// The deck collapsed: the sheet resting at the card's size, or the card that takes over.
-    static let deckPeek = PresentationDetent.custom(DeckPeekDetent.self)
-}
-
-/// One set of edges for the whole deck header, so the strip's text, the mode icons and the
-/// settings glyph line up down the left and right of the glass.
+/// The deck: one glass panel over the map, from the collapsed strip up to just under the island.
 ///
-/// Controls are inset by less than the text because they carry their own padding: what should
-/// line up is what you can see — the arrow with the first mode icon, the last readout with the
-/// settings glyph — not the invisible boxes they sit in.
-nonisolated enum DeckLayout {
-    /// Where visible text and glyphs begin.
-    static let inset: CGFloat = 24
-    /// Open, the glass above the strip.
-    static let topPadding: CGFloat = 20
-    static let rowGap: CGFloat = 14
-    /// Open, between the controls and the cards.
-    static let bottomPadding: CGFloat = 18
-    static let controlHeight: CGFloat = 44
-    /// At the default text size. It scales with Dynamic Type so it matches the mode icons.
-    static let settingsGlyph: CGFloat = 17
-    /// Mode buttons pad themselves, so their row starts further out. Kept small enough that the
-    /// selected pill's glass never reaches the sheet's rounded corner, where it looks pinched.
-    static let switcherButtonPadding: CGFloat = 10
-    static let switcherInset = inset - switcherButtonPadding
-    /// The settings glyph is centred in its tap target, so the row sits in by less than the text.
-    static func settingsInset(glyph: CGFloat, target: CGFloat) -> CGFloat {
-        max(6, inset - (target - glyph) / 2)
-    }
-    static func settingsTarget(glyph: CGFloat) -> CGFloat {
-        max(controlHeight, glyph + 24)
-    }
+/// Drawn here rather than as an iOS sheet. A sheet holds its glass 8pt off the bottom, draws that
+/// glass itself and scales its content to float in from the sides, so the collapsed deck, which
+/// sits higher, had to be a separate card that took over when a collapse finished: the glass
+/// brightened, the grabber shrank and the bottom edge rose, every time. One panel at every
+/// height has nothing to hand over. Its bottom never moves; dragging and collapsing only move
+/// its top.
+struct DeckPanel: View {
+    let signals: [WorldSignal]
+    /// The screen's own corner radius, which the deck's bottom corners keep clear of.
+    var screenCornerRadius: CGFloat
+    var screenHeight: CGFloat
+    var topSafeArea: CGFloat
 
-    // MARK: The collapsed card
+    @Environment(AppState.self) private var state
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+    /// The stop the panel is drawn at. It follows `state.deckStop`, animated, except at the end
+    /// of a drag, which animates it itself so the spring carries on at the finger's speed.
+    @State private var shownStop: DeckStop = .collapsed
+    /// How far the finger has moved the panel, down positive.
+    @State private var drag: CGFloat = 0
+    @State private var isDragging = false
 
-    /// Glass above the strip, the grabber included.
-    static let cardTopPadding: CGFloat = 28
-    /// Glass below the controls: less than above, since the grabber fills part of the top.
-    static let cardBottomPadding: CGFloat = 18
-    /// How far in from the screen's sides iOS floats the open sheet; the card matches it.
-    static let sideMargin: CGFloat = 8
+    var body: some View {
+        // Respects the keyboard only: with it up, the deck sits on it rather than under it.
+        GeometryReader { proxy in
+            let heights = self.heights(keyboard: max(0, screenHeight - proxy.size.height))
+            let height = currentHeight(heights)
+            let collapsed = heights[.collapsed] ?? 0
+            let reveal = DeckLayout.reveal(deckHeight: height, collapsedHeight: collapsed)
+            let shape = RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
 
-    /// iOS lays a floating sheet out at the screen's full width, then scales the whole of it down,
-    /// text and all, until it floats `sideMargin` in from the sides. The card is drawn the same way,
-    /// or its rows would grow the moment it took over.
-    static func sheetScale(screenWidth: CGFloat) -> CGFloat {
-        screenWidth > 2 * sideMargin ? (screenWidth - 2 * sideMargin) / screenWidth : 1
-    }
-
-    /// For the detent, which isn't told the screen's width: every iPhone's scale is within a
-    /// fraction of a percent of it (0.960 on an iPhone 17, 0.963 on a 16 Plus).
-    static let typicalSheetScale: CGFloat = 0.96
-    /// Up from the screen's bottom edge: higher than iOS would hold a sheet, clear of the home
-    /// indicator.
-    static let cardBottomMargin: CGFloat = 16
-    /// How far the card is dragged up before the deck opens.
-    static let openDragDistance: CGFloat = 24
-
-    // MARK: Collapsing
-
-    /// Where iOS floats a sheet above the screen's bottom edge.
-    static let sheetBottomMargin: CGFloat = 8
-    /// How much further down the resting sheet's glass reaches than the card's. The sheet rests
-    /// with its top and its rows exactly where the card's are, so when the card takes over only its
-    /// bottom edge tucks up: the strip's text never moves. Rising the card this far as a whole,
-    /// as it once did, shifted every readout in the strip on each collapse.
-    static let sheetOverhang = cardBottomMargin - sheetBottomMargin
-    /// Below this detent iOS 26 draws a sheet as a smaller floating card instead, inset 28pt and
-    /// scaled to 86%, which the card can't take over from. Measured: 98.7 was, 100.1 wasn't.
-    static let smallestFullSheet: CGFloat = 102
-
-    /// The card's height as laid out, before the sheet's scale: its rows, or the resting sheet's
-    /// glass less the overhang where that's taller, so the card is exactly what the sheet was.
-    static func restingCardHeight(for size: DynamicTypeSize) -> CGFloat {
-        DeckPeekDetent.height(for: size) + glassBelowContent - sheetOverhang / typicalSheetScale
-    }
-
-    /// How much taller iOS makes the sheet than its detent, before scaling it: the glass reaches
-    /// this far below the content, over the home indicator. Measured on iOS 26 at 32.5 to 33.9, as
-    /// iOS rounds the detent to the pixel grid; the hand-over measures the real thing.
-    static let glassBelowContent: CGFloat = 33.9
-    /// How far past its resting size the sheet is dragged before its cards have fully faded in.
-    static let revealDistance: CGFloat = 72
-
-    /// The card: the strip and the mode switcher with the card's padding, measured rather than
-    /// guessed. Laid out at the screen's width, like the sheet, so on screen it's this times the
-    /// sheet's scale. Once a guess, which left the rows too little room: the stack overflowed, centred
-    /// itself and pushed them hard against the glass.
-    static func cardHeight(for size: DynamicTypeSize) -> CGFloat {
-        let traits = UITraitCollection(preferredContentSizeCategory: UIContentSizeCategory(size))
-        let line = UIFont.preferredFont(forTextStyle: .headline, compatibleWith: traits).lineHeight
-        // At accessibility sizes the venue sits above the readouts instead of beside them.
-        let strip = size.isAccessibilitySize ? line * 2 + 4 : line
-        let controls = max(
-            controlHeight,
-            UIFont.preferredFont(forTextStyle: .subheadline, compatibleWith: traits).lineHeight + 22
-        )
-        return cardTopPadding + strip + rowGap + controls + cardBottomPadding
-    }
-
-    /// How much of the deck's cards show, from 0 at its resting size to 1 a short drag above it.
-    /// The sheet rounds its height to the pixel grid, so the first couple of points don't count.
-    static func reveal(deckHeight: CGFloat, peekHeight: CGFloat) -> Double {
-        min(max((deckHeight - peekHeight - 2) / revealDistance, 0), 1)
-    }
-
-    /// Glass above the strip: the card's at rest, rising to the open deck's as the cards appear.
-    static func headerTopPadding(reveal: Double) -> CGFloat {
-        cardTopPadding + (topPadding - cardTopPadding) * reveal
-    }
-
-    /// Below the controls: at rest, whatever of the resting detent the rows leave; open, the gap
-    /// above the cards.
-    static func headerBottomPadding(reveal: Double, size: DynamicTypeSize) -> CGFloat {
-        let resting = DeckPeekDetent.height(for: size) - (cardHeight(for: size) - cardBottomPadding)
-        return resting + (bottomPadding - resting) * reveal
-    }
-
-    // MARK: Corners
-
-    /// The least room between the deck's bottom corners and the screen's own rounded corners.
-    static let cornerGap: CGFloat = 4
-    /// On a screen with square corners, where nothing constrains the deck's.
-    static let squareScreenCornerRadius: CGFloat = 28
-    /// Where a circular corner crosses its diagonal, as a fraction of its radius. Apple's
-    /// continuous corners measure 0.2916, near enough the same.
-    private static let cornerReach = 1 - 1 / 2.squareRoot()
-
-    /// The deck's corner radius: as low as it can go while the open sheet's bottom corners keep
-    /// `cornerGap` from the screen's. The collapsed card shares it, so the deck keeps its shape
-    /// as it opens.
-    ///
-    /// iOS floats the sheet `margin` in from the screen's edges, draws its glass itself and gives
-    /// it one radius for all four corners. As round as the screen's less the margin, the corners
-    /// run parallel to the screen's but make a pill of a short card. Each point of radius less
-    /// brings a bottom corner closer to the screen's curve, until it touches it: at 24 on an
-    /// iPhone 16 Plus, it did.
-    static func cornerRadius(screen: CGFloat, margin: CGFloat) -> CGFloat {
-        guard screen > 0 else { return squareScreenCornerRadius }
-        let radius = screen - (margin - cornerGap / 2.squareRoot()) / cornerReach
-        return min(max(radius, 0), screen - margin)
-    }
-
-    /// The least room between a corner of this radius, set `side` in from the screen's side and
-    /// `bottom` up from its bottom, and the screen's own corner.
-    static func cornerClearance(radius: CGFloat, screen: CGFloat, side: CGFloat, bottom: CGFloat) -> CGFloat {
-        // Measured from the screen's corner, the offsets between the two arcs' centres.
-        let across = screen - side - radius
-        let along = screen - bottom - radius
-        guard across > 0, along > 0 else { return min(side, bottom) }
-        return screen - radius - (across * across + along * along).squareRoot()
-    }
-}
-
-/// The sheet's resting stop: collapsing, the deck shrinks to this under your finger, with its top
-/// where the card's will be, then hands over to the card.
-nonisolated struct DeckPeekDetent: CustomPresentationDetent {
-    static func height(in context: Context) -> CGFloat? {
-        height(for: context.dynamicTypeSize)
-    }
-
-    /// Less the glass iOS adds below the content, so the glass is the card's height and the few
-    /// points iOS holds a sheet lower than the card; the overhang is on screen, so unscaled here.
-    /// Never so short that iOS switches to its compact sheet.
-    static func height(for size: DynamicTypeSize) -> CGFloat {
-        max(
-            DeckLayout.cardHeight(for: size) + DeckLayout.sheetOverhang / DeckLayout.typicalSheetScale - DeckLayout.glassBelowContent,
-            DeckLayout.smallestFullSheet
-        )
-    }
-}
-
-extension UIContentSizeCategory {
-    nonisolated init(_ size: DynamicTypeSize) {
-        self = switch size {
-        case .xSmall: .extraSmall
-        case .small: .small
-        case .medium: .medium
-        case .large: .large
-        case .xLarge: .extraLarge
-        case .xxLarge: .extraExtraLarge
-        case .xxxLarge: .extraExtraExtraLarge
-        case .accessibility1: .accessibilityMedium
-        case .accessibility2: .accessibilityLarge
-        case .accessibility3: .accessibilityExtraLarge
-        case .accessibility4: .accessibilityExtraExtraLarge
-        case .accessibility5: .accessibilityExtraExtraExtraLarge
-        @unknown default: .large
+            DeckView(
+                signals: signals,
+                reveal: reveal,
+                drag: dragGesture(heights: heights)
+            )
+            .frame(height: height, alignment: .top)
+            .clipShape(shape)
+            .glassEffect(.regular, in: shape)
+            .contentShape(shape)
+            .overlay(alignment: .top) {
+                // Says the deck can be pulled; the same at every height.
+                Capsule()
+                    .fill(Color.mist.opacity(0.5))
+                    .frame(width: 36, height: 5)
+                    .padding(.top, 6)
+                    .allowsHitTesting(false)
+                    .accessibilityHidden(true)
+            }
+            .padding(.horizontal, DeckLayout.sideMargin)
+            .padding(.bottom, DeckLayout.bottomMargin)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
+            .accessibilityAction(named: shownStop == .collapsed ? "Open" : "Collapse") {
+                state.deckStop = shownStop == .collapsed ? .half : .collapsed
+            }
+        }
+        .ignoresSafeArea(.container)
+        .onAppear { shownStop = state.deckStop }
+        .onChange(of: state.deckStop) { _, stop in
+            guard stop != shownStop else { return }
+            withAnimation(PathMotion.resolve(.spring(duration: 0.45, bounce: 0), reduceMotion: reduceMotion)) {
+                shownStop = stop
+            }
+        }
+        .onChange(of: state.selectedTab) {
+            state.selectedSignalID = nil
         }
     }
+
+    private var cornerRadius: CGFloat {
+        DeckLayout.cornerRadius(screen: screenCornerRadius, margin: DeckLayout.sideMargin)
+    }
+
+    private func heights(keyboard: CGFloat) -> [DeckStop: CGFloat] {
+        let collapsed = DeckLayout.cardHeight(for: dynamicTypeSize)
+        return Dictionary(uniqueKeysWithValues: DeckStop.allCases.map { stop in
+            (stop, DeckLayout.height(of: stop, collapsed: collapsed, screen: screenHeight, topSafeArea: topSafeArea, keyboard: keyboard))
+        })
+    }
+
+    private func currentHeight(_ heights: [DeckStop: CGFloat]) -> CGFloat {
+        let base = heights[shownStop] ?? 0
+        guard isDragging else { return base }
+        return DeckLayout.rubberBand(base - drag, lowest: heights[.collapsed] ?? 0, highest: heights[.full] ?? 0)
+    }
+
+    /// Follows the finger, measured on the screen rather than on the panel: the panel moves with
+    /// the finger, and a translation measured against something moving feeds back on itself.
+    private func dragGesture(heights: [DeckStop: CGFloat]) -> AnyGesture<Void> {
+        AnyGesture(DragGesture(minimumDistance: 6, coordinateSpace: .global)
+            .onChanged { value in
+                isDragging = true
+                drag = value.translation.height
+            }
+            .onEnded { value in
+                let base = heights[shownStop] ?? 0
+                let released = DeckLayout.rubberBand(base - value.translation.height, lowest: heights[.collapsed] ?? 0, highest: heights[.full] ?? 0)
+                // The deck grows as the finger moves up.
+                let velocity = -value.velocity.height
+                let target = DeckLayout.settle(height: released, velocity: velocity, stops: heights)
+                let distance = (heights[target] ?? released) - released
+                // The spring starts at the finger's speed, as a share of the distance left to go.
+                let initial = abs(distance) > 1 ? max(-8, min(velocity / distance, 8)) : 0
+                withAnimation(PathMotion.resolve(.interpolatingSpring(duration: 0.45, bounce: 0, initialVelocity: initial), reduceMotion: reduceMotion)) {
+                    shownStop = target
+                    isDragging = false
+                    drag = 0
+                }
+                state.deckStop = target
+            }
+            .map { _ in () })
+    }
 }
 
-/// The deck as a sheet over the map. Every other presentation hangs off it while it is up,
-/// because it is then the top-most presenter; once it has handed over to `DeckCard`, the map
-/// presents instead.
+/// What the deck holds: the strip and the controls, then the mode's cards, which fade in as the
+/// deck opens.
 struct DeckView: View {
-
     let signals: [WorldSignal]
-    /// The screen's own corner radius, which the sheet's bottom corners must keep clear of.
-    var screenCornerRadius: CGFloat = 0
-    /// Collapsing, the sheet has come to rest at the card's place and can hand over to it.
-    var onRestCollapsed: (SheetRest) -> Void = { _ in }
+    /// How open the deck is, from 0 collapsed to 1 a short pull above.
+    var reveal: Double
+    var drag: AnyGesture<Void>
 
     @Environment(AppState.self) private var state
     @Environment(ScanFlowModel.self) private var scanFlow
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
-    @State private var photoItem: PhotosPickerItem?
-    @State private var deckHeight: CGFloat = 0
 
     var body: some View {
-        @Bindable var state = state
-        @Bindable var scanFlow = scanFlow
-
-        // At rest the deck is only its two rows, like the card it hands over to; the cards below
-        // wait until it's pulled up, rather than peeking out from under the controls.
-        let reveal = DeckLayout.reveal(deckHeight: deckHeight, peekHeight: DeckPeekDetent.height(for: dynamicTypeSize))
-
         VStack(spacing: 0) {
-            InstrumentStrip()
-                .padding(.horizontal, DeckLayout.inset)
-                .padding(.top, DeckLayout.headerTopPadding(reveal: reveal))
+            VStack(spacing: 0) {
+                InstrumentStrip()
+                    .padding(.horizontal, DeckLayout.inset)
+                    .padding(.top, DeckLayout.headerTopPadding(reveal: reveal))
 
-            DeckControlsRow()
-                .padding(.top, DeckLayout.rowGap)
-                .padding(.bottom, DeckLayout.headerBottomPadding(reveal: reveal, size: dynamicTypeSize))
+                DeckControlsRow()
+                    .padding(.top, DeckLayout.rowGap)
+                    .padding(.bottom, DeckLayout.headerBottomPadding(reveal: reveal))
+            }
+            // The header always moves the deck, at any height.
+            .contentShape(.rect)
+            .gesture(drag)
 
             if let toast = state.toast, reveal > 0.5 {
                 ToastBanner(toast: toast)
@@ -241,50 +156,12 @@ struct DeckView: View {
                 .opacity(reveal)
                 .allowsHitTesting(reveal > 0.5)
                 .accessibilityHidden(reveal == 0)
+                // Below full, the cards don't scroll and a drag on them moves the deck; at full
+                // they scroll, and moving the deck is the header's job.
+                .gesture(drag, including: state.deckStop == .full ? .subviews : .all)
         }
-        // Anchored to the top so that if the deck is ever shorter than its header, the overflow
-        // falls off the bottom instead of being centred and clipped at both glass edges.
-        .frame(maxHeight: .infinity, alignment: .top)
-        .background {
-            SheetRestProbe(isArmed: state.deckDetent == .deckPeek, onRest: onRestCollapsed)
-        }
-        .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { deckHeight = $0 }
-        // A constant, not the sheet's measured position: read while the sheet moves, it changed
-        // the radius mid-drag and the sheet shook.
-        .presentationCornerRadius(DeckLayout.cornerRadius(screen: screenCornerRadius, margin: DeckLayout.sideMargin))
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .animation(PathMotion.resolve(PathMotion.control, reduceMotion: reduceMotion), value: state.toast)
-        .onChange(of: state.selectedTab) {
-            state.selectedSignalID = nil
-        }
-        .onChange(of: photoItem) { _, item in
-            guard let item else { return }
-            Task {
-                if let data = try? await item.loadTransferable(type: Data.self), let image = UIImage(data: data) {
-                    scanFlow.process(image, state: state)
-                }
-                photoItem = nil
-            }
-        }
-        .photosPicker(isPresented: $state.isPhotoPickerPresented, selection: $photoItem, matching: .images)
-        .fullScreenCover(isPresented: $state.isScannerPresented) {
-            ScannerSheet { image in
-                scanFlow.process(image, state: state)
-            }
-        }
-        .sheet(item: $scanFlow.eventToAdd) { event in
-            EventEditor(draft: event) { saved in
-                scanFlow.eventEditorFinished(saved: saved, state: state)
-            }
-            .ignoresSafeArea()
-        }
-        .sheet(isPresented: $state.isAddingNote) { AddNoteSheet() }
-        .sheet(item: $state.eventSheet) { request in
-            EventSheet(request: request)
-        }
-        .sheet(isPresented: $state.isTimetablePresented) { TimetableSheet() }
-        .sheet(isPresented: $state.isJourneySheetPresented) { JourneySheet() }
-        .sheet(isPresented: $state.isTripsPresented) { TripSheet() }
-        .sheet(isPresented: $state.isSettingsPresented) { SettingsView() }
     }
 
     @ViewBuilder
@@ -304,7 +181,47 @@ struct DeckView: View {
     }
 }
 
-/// The mode switcher and the settings glyph: the deck's second row, open or collapsed.
+/// For a deck mode's main scroll view. Below full it stays still, so a drag moves the deck
+/// instead, the way a sheet's content does; at full, pulled down from its top, it lowers the deck
+/// to half. Only a pull that starts at the top counts: scrolling back up and overshooting it
+/// doesn't. Radar keeps that pull for scanning again.
+struct DeckScroll: ViewModifier {
+    var lowersOnPull = true
+
+    @Environment(AppState.self) private var state
+    /// How far above its top the content is, pulled down.
+    @State private var pull: CGFloat = 0
+    @State private var isAtTop = true
+    @State private var startedAtTop = false
+
+    func body(content: Content) -> some View {
+        content
+            .scrollDisabled(state.deckStop != .full)
+            .onScrollGeometryChange(for: CGFloat.self) { geometry in
+                geometry.contentOffset.y + geometry.contentInsets.top
+            } action: { _, offset in
+                pull = max(0, -offset)
+                isAtTop = offset <= 1
+            }
+            .onScrollPhaseChange { old, new in
+                if new == .interacting {
+                    startedAtTop = isAtTop
+                } else if old == .interacting {
+                    if lowersOnPull, startedAtTop, pull > 64 {
+                        state.deckStop = .half
+                    }
+                    startedAtTop = false
+                }
+            }
+    }
+}
+
+extension View {
+    func deckScroll(lowersOnPull: Bool = true) -> some View {
+        modifier(DeckScroll(lowersOnPull: lowersOnPull))
+    }
+}
+
 struct DeckControlsRow: View {
     @Environment(AppState.self) private var state
     @ScaledMetric(relativeTo: .subheadline) private var settingsGlyph = DeckLayout.settingsGlyph

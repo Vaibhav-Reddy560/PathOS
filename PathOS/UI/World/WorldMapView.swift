@@ -96,8 +96,8 @@ struct WorldMapView: View {
         }
         .onChange(of: state.selectedSignalID) { _, id in
             guard let id, let signal = signals.first(where: { $0.id == id }) else { return }
-            if state.deckDetent == .deckPeek {
-                state.deckDetent = .medium
+            if state.deckStop == .collapsed {
+                state.deckStop = .half
             }
             withAnimation(PathMotion.resolve(PathMotion.signal, reduceMotion: reduceMotion)) {
                 camera = .camera(MapCamera(centerCoordinate: signal.coordinate, distance: 1_600))
