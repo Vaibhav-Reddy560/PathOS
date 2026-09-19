@@ -51,7 +51,7 @@ extension ShapeStyle where Self == Color {
 
 /// What a colour *means*. Components take a role, never a raw colour, so green always means you
 /// and cyan always means the world.
-nonisolated enum SignalRole: String, CaseIterable, Sendable {
+nonisolated enum SignalRole: String, CaseIterable, Codable, Sendable {
     /// Things that originate from the user: location, route, arrow, saved memory, the active action.
     case you
     /// Things PathOS discovers: places, events, transit, weather, AI signals.

@@ -49,6 +49,7 @@ nonisolated struct CommuteInfo: Sendable {
     var transitMinutes: Int?
     var stationName: String?
     var stationWalkMinutes: Int?
+    var stationDistanceMeters: Double?
     var updatedAt: Date
 
     var destination: CLLocationCoordinate2D? {
@@ -125,6 +126,8 @@ final class AppState {
     var isScannerPresented = false
     var isPhotoPickerPresented = false
     private(set) var toast: Toast?
+    /// False while the launch view covers the map on a cold start.
+    private(set) var isLaunchComplete = false
     var mapLayers = AppState.savedMapLayers() {
         didSet { UserDefaults.standard.set(mapLayers.rawValue, forKey: "pathos.mapLayers") }
     }
@@ -156,7 +159,12 @@ final class AppState {
     var focusedNoteID: UUID?
     /// Target of the Lock Screen pointer; outlives the in-app compass screen.
     private(set) var pinnedCompassTarget: CompassTarget?
+    /// Travel time to where you usually go next, and the nearest metro. See `refreshCommute`.
     private(set) var commute: CommuteInfo?
+    /// The context stays on the Lock Screen, kept up to date, until you unpin it; across launches too.
+    private(set) var isContextPinned = UserDefaults.standard.bool(forKey: "pathos.contextPinned") {
+        didSet { UserDefaults.standard.set(isContextPinned, forKey: "pathos.contextPinned") }
+    }
     /// The trip leg being followed on the Lock Screen, and how it's going.
     private(set) var trackedLegID: UUID?
     private(set) var legProgress: LegProgress?
@@ -190,6 +198,9 @@ final class AppState {
     /// Legs you ended by hand, so opening the app doesn't start following them again.
     @ObservationIgnored private var declinedLegIDs: Set<UUID> = []
     @ObservationIgnored private var lastGeofenceSyncLocation: CLLocation?
+    @ObservationIgnored private var lastCommuteCheck: (location: CLLocation, at: Date)?
+    /// A note just brought back by arriving at its spot, which the pinned context shows for a while.
+    @ObservationIgnored private var surfacedMemory: (memory: LockScreenContext.Memory, at: Date)?
     @ObservationIgnored private var lastDistanceLocation: CLLocation?
     @ObservationIgnored private var isForeground = false
     /// Alerts already announced, kept across background relaunches so nothing repeats.
@@ -248,7 +259,6 @@ final class AppState {
             CalendarEventSource(store: eventStore, geocoder: geocoder),
             MailEventSource(context: modelContext, geocoder: geocoder),
             ScannedEventSource(context: modelContext),
-            VenueEventSource(places: places),
         ])
         snap = SnapToActionService(ai: ai, context: modelContext)
         mail = MailService(context: modelContext, ai: ai, eventStore: eventStore, places: places, notifications: notifications)
@@ -257,6 +267,10 @@ final class AppState {
         haptics.isAdaptive = adaptiveSound
         notifications.onOpenURL = { [weak self] url in
             self?.handle(url: url)
+        }
+        // Before anything waits: a move that relaunched PathOS is reported as soon as it's running.
+        location.onSignificantChange = { [weak self] here in
+            Task { await self?.movedWhilePinned(to: here) }
         }
         Task { await bootstrap() }
     }
@@ -284,9 +298,37 @@ final class AppState {
         await geofences.start { [weak self] event in
             self?.handleGeofence(event)
         }
+        if isContextPinned {
+            location.setSignificantChangesActive(true)
+        }
         await notifications.refreshStatus()
         await vault.syncGeofences(userLocation: location.location)
         scheduleBackgroundRefresh()
+    }
+
+    /// Lifts the launch view once the map has something to centre on: your location, or the
+    /// knowledge that there won't be one. Always on screen long enough for the route to draw, and
+    /// never more than a few seconds, so a slow GPS fix can't hold the app back.
+    func finishLaunch(minimum: TimeInterval = 1.7, maximum: TimeInterval = 3.5) async {
+        guard !isLaunchComplete else { return }
+        let started = Date()
+        while Date().timeIntervalSince(started) < maximum {
+            let willNotLocate = [.denied, .restricted, .notDetermined].contains(location.authorization)
+            if location.location != nil || willNotLocate { break }
+            try? await Task.sleep(for: .milliseconds(100))
+        }
+        let remaining = minimum - Date().timeIntervalSince(started)
+        if remaining > 0 {
+            try? await Task.sleep(for: .seconds(remaining))
+        }
+        #if DEBUG
+        // `-PathOSHoldLaunch YES` keeps the launch view up, for screenshots of it.
+        if UserDefaults.standard.bool(forKey: "PathOSHoldLaunch") { return }
+        #endif
+        isLaunchComplete = true
+        if adaptiveSound {
+            await sound.start()
+        }
     }
 
     func scenePhaseChanged(_ phase: ScenePhase) {
@@ -298,7 +340,8 @@ final class AppState {
             location.startUpdates()
             barometer.start()
             ai.refreshStatus()
-            if adaptiveSound {
+            // Not during the launch view: on a first run, the microphone prompt would land on top of it.
+            if adaptiveSound && isLaunchComplete {
                 Task { await sound.start() }
             }
             startForegroundLoop()
@@ -315,7 +358,7 @@ final class AppState {
             loopTask = nil
             sound.stop()
             barometer.stop()
-            if !needsBackgroundLocation && liveActivities.currentMode != .commute {
+            if !needsBackgroundLocation {
                 location.stopUpdates()
             }
             scheduleBackgroundRefresh()
@@ -327,6 +370,7 @@ final class AppState {
     private func startForegroundLoop() {
         loopTask?.cancel()
         loopTask = Task {
+            await reconcilePinnedContext()
             while !Task.isCancelled {
                 haptics.update(scene: sound.scene)
                 if let here = location.location {
@@ -338,6 +382,7 @@ final class AppState {
                         await vault.syncGeofences(userLocation: here)
                     }
                 }
+                await refreshPinnedContext()
                 try? await Task.sleep(for: .seconds(20))
             }
         }
@@ -353,6 +398,7 @@ final class AppState {
         if let here {
             await context.refresh(location: here, force: true)
         }
+        await refreshPinnedContext()
         await routine.rescheduleReminders()
         eventStore.refreshReminders()
         timetable.refreshReminders()
@@ -414,9 +460,13 @@ final class AppState {
                     await didLeave(place)
                 case .entered:
                     if place.kind == .home || place.kind == .work {
-                        await liveActivities.end(ifMode: .commute)
-                        await liveActivities.end(ifMode: .exitCheck)
+                        await releaseLockScreen(from: .exitCheck)
                     }
+                }
+                // Arriving or leaving changes where you are, which the pinned context leads with.
+                if isContextPinned, let here = await location.currentLocation() {
+                    await context.refresh(location: here, force: true)
+                    await refreshPinnedContext()
                 }
             } else if event.transition == .entered, let note = vault.note(forGeofenceID: event.id) {
                 await surface(note)
@@ -435,11 +485,14 @@ final class AppState {
 
         haptics.alert()
         let link = URL(string: "pathos://dashboard")
-        await liveActivities.show(
-            .init(mode: .exitCheck, title: advice.headline, subtitle: advice.detail, symbol: advice.symbol, deepLink: link),
-            staleAfter: 2 * 3600,
-            relevance: 90
-        )
+        // Pinned, the context leads with the umbrella itself.
+        if !isContextPinned {
+            await liveActivities.show(
+                .init(mode: .exitCheck, title: advice.headline, subtitle: advice.detail, symbol: advice.symbol, deepLink: link),
+                staleAfter: 2 * 3600,
+                relevance: 90
+            )
+        }
         announcedAlertIDs.insert("exit.advice")
         notifications.post(
             id: "pathos.exit.\(place.id.uuidString)",
@@ -458,11 +511,19 @@ final class AppState {
         haptics.alert()
 
         let link = URL(string: "pathos://note/\(note.id.uuidString)")
-        let shown = await liveActivities.show(
-            .init(mode: .spatialNote, title: note.title, subtitle: note.body, symbol: "mappin.and.ellipse", deepLink: link),
-            staleAfter: 3600,
-            relevance: 80
-        )
+        let shown: Bool
+        if isContextPinned {
+            surfacedMemory = (LockScreenContext.Memory(title: note.title, body: note.body), Date())
+            await refreshPinnedContext()
+            // Directions keep the Lock Screen during a journey, so the note comes as a notification.
+            shown = liveActivities.isRunning && liveActivities.currentMode == .venue
+        } else {
+            shown = await liveActivities.show(
+                .init(mode: .spatialNote, title: note.title, subtitle: note.body, symbol: "mappin.and.ellipse", deepLink: link),
+                staleAfter: 3600,
+                relevance: 80
+            )
+        }
         if !shown {
             notifications.post(
                 id: "pathos.note.\(note.id.uuidString)",
@@ -491,6 +552,8 @@ final class AppState {
         case "scan": beginScan()
         case "vault": showDeck(.vault)
         case "settings": isSettingsPresented = true
+        case "timetable": isTimetablePresented = true
+        case "event": eventSheet = EventSheetRequest(editing: nil, text: value("text"))
         case "journey":
             // pathos://journey?from=Indiranagar&to=Majestic, or &by=bus with stop names.
             let from = value("from").flatMap { MetroNetwork.station(matching: $0) ?? $0 } ?? ""
@@ -520,8 +583,14 @@ final class AppState {
             }
         case "commute":
             showDeck(.now)
+            // Reminders scheduled before the context could be pinned still say "start".
             if path.first == "start" {
-                Task { await startCommute() }
+                Task { await pinContext() }
+            }
+        case "context":
+            showDeck(.now)
+            if path.first == "pin" {
+                Task { await pinContext() }
             }
         case "cab":
             let provider = value("provider").flatMap(CabProvider.init(rawValue:)) ?? preferredCab
@@ -574,7 +643,6 @@ final class AppState {
             )
         }
 
-        let activeCommute = liveActivities.currentMode == .commute ? commute : nil
         let nextEvent = events.events
             .compactMap { event -> AlertSnapshot.Event? in
                 guard let start = event.start, start >= now else { return nil }
@@ -613,7 +681,6 @@ final class AppState {
                     )
                 }
             },
-            commute: activeCommute.map { AlertSnapshot.Commute(destinationName: $0.destinationName, minutes: $0.transitMinutes ?? $0.walkMinutes) },
             nextEvent: nextEvent,
             weather: weather.snapshot.map {
                 AlertSnapshot.Weather(temperatureC: $0.temperatureC, summary: $0.summary, symbol: $0.symbol, rainChanceNext2h: $0.rainChanceNext2h)
@@ -651,12 +718,6 @@ final class AppState {
             if let url = URL(string: UIApplication.openSettingsURLString) {
                 UIApplication.shared.open(url)
             }
-        case .startCommute:
-            Task { await startCommute() }
-        case .showNow:
-            showDeck(.now)
-        case .showRadar:
-            showDeck(.radar)
         case .pointTo(let target):
             startCompass(to: target)
         case .endGuidance:
@@ -681,7 +742,7 @@ final class AppState {
         transit.end()
         refreshBackgroundSession()
         Task {
-            await liveActivities.end(ifMode: .journey)
+            await releaseLockScreen(from: .journey)
             // A trip leg that was waiting behind the journey gets the Lock Screen back.
             await updateLegActivity()
         }
@@ -702,7 +763,7 @@ final class AppState {
     /// that ends in your pocket doesn't leave GPS running until you next open the app.
     private func refreshBackgroundSession() {
         location.setBackgroundSessionActive(needsBackgroundLocation)
-        if !isForeground && !needsBackgroundLocation && liveActivities.currentMode != .commute {
+        if !isForeground && !needsBackgroundLocation {
             location.stopUpdates()
         }
     }
@@ -760,7 +821,7 @@ final class AppState {
         trackedLegID = nil
         legProgress = nil
         refreshBackgroundSession()
-        await liveActivities.end(ifMode: .trip)
+        await releaseLockScreen(from: .trip)
     }
 
     /// Opening PathOS during a leg starts following it, unless you already ended it.
@@ -905,7 +966,7 @@ final class AppState {
         compassTask = nil
         location.endHeadingUpdates()
         refreshBackgroundSession()
-        await liveActivities.end(ifMode: .compass)
+        await releaseLockScreen(from: .compass)
     }
 
     /// Mirrors the pointer onto the Lock Screen, Dynamic Island and StandBy.
@@ -951,55 +1012,165 @@ final class AppState {
 
     // MARK: Commute
 
-    /// Walking/transit ETA to Work (or Home when at work), nearest metro, and cab shortcuts.
-    @discardableResult
-    func startCommute() async -> Bool {
-        guard let here = await location.currentLocation() else { return false }
-        let destination = context.venue.kind == .work
-            ? vault.place(ofKind: .home)
-            : (vault.place(ofKind: .work) ?? vault.place(ofKind: .home))
+    /// Travel time to Work, or Home from work, and the nearest metro: for Now, and for the pinned
+    /// context around when you usually leave. Apple Maps is only asked again once you've moved or
+    /// a while has passed.
+    func refreshCommute(force: Bool = false) async {
+        guard let here = location.location else { return }
+        if !force, let last = lastCommuteCheck,
+           here.distance(from: last.location) < 300, Date().timeIntervalSince(last.at) < 10 * 60 {
+            return
+        }
+        lastCommuteCheck = (here, Date())
 
-        let station = await places.nearestTransitStation(to: here)
+        let destination: SavedPlace? = switch context.venue.kind {
+        case .home: vault.place(ofKind: .work)
+        case .work: vault.place(ofKind: .home)
+        default: vault.place(ofKind: .work) ?? vault.place(ofKind: .home)
+        }
         var walk: Int?
         var transit: Int?
         if let destination {
             walk = await places.eta(to: destination.coordinate, from: here, transport: .walking)
             transit = await places.eta(to: destination.coordinate, from: here, transport: .transit)
         }
+        let station = MetroNetwork.nearbyStations(to: here.coordinate, atLeast: 1).first
 
-        let info = CommuteInfo(
+        commute = CommuteInfo(
             destinationName: destination?.name,
             destinationLatitude: destination?.latitude,
             destinationLongitude: destination?.longitude,
             walkMinutes: walk,
             transitMinutes: transit,
-            stationName: station?.name,
-            stationWalkMinutes: station?.walkMinutes,
+            stationName: station?.station.name,
+            stationWalkMinutes: station.map { GeoMath.walkingMinutes(forDistance: $0.distance) },
+            stationDistanceMeters: station?.distance,
             updatedAt: Date()
         )
-        commute = info
+    }
 
-        let parts = [
-            transit.map { "\($0) min by transit" },
-            walk.map { "\($0) min walk" },
-            station.map { "Metro: \($0.name) (\($0.walkMinutes) min)" },
-        ].compactMap { $0 }
-        let subtitle = parts.isEmpty
-            ? (destination == nil ? "Set Work in the Vault for ETAs" : "Route unavailable · cabs one tap away")
-            : parts.joined(separator: " · ")
+    // MARK: Pinned context
 
-        return await liveActivities.show(
-            .init(
-                mode: .commute,
-                title: destination.map { "To \($0.name)" } ?? "Commute",
-                subtitle: subtitle,
-                symbol: transit != nil ? "tram.fill" : "figure.walk",
-                etaMinutes: transit ?? walk,
-                deepLink: URL(string: "pathos://dashboard")
-            ),
-            staleAfter: 3_600,
-            relevance: 85
+    /// Directions have the Lock Screen while they run; the pinned context takes it back after.
+    private static let directionModes: Set<PathOSActivityAttributes.Mode> = [.journey, .trip, .compass]
+
+    /// Keeps what's around you on the Lock Screen: whether to take an umbrella, the class or event
+    /// starting or under way, when to leave. Returns false when Live Activities are off.
+    @discardableResult
+    func pinContext() async -> Bool {
+        isContextPinned = true
+        location.setSignificantChangesActive(true)
+        let shown = await refreshPinnedContext()
+        if !shown {
+            isContextPinned = false
+            location.setSignificantChangesActive(false)
+        }
+        return shown
+    }
+
+    func unpinContext() async {
+        isContextPinned = false
+        surfacedMemory = nil
+        location.setSignificantChangesActive(false)
+        // Directions stay until they're done; only the context comes off.
+        if liveActivities.currentMode == .venue {
+            await liveActivities.end()
+        }
+    }
+
+    /// Redraws the pinned context, unless directions have the Lock Screen.
+    @discardableResult
+    func refreshPinnedContext(now: Date = Date()) async -> Bool {
+        guard isContextPinned else { return false }
+        if liveActivities.isRunning, let mode = liveActivities.currentMode, Self.directionModes.contains(mode) {
+            return true
+        }
+        if context.venue.kind == .home, routine.todaysDeparture(now: now) != nil {
+            await refreshCommute()
+        }
+        let content = LockScreenContext.content(for: lockScreenInputs(now: now))
+        return await liveActivities.showIfChanged(content.state, staleDate: content.staleDate, relevance: 60)
+    }
+
+    /// Something that had the Lock Screen is done with it: the pinned context takes it back, or
+    /// it comes off.
+    private func releaseLockScreen(from mode: PathOSActivityAttributes.Mode) async {
+        guard liveActivities.currentMode == mode else { return }
+        if isContextPinned {
+            // Past the directions guard, which would otherwise see them still up.
+            let content = LockScreenContext.content(for: lockScreenInputs(now: Date()))
+            await liveActivities.show(content.state, staleDate: content.staleDate, relevance: 60)
+        } else {
+            await liveActivities.end()
+        }
+    }
+
+    /// On opening PathOS: unpins if you swiped the context off the Lock Screen, and otherwise
+    /// puts it back if iOS ended it after its eight hours, or starts it afresh before it would.
+    private func reconcilePinnedContext() async {
+        guard isContextPinned else { return }
+        if liveActivities.wasRemovedByYou {
+            await unpinContext()
+            return
+        }
+        await liveActivities.renewIfOld()
+        await refreshPinnedContext()
+    }
+
+    /// A few hundred metres moved with PathOS in the background: the place, the weather and the
+    /// context catch up. Open, the foreground loop already does.
+    private func movedWhilePinned(to here: CLLocation) async {
+        guard isContextPinned, !isForeground else { return }
+        await context.refresh(location: here)
+        await refreshPinnedContext()
+    }
+
+    private func lockScreenInputs(now: Date) -> LockScreenContext.Inputs {
+        if let surfaced = surfacedMemory, now.timeIntervalSince(surfaced.at) > 15 * 60 {
+            surfacedMemory = nil
+        }
+        var commuteLine: LockScreenContext.Commute?
+        if context.venue.kind == .home, let usual = routine.todaysDeparture(now: now),
+           let commute, let name = commute.destinationName,
+           let minutes = commute.transitMinutes ?? commute.walkMinutes {
+            commuteLine = .init(destination: name, minutes: minutes, byTransit: commute.transitMinutes != nil, usualDeparture: usual)
+        }
+        return LockScreenContext.Inputs(
+            venueName: context.venue.name ?? context.venue.kind.label,
+            venueSymbol: context.venue.kind.symbol,
+            weather: weather.snapshot.map {
+                AlertSnapshot.Weather(temperatureC: $0.temperatureC, summary: $0.summary, symbol: $0.symbol, rainChanceNext2h: $0.rainChanceNext2h)
+            },
+            exitAdvice: context.exitAdvice,
+            agenda: agenda(on: now),
+            commute: commuteLine,
+            memory: surfacedMemory?.memory,
+            now: now
         )
+    }
+
+    /// Today's classes, events and calendar entries, as the Day shows them.
+    private func agenda(on day: Date) -> [LockScreenContext.Entry] {
+        guard let interval = Calendar.current.dateInterval(of: .day, for: day) else { return [] }
+        let classes = timetable.sessions(on: day).map {
+            LockScreenContext.Entry(id: "class:\($0.id)", title: $0.subject, place: $0.room,
+                                    start: $0.start, end: $0.end, symbol: "graduationcap.fill", role: .you)
+        }
+        let own = eventStore.events(on: day).filter { !$0.isAllDay }.map {
+            LockScreenContext.Entry(id: "event:\($0.id.uuidString)", title: $0.title, place: $0.placeName,
+                                    start: $0.start, end: $0.end, symbol: "calendar", role: .world)
+        }
+        let mirrored = Set(eventStore.all().compactMap(\.calendarEventID))
+        let calendar = CalendarEventSource.items(from: interval.start, to: interval.end, excluding: mirrored)
+            .filter { !$0.isAllDay }
+            .map { item in
+                let place = item.location?.split(separator: "\n").first.map(String.init)
+                return LockScreenContext.Entry(id: "calendar:\(item.id)", title: item.title, place: place,
+                                               start: item.start, end: item.end,
+                                               symbol: place.map(MailTriage.isOnline) == true ? "video.fill" : "calendar",
+                                               role: .world)
+            }
+        return classes + own + calendar
     }
 
     // MARK: Assistant

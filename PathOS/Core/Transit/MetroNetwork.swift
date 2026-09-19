@@ -132,6 +132,26 @@ nonisolated enum MetroNetwork {
             .min { $0.1 < $1.1 }?.0
     }
 
+    /// Stations worth listing from here, nearest first: every one within a walk, and never fewer
+    /// than the nearest `atLeast`, however far, so there's always a way onto the metro. Past
+    /// `limit` you're in another city, and none are.
+    static func nearbyStations(
+        to coordinate: CLLocationCoordinate2D,
+        walkable: Double = 900,
+        atLeast: Int = 3,
+        limit: Double = 40_000
+    ) -> [(station: MetroStation, distance: Double)] {
+        var seen = Set<String>()
+        // A station on two lines is listed under both; the nearest platform stands for it.
+        let stations = lines.flatMap(\.stops)
+            .map { (station: $0, distance: GeoMath.distance(from: coordinate, to: $0.coordinate)) }
+            .sorted { $0.distance < $1.distance }
+            .filter { $0.distance <= limit && seen.insert($0.station.name).inserted }
+        return stations.enumerated()
+            .filter { $0.offset < atLeast || $0.element.distance <= walkable }
+            .map(\.element)
+    }
+
     /// Names people actually say, for matching a trip leg typed as "MG Road to Majestic".
     static let aliases: [String: String] = [
         "mg road": "Mahatma Gandhi Road",

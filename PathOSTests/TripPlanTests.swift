@@ -127,7 +127,7 @@ struct TripPlanTests {
             location: .always, exitAdvice: nil, pressureTrend: .steady, guidance: nil, journey: nil,
             trip: AlertSnapshot.Trip(title: "Train to Mysuru", destination: "Mysuru", symbol: "train.side.front.car",
                                      summary: "Running late · about 25 min to go", minutesRemaining: 25, isLate: true),
-            commute: nil, nextEvent: nil, weather: nil, venueName: "Here", venueSymbol: "mappin", now: morning
+            nextEvent: nil, weather: nil, venueName: "Here", venueSymbol: "mappin", now: morning
         )
         let alert = AmbientAlerts.prioritized(snapshot).first { $0.id == "trip" }
         #expect(alert?.role == .attention)

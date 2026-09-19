@@ -28,10 +28,11 @@ struct InstrumentStrip: View {
                     .foregroundStyle(.ice)
                     .lineLimit(1)
             }
-            .frame(minWidth: 84, alignment: .leading)
+            // A short name like "Home" needs little; a long one gives way to the numbers first.
+            .frame(minWidth: 56, alignment: .leading)
 
             if !dynamicTypeSize.isAccessibilitySize {
-                Spacer(minLength: 12)
+                Spacer(minLength: 8)
             }
 
             ViewThatFits(in: .horizontal) {
@@ -65,9 +66,6 @@ struct InstrumentStrip: View {
                 unit: "% rain",
                 role: snapshot.rainChanceNext2h >= ExitCheckEvaluator.rainChanceThreshold ? .attention : .world
             ))
-        }
-        if let minutes = state.commute?.transitMinutes ?? state.commute?.walkMinutes {
-            items.append(Readout(id: "commute", value: "\(minutes)", unit: "min", role: .you))
         }
         if let meters = state.barometer.absoluteAltitudeMeters {
             items.append(Readout(id: "altitude", value: "\(Int(meters.rounded()))", unit: "m alt", role: .world))
@@ -106,7 +104,9 @@ private struct ReadoutCluster: View {
                         // A rectangle has no baseline of its own, so place it across the digits
                         // rather than letting it hang from the top of the line.
                         .alignmentGuide(.firstTextBaseline) { $0[.bottom] - overhang }
-                        .padding(.horizontal, 11)
+                        // Enough to part "15% rain" from "902 m alt"; any more and the card
+                        // collapsed dropped altitude for want of room.
+                        .padding(.horizontal, 8)
                 }
                 MetricText(
                     value: readout.value,

@@ -19,12 +19,21 @@ struct RadarDeck: View {
                 }
 
                 if !radar.items.isEmpty {
-                    GroupedRows(radar.items) { item in
-                        RadarRow(item: item)
+                    // Split by kind where the category has kinds (metro, bus, train), so you can
+                    // tell a station from a stop at a glance.
+                    ForEach(sections, id: \.title) { section in
+                        VStack(alignment: .leading, spacing: 8) {
+                            if let title = section.title {
+                                DeckSectionHeader(title: title, trailing: "\(section.items.count)")
+                            }
+                            GroupedRows(section.items) { item in
+                                RadarRow(item: item)
+                            }
+                        }
                     }
                 }
 
-                Text("Events come from nearby venues on Apple Maps and posters you scan.")
+                Text("Places come from Apple Maps and are kept for three days. Events show here when they have a place to go to; online ones are in Day.")
                     .font(.caption)
                     .foregroundStyle(.mist)
                     .padding(.horizontal, 4)
@@ -33,7 +42,20 @@ struct RadarDeck: View {
             .padding(.bottom, 32)
         }
         .scrollIndicators(.hidden)
-        .refreshable { await radar.refresh(state: state) }
+        // Pulling down is the one way to scan an area again before its three days are up.
+        .refreshable { await radar.refresh(state: state, force: true) }
+    }
+
+    private var sections: [(title: String?, items: [RadarItem])] {
+        var result: [(title: String?, items: [RadarItem])] = []
+        for item in radar.items {
+            if let index = result.firstIndex(where: { $0.title == item.section }) {
+                result[index].items.append(item)
+            } else {
+                result.append((item.section, [item]))
+            }
+        }
+        return result
     }
 
     private var categoryChips: some View {
@@ -74,12 +96,19 @@ struct RadarDeck: View {
                 InstrumentLabel("Scanning around you", role: .world)
             }
             .padding(.horizontal, 4)
-        } else if radar.rankedByAI {
-            HStack(spacing: 6) {
-                Image(systemName: "apple.intelligence")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(.ion)
-                InstrumentLabel("Ranked on-device for you")
+        } else {
+            VStack(alignment: .leading, spacing: 4) {
+                if radar.rankedByAI {
+                    HStack(spacing: 6) {
+                        Image(systemName: "apple.intelligence")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(.ion)
+                        InstrumentLabel("Ranked on-device for you")
+                    }
+                }
+                if let scannedAt = radar.scannedAt, Date().timeIntervalSince(scannedAt) > 3_600 {
+                    InstrumentLabel("Found \(scannedAt.formatted(.relative(presentation: .named))) · pull down to scan again")
+                }
             }
             .padding(.horizontal, 4)
         }
@@ -157,8 +186,11 @@ private struct RadarRow: View {
     private var metrics: String? {
         var parts: [String] = []
         if let distance = item.distanceMeters {
+            // Past a couple of kilometres nobody walks, so the minutes would only mislead.
             parts.append(distance < WorldSignalBuilder.hereRadius
                          ? "Here"
+                         : distance > 2_000
+                         ? "\(GeoMath.formatDistance(distance)) away"
                          : "\(GeoMath.formatDistance(distance)) · \(GeoMath.walkingMinutes(forDistance: distance)) min")
         }
         if let start = item.start {

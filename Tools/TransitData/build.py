@@ -3,7 +3,9 @@
 
     python3 Tools/TransitData/build.py metro    # Namma Metro: stations, coordinates, service, fares
     python3 Tools/TransitData/build.py bus      # BMTC: stops, routes, how often they run
-    python3 Tools/TransitData/build.py          # both
+    python3 Tools/TransitData/build.py city     # the launch screen's map of central Bengaluru
+                                                # (add --from saved.json to reuse an Overpass answer)
+    python3 Tools/TransitData/build.py          # all three
 
 Run from the repository root. Downloads go through curl, which uses the system's certificates
 (python.org's Python ships without them). Output lands in PathOS/Resources/Transit/.
@@ -236,18 +238,223 @@ def build_bus() -> None:
     print(f"  {len(stops_out)} stops, {len(route_ids)} routes, {len(patterns_out)} patterns ({skipped} intercity patterns left out)")
 
 
+# MARK: Launch-screen city
+
+# Central Bengaluru, centred just east of MG Road: Cubbon Park to the west, Halasuru Lake to the
+# east. The box is twice as tall as it is wide, like a phone, and the app fills the screen with it.
+CITY_CENTER = (12.9745, 77.6070)
+CITY_HEIGHT_KM = 5.2
+CITY_ASPECT = 0.5
+OVERPASS = [
+    "https://overpass.private.coffee/api/interpreter",
+    "https://overpass-api.de/api/interpreter",
+    "https://overpass.kumi.systems/api/interpreter",
+]
+
+ROAD_CLASSES = {
+    "major": {"motorway", "trunk", "primary", "motorway_link", "trunk_link", "primary_link"},
+    "secondary": {"secondary", "tertiary", "secondary_link", "tertiary_link"},
+    "minor": {"unclassified", "residential", "living_street", "pedestrian"},
+    "service": {"service"},
+}
+GREEN = {("leisure", "park"), ("leisure", "garden"), ("leisure", "pitch"), ("leisure", "stadium"),
+         ("landuse", "grass"), ("landuse", "forest"), ("landuse", "recreation_ground"),
+         ("landuse", "cemetery"), ("natural", "wood")}
+
+# Where the route may run, in the box's own 0–1 coordinates, worked out for the tightest phones
+# once the box fills their screen: the iPhone SE crops the top and bottom, the tall phones the
+# sides. The line keeps clear of the edges, the status bar and the name at the bottom; the start
+# and the pin, being solid, keep a wider margin; and nothing goes near the mark in the middle.
+# The app's tests check the result on real screen sizes.
+ROUTE_AREA = (0.09, 0.12, 0.91, 0.83)          # left, top, right, bottom, for the line
+MARKER_AREA = (0.13, 0.17, 0.87, 0.83)         # for the start dot, and the pin's head
+ROUTE_KEEP_OUT = (0.22, 0.375, 0.78, 0.625)    # around the mark
+ROUTE_FROM, ROUTE_TO = (0.24, 0.76), (0.76, 0.22)
+
+
+def overpass(query: str) -> dict:
+    for host in OVERPASS:
+        result = subprocess.run(
+            ["curl", "-s", "--max-time", "240", "-H", f"User-Agent: {USER_AGENT}", host, "--data-urlencode", f"data={query}"],
+            capture_output=True,
+        )
+        try:
+            return json.loads(result.stdout)
+        except json.JSONDecodeError:
+            print(f"  {host} didn't answer; trying the next mirror")
+    sys.exit("No Overpass server answered. Try again later.")
+
+
+def douglas_peucker(points, tolerance):
+    """Simplifies a polyline of (x, y) tuples, keeping its shape within `tolerance`."""
+    if len(points) < 3:
+        return points
+    (ax, ay), (bx, by) = points[0], points[-1]
+    dx, dy = bx - ax, by - ay
+    length = math.hypot(dx, dy) or 1e-12
+    worst, index = 0.0, 0
+    for i, (px, py) in enumerate(points[1:-1], 1):
+        d = abs(dy * px - dx * py + bx * ay - by * ax) / length
+        if d > worst:
+            worst, index = d, i
+    if worst <= tolerance:
+        return [points[0], points[-1]]
+    return douglas_peucker(points[:index + 1], tolerance)[:-1] + douglas_peucker(points[index:], tolerance)
+
+
+def build_city() -> None:
+    lat0, lon0 = CITY_CENTER
+    height_deg = CITY_HEIGHT_KM / 111.0
+    width_deg = CITY_HEIGHT_KM * CITY_ASPECT / (111.0 * math.cos(math.radians(lat0)))
+    north, south = lat0 + height_deg / 2, lat0 - height_deg / 2
+    west, east = lon0 - width_deg / 2, lon0 + width_deg / 2
+    # A little beyond the box, so roads run off the edges rather than stopping at them.
+    pad = 0.06
+    bbox = f"{south - height_deg * pad},{west - width_deg * pad},{north + height_deg * pad},{east + width_deg * pad}"
+
+    def norm(lat, lon):
+        return ((lon - west) / (east - west), (north - lat) / (north - south))
+
+    classes = "|".join(sorted(set().union(*ROAD_CLASSES.values())))
+    # `city --from saved.json` builds from a saved Overpass answer, for when the servers are busy.
+    saved = sys.argv[sys.argv.index("--from") + 1] if "--from" in sys.argv else None
+    data = json.loads(Path(saved).read_text()) if saved else overpass(f"""[out:json][timeout:180];(
+        way["highway"~"^({classes})$"]({bbox});
+        way["leisure"~"^(park|garden|pitch|stadium)$"]({bbox});
+        way["landuse"~"^(grass|forest|recreation_ground|cemetery)$"]({bbox});
+        way["natural"~"^(water|wood)$"]({bbox});
+        relation["natural"="water"]({bbox});
+        relation["leisure"="park"]({bbox});
+        way["railway"="rail"]({bbox}););out geom;""")
+
+    roads = {name: [] for name in ROAD_CLASSES}
+    green, water, rail = [], [], []
+    graph = defaultdict(dict)
+    positions = {}
+
+    def flat(points, tolerance):
+        return [round(v, 4) for p in douglas_peucker(points, tolerance) for v in p]
+
+    def rings(members):
+        """Stitches a multipolygon's outer ways into closed rings."""
+        pieces = [[(g["lat"], g["lon"]) for g in m["geometry"]] for m in members
+                  if m["type"] == "way" and m.get("role") == "outer" and m.get("geometry")]
+        done = []
+        while pieces:
+            ring = pieces.pop(0)
+            grown = True
+            while ring[0] != ring[-1] and grown:
+                grown = False
+                for i, piece in enumerate(pieces):
+                    if piece[0] == ring[-1]:
+                        ring += piece[1:]
+                    elif piece[-1] == ring[-1]:
+                        ring += piece[::-1][1:]
+                    else:
+                        continue
+                    pieces.pop(i)
+                    grown = True
+                    break
+            done.append(ring)
+        return done
+
+    for element in data["elements"]:
+        tags = element.get("tags", {})
+        if element["type"] == "relation":
+            target = water if tags.get("natural") == "water" else green
+            for ring in rings(element.get("members", [])):
+                target.append(flat([norm(*p) for p in ring], 0.0004))
+            continue
+        points = [norm(g["lat"], g["lon"]) for g in element.get("geometry", [])]
+        if len(points) < 2:
+            continue
+        highway = tags.get("highway")
+        if highway:
+            name = next(n for n, kinds in ROAD_CLASSES.items() if highway in kinds)
+            roads[name].append(flat(points, 0.0004 if name in ("major", "secondary") else 0.0007))
+            if name == "service":
+                continue
+            # The route search walks the real network, preferring the roads a map app would.
+            cost = {"major": 1.0, "secondary": 1.15, "minor": 1.6}[name]
+            for (a, pa), (b, pb) in zip(zip(element["nodes"], points), zip(element["nodes"][1:], points[1:])):
+                positions[a], positions[b] = pa, pb
+                length = math.hypot((pb[0] - pa[0]) * CITY_ASPECT, pb[1] - pa[1]) * cost
+                graph[a][b] = min(graph[a].get(b, math.inf), length)
+                graph[b][a] = min(graph[b].get(a, math.inf), length)
+        elif tags.get("railway") == "rail":
+            rail.append(flat(points, 0.0005))
+        elif tags.get("natural") == "water":
+            water.append(flat(points, 0.0004))
+        elif any((k, tags.get(k)) in GREEN for k in ("leisure", "landuse", "natural")):
+            green.append(flat(points, 0.0005))
+
+    # The route: shortest over the real roads, kept inside the safe area and out of the middle.
+    left, top, right, bottom = ROUTE_AREA
+    kl, kt, kr, kb = ROUTE_KEEP_OUT
+
+    def allowed(node):
+        x, y = positions[node]
+        return left <= x <= right and top <= y <= bottom and not (kl <= x <= kr and kt <= y <= kb)
+
+    ml, mt, mr, mb = MARKER_AREA
+    endpoints = [n for n in positions if allowed(n) and ml <= positions[n][0] <= mr and mt <= positions[n][1] <= mb]
+    if not endpoints:
+        sys.exit("No roads inside the route area.")
+    near = lambda target: min(endpoints, key=lambda n: math.hypot(positions[n][0] - target[0], positions[n][1] - target[1]))
+    start, goal = near(ROUTE_FROM), near(ROUTE_TO)
+
+    import heapq
+    best, previous, queue = {start: 0.0}, {}, [(0.0, start)]
+    while queue:
+        cost, node = heapq.heappop(queue)
+        if node == goal:
+            break
+        if cost > best.get(node, math.inf):
+            continue
+        for nxt, length in graph[node].items():
+            if not allowed(nxt):
+                continue
+            if cost + length < best.get(nxt, math.inf):
+                best[nxt], previous[nxt] = cost + length, node
+                heapq.heappush(queue, (cost + length, nxt))
+    if goal not in best:
+        sys.exit("No route between the chosen ends that stays clear of the mark.")
+    path, node = [goal], goal
+    while node != start:
+        node = previous[node]
+        path.append(node)
+    route = [positions[n] for n in reversed(path)]
+
+    write("launch-map.json", {
+        "generated": date.today().isoformat(),
+        "source": {"what": "Launch-screen map of central Bengaluru",
+                   "url": "https://www.openstreetmap.org/copyright",
+                   "licence": "ODbL 1.0, © OpenStreetMap contributors"},
+        "aspect": CITY_ASPECT,
+        "roads": roads,
+        "green": green,
+        "water": water,
+        "rail": rail,
+        "route": [round(v, 4) for p in route for v in p],
+    }, folder=ROOT / "PathOS" / "Resources" / "LaunchMap")
+    counts = ", ".join(f"{len(v)} {k}" for k, v in roads.items())
+    print(f"  roads: {counts}; {len(green)} green, {len(water)} water, {len(rail)} rail; route {len(route)} points")
+
+
 # MARK: Output
 
-def write(name: str, payload) -> None:
-    OUT.mkdir(parents=True, exist_ok=True)
-    path = OUT / name
+def write(name: str, payload, folder: Path = OUT) -> None:
+    folder.mkdir(parents=True, exist_ok=True)
+    path = folder / name
     path.write_text(json.dumps(payload, ensure_ascii=False, separators=(",", ":")))
     print(f"Wrote {path.relative_to(ROOT)} ({path.stat().st_size / 1024:.0f} KB)")
 
 
 if __name__ == "__main__":
-    targets = sys.argv[1:] or ["metro", "bus"]
+    targets = [a for a in sys.argv[1:] if a in ("metro", "bus", "city")] or ["metro", "bus", "city"]
     if "metro" in targets:
         build_metro()
     if "bus" in targets:
         build_bus()
+    if "city" in targets:
+        build_city()

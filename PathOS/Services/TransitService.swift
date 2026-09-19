@@ -71,19 +71,17 @@ final class TransitService {
         lastNearbyLocation = location
         var found: [TransitStopInput] = []
 
-        for line in MetroNetwork.lines {
-            for station in line.stops {
-                let distance = location.distance(from: CLLocation(latitude: station.lat, longitude: station.lon))
-                guard distance <= 900, !found.contains(where: { $0.name == station.name }) else { continue }
-                found.append(TransitStopInput(
-                    kind: .metro,
-                    name: station.name,
-                    subtitle: MetroNetwork.interchangeLines(for: station.name).map(\.name).joined(separator: " · "),
-                    latitude: station.lat,
-                    longitude: station.lon,
-                    distanceMeters: distance
-                ))
-            }
+        // The nearest few even when none is a walk away: a metro across town still beats not
+        // knowing where it is.
+        for (station, distance) in MetroNetwork.nearbyStations(to: location.coordinate) {
+            found.append(TransitStopInput(
+                kind: .metro,
+                name: station.name,
+                subtitle: MetroNetwork.interchangeLines(for: station.name).map(\.name).joined(separator: " · "),
+                latitude: station.lat,
+                longitude: station.lon,
+                distanceMeters: distance
+            ))
         }
 
         if let network = await loadBusNetwork() {

@@ -18,6 +18,22 @@ struct SettingsView: View {
         NavigationStack {
             Form {
                 Section {
+                    HStack(spacing: 14) {
+                        PathOSMark(height: 40)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("PathOS")
+                                .font(.title3.weight(.semibold))
+                                .foregroundStyle(.ice)
+                            Text(versionLine)
+                                .font(.footnote)
+                                .foregroundStyle(.mist)
+                        }
+                    }
+                    .padding(.vertical, 4)
+                    .accessibilityElement(children: .combine)
+                }
+
+                Section {
                     LabeledContent("Location", value: locationStatus)
                     LabeledContent("Notifications", value: state.notifications.isAuthorized ? "On" : "Off")
                     LabeledContent("Live Activities", value: state.liveActivities.areActivitiesEnabled ? "On" : "Off")
@@ -135,6 +151,13 @@ struct SettingsView: View {
                             .foregroundStyle(.mist)
                         Link("github.com", destination: URL(string: "https://github.com/Vonter/bmtc-gtfs")!)
                     }
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Launch screen map")
+                            .foregroundStyle(.ice)
+                        Text("Central Bengaluru · © OpenStreetMap contributors, ODbL 1.0")
+                            .foregroundStyle(.mist)
+                        Link("openstreetmap.org/copyright", destination: URL(string: "https://www.openstreetmap.org/copyright")!)
+                    }
                 } header: {
                     InstrumentLabel("About the transit data")
                 }
@@ -142,7 +165,7 @@ struct SettingsView: View {
 
                 Section {
                     Text("**Action Button:** Settings → Action Button → Shortcut → PathOS → *Ask PathOS*.")
-                    Text("**Hands-free commute:** Shortcuts → Automation → Time of Day → *Start Commute* (set to run immediately). It updates your Lock Screen without opening the app.")
+                    Text("**Lock Screen every morning:** Shortcuts → Automation → Time of Day → *Pin Context to Lock Screen* (set to run immediately). It pins the context without opening the app.")
                     Text("**Siri:** “Save my spot in PathOS”, “Find my spot with PathOS”.")
                 } header: {
                     InstrumentLabel("Hardware shortcuts")
@@ -164,7 +187,10 @@ struct SettingsView: View {
                         }
                     }
                     Button("End Live Activity") {
-                        Task { await state.liveActivities.end() }
+                        Task {
+                            await state.unpinContext()
+                            await state.liveActivities.end()
+                        }
                     }
                     .foregroundStyle(.coral)
                     if let testResult {
@@ -232,6 +258,13 @@ struct SettingsView: View {
 
     private func connectGmail() {
         Task { await state.mail.connect(present: webAuthenticationSession.googleSignIn) }
+    }
+
+    private var versionLine: String {
+        let info = Bundle.main.infoDictionary
+        let version = info?["CFBundleShortVersionString"] as? String ?? "1.0"
+        let build = info?["CFBundleVersion"] as? String ?? "1"
+        return "Version \(version) (\(build))"
     }
 
     private var locationStatus: String {

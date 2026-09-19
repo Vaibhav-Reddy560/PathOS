@@ -85,6 +85,16 @@ extension AppState {
             )
             isAssistantActive = true
         }
+        // `-PathOSDeckCycle YES` opens and collapses the deck every few seconds, to record it.
+        if arguments.bool(forKey: "PathOSDeckCycle") {
+            Task {
+                while true {
+                    try? await Task.sleep(for: .seconds(3))
+                    guard isLaunchComplete else { continue }
+                    deckDetent = deckDetent == .deckPeek ? .medium : .deckPeek
+                }
+            }
+        }
         switch arguments.string(forKey: "PathOSDeckDetent") {
         case "medium": deckDetent = .medium
         case "large": deckDetent = .large

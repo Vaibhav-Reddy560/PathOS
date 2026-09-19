@@ -57,8 +57,8 @@ xcodebuild test -scheme PathOS -destination 'platform=iOS Simulator,name=iPhone 
 2. **Turn on Apple Intelligence** (Settings → Apple Intelligence & Siri). Scans, Radar ranking and voice answers use the on-device model. Without it, PathOS falls back to simpler rules.
 3. **Set Home and Work.** Pull up the panel at the bottom of the map. In **Now**, stand at each place and tap **I'm at Home** or **I'm at Work**. You can also use **Vault → Places**.
 4. **Map the Action Button.** Go to **Settings → Action Button → Shortcut → PathOS → Ask PathOS**.
-5. **Optional: hands-free commute.**
-   - In **Shortcuts → Automation → + → Time of Day**, pick your leave time minus 15 minutes and add **Start Commute**.
+5. **Optional: pin the context every morning.**
+   - In **Shortcuts → Automation → + → Time of Day**, pick when your day starts and add **Pin Context to Lock Screen**.
    - Set it to *Run Immediately*.
 
 ## 5. What to test
@@ -80,7 +80,8 @@ xcodebuild test -scheme PathOS -destination 'platform=iOS Simulator,name=iPhone 
 | Add an event | **Day → Add an event**, or **Paste a message**: copy a WhatsApp message or invite, and the on-device model reads the title, time and venue out of it. Nothing saves until you confirm. Events also copy to your Apple Calendar. |
 | Tag a place | **Vault → Save this spot**: add tags (Parking, Study, Food… or your own) and up to 5 photos. Tags show in the Vault and on the place card. |
 | Place details | Tap any cyan place on the map, or a Radar row. The card shows street imagery where Apple has it, address, phone and website, plus **Photos, hours & reviews** for Apple's full card. |
-| Island alerts | The capsule under the status bar shows the most important thing right now: amber for rain or an event starting soon, green for your commute or guidance, cyan for weather. Tap it for details. |
+| Island alerts | The capsule under the status bar shows the most important thing right now: amber for rain or an event starting soon, green for your journey or guidance, cyan for weather. Tap it for details. |
+| Pinned context | **Now** → the pin beside where you are. The Lock Screen then leads with whatever matters: a class or event starting within the hour (counting down to its start) or under way (the time left, with a progress bar), else a note you left at this spot, else **Take an umbrella**, else where you are and the weather. Up to two notes follow, such as the umbrella, your travel time around when you usually leave, and what's next. During a metro or bus journey, a trip leg or the pointer, the directions take over and the context comes back after. Tap the pin again to unpin. iOS ends a Live Activity after eight hours or a restart; PathOS puts it back the next time you open it, unless you swiped it away. |
 | Exit check | Deck gear → **Run exit check now**, or leave Home when rain is forecast. |
 | Voice | Press the Action Button, or tap the waveform button on the map: "Top cafés within a 5-minute walk". The island opens into the assistant and answers appear on the map in cyan. |
 
@@ -134,8 +135,9 @@ Two things carry that look and are easy to lose:
 - **The edge light is added, not screened.** Screening onto an already-bright body moves it almost
   nowhere, which leaves the edge soft instead of cut.
 
-The colour is a four-stop ramp (`Palette.markRamp`) built from Ion's own hue and saturation, moved
-along the lightness axis and drifting 25 degrees in hue from cyan to teal. Two rules there: never
+The colour is a three-stop ramp (`Palette.markRamp`) of the design's stops, #8DFFEE, #6DFFEA and
+#00FFD0. All three sit on Ion's own hue at full saturation, so they're derived from the palette
+(within 4/255 of each) rather than pasted in, and change with Ion. Two rules there: never
 lighten by mixing toward Ice, which drops saturation until the mark is a pale grey shape; and keep
 the body clear of the top of the range, because the lighting adds on top and a body near white
 clips the green channel, flattening the whole mark to one tone no matter how the ramp is built.
@@ -176,6 +178,39 @@ ground proportionally more than the bright mark. A third test stops the fix goin
 rendered mark has to keep at least a 1.9x luminance range, or it stops reading as glass. Current
 figures are a worst edge of 4.7:1 and a median of 8.3:1 under veil, with the mark's colour
 travelling ~156 of 441 across sRGB and 24 degrees in hue.
+
+**The launch screen** starts from the same render. IconForge also writes
+`Assets.xcassets/LaunchMark.imageset`: the glass mark on its own, with no tile behind it, 140 pt wide.
+It writes this whenever it writes the app icon (a trial render with `--out` leaves it alone).
+`IconRenderer.renderMark` lights the mark exactly as the icon does, so the two can't drift.
+
+iOS shows that image centred on Void. `LaunchView` then takes over at the same spot and plays:
+1. the real streets of central Bengaluru around MG Road spread out from behind the mark, from Cubbon
+   Park to Halasuru Lake
+2. "PathOS" rises at the bottom
+3. a dashed green route draws itself along real roads from a start dot, around the mark, to an
+   Amber pin
+4. while PathOS finishes starting, light runs along the route and the pin breathes
+
+It lifts, zooming into the real map, once PathOS has your location. That's no sooner than 1.7 s, so
+the route finishes drawing, and no later than 3.5 s. With Reduce Motion it shows the finished
+picture and just fades.
+
+The map is OpenStreetMap data (ODbL, credited in Settings), built by
+`python3 Tools/TransitData/build.py city` into `PathOS/Resources/LaunchMap/launch-map.json` (about
+270 KB):
+- roads in four classes, from main roads down to service lanes
+- parks, water and rail
+- a route found on the real road network that keeps out of a box around the mark and inside the
+  area every phone shows
+
+If the Overpass servers are busy, `city --from saved.json` rebuilds from a saved answer. The app
+draws the streets once into an image when the launch screen appears, and only the route, pin and
+pulse redraw each frame. `LaunchSceneTests` checks the route on the iPhone SE, 13 mini, 16 Plus and
+17 Pro Max: it keeps 36 pt from the mark and clear of the edges, the Dynamic Island and the name,
+and runs on real roads.
+
+iOS caches launch screens, so a change can take an app restart or a phone restart to appear.
 
 **Replacing the logo:** drop a new SVG in as `PathOS_Logo.svg` and re-run. The shadow, gradient,
 glass edge, inner shading and bloom are all built from the path at run time, so they re-form around

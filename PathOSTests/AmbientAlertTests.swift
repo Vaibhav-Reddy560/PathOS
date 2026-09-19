@@ -10,12 +10,11 @@ struct AmbientAlertTests {
         exitAdvice: ExitAdvice? = nil,
         trend: PressureTrend = .steady,
         guidance: AlertSnapshot.Guidance? = nil,
-        commute: AlertSnapshot.Commute? = nil,
         event: AlertSnapshot.Event? = nil,
         weather: AlertSnapshot.Weather? = nil
     ) -> AlertSnapshot {
         AlertSnapshot(location: location, exitAdvice: exitAdvice, pressureTrend: trend, guidance: guidance,
-                      commute: commute, nextEvent: event, weather: weather,
+                      nextEvent: event, weather: weather,
                       venueName: "MG Road", venueSymbol: "location.fill", now: now)
     }
 
@@ -87,6 +86,26 @@ struct AmbientAlertTests {
 
         let rainy = AmbientAlerts.prioritized(snapshot(exitAdvice: rain, weather: sunny))
         #expect(AmbientAlerts.notifiable(previous: announced, current: rainy).map(\.id) == ["exit.advice"])
+    }
+
+    @Test func theIslandRestsOnItsNameWhenThereIsNoNews() {
+        #expect(AmbientAlerts.isQuiet(AmbientAlerts.prioritized(snapshot())))
+        #expect(AmbientAlerts.isQuiet(AmbientAlerts.prioritized(snapshot(weather: sunny))))
+    }
+
+    @Test func anythingWorthAGlanceTakesTheNamesPlace() {
+        #expect(!AmbientAlerts.isQuiet(AmbientAlerts.prioritized(snapshot(exitAdvice: rain, weather: sunny))))
+        #expect(!AmbientAlerts.isQuiet(AmbientAlerts.prioritized(snapshot(location: .notDetermined, weather: sunny))))
+        let guidance = AlertSnapshot.Guidance(target: target, distanceMeters: 184, needsCalibration: false)
+        #expect(!AmbientAlerts.isQuiet(AmbientAlerts.prioritized(snapshot(guidance: guidance, weather: sunny))))
+
+        // A plan later today is news, even though it is only information.
+        var calendar = Calendar.current
+        calendar.timeZone = .current
+        let evening = calendar.date(bySettingHour: 23, minute: 30, second: 0, of: now) ?? now
+        var input = snapshot(event: AlertSnapshot.Event(id: "e", title: "Late show", start: evening), weather: sunny)
+        input.now = calendar.date(bySettingHour: 12, minute: 0, second: 0, of: now) ?? now
+        #expect(!AmbientAlerts.isQuiet(AmbientAlerts.prioritized(input)))
     }
 
     @Test func idleIsAlwaysLast() {

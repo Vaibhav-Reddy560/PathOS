@@ -22,7 +22,7 @@ struct PathOSLiveActivityWidget: Widget {
                 }
                 DynamicIslandExpandedRegion(.center) {
                     VStack(spacing: 2) {
-                        InstrumentLabel(state.mode.caption, role: state.mode.role)
+                        InstrumentLabel(state.caption(at: .now), role: state.tint)
                         Text(state.title)
                             .font(.headline)
                             .foregroundStyle(.ice)
@@ -36,6 +36,9 @@ struct PathOSLiveActivityWidget: Widget {
                             .foregroundStyle(.mist)
                             .lineLimit(2)
                             .multilineTextAlignment(.center)
+                        if let note = state.notes?.first {
+                            NoteLine(note: note)
+                        }
                         if state.mode == .commute {
                             CabLinksRow()
                         }
@@ -49,7 +52,7 @@ struct PathOSLiveActivityWidget: Widget {
                 ModeGlyph(state: state, size: 20)
             }
             .widgetURL(state.deepLink)
-            .keylineTint(state.mode.role.color)
+            .keylineTint(state.tint.color)
         }
     }
 }
@@ -58,12 +61,16 @@ private struct LockScreenActivityView: View {
     let state: PathOSActivityAttributes.ContentState
 
     var body: some View {
+        // Read when drawn. The content goes stale at a class's start, which redraws this, so the
+        // countdown to the start becomes the time left without PathOS having to run.
+        let timing = state.timing(at: .now)
+
         VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 14) {
                 ModeGlyph(state: state, size: 46)
-                    .background(state.mode.role.color.opacity(0.14), in: .circle)
+                    .background(state.tint.color.opacity(0.14), in: .circle)
                 VStack(alignment: .leading, spacing: 3) {
-                    InstrumentLabel(state.mode.caption, role: state.mode.role)
+                    InstrumentLabel(state.caption(at: .now), role: state.tint)
                     Text(state.title)
                         .font(.headline)
                         .foregroundStyle(.ice)
@@ -76,11 +83,57 @@ private struct LockScreenActivityView: View {
                 Spacer(minLength: 0)
                 TrailingMetric(state: state)
             }
+            if case .endsIn(let start, let end) = timing {
+                ProgressView(timerInterval: start...end, countsDown: false) {
+                    EmptyView()
+                } currentValueLabel: {
+                    EmptyView()
+                }
+                .tint(state.tint.color)
+            }
+            if let notes = state.notes, !notes.isEmpty {
+                VStack(alignment: .leading, spacing: 5) {
+                    ForEach(notes, id: \.self) { note in
+                        NoteLine(note: note)
+                    }
+                }
+            }
             if state.mode == .commute {
                 CabLinksRow()
             }
         }
         .padding(16)
+    }
+}
+
+/// A short line under the main one: "Take an umbrella · 70% rain in 2 h".
+private struct NoteLine: View {
+    let note: PathOSActivityAttributes.Note
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Image(systemName: note.symbol)
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(note.role.color)
+                .frame(width: 18)
+            Text(note.text)
+                .font(.footnote)
+                .foregroundStyle(.ice)
+                .lineLimit(1)
+        }
+    }
+}
+
+/// Counts down to a start or an end on its own, between PathOS's updates.
+private struct Countdown: View {
+    let to: Date
+    var font: Font = .title3.weight(.semibold)
+
+    var body: some View {
+        // A timer's text takes all the width it's offered, so it's given only what it needs.
+        Text(timerInterval: Date.now...max(to, .now), countsDown: true)
+            .font(font.monospacedDigit())
+            .multilineTextAlignment(.trailing)
     }
 }
 
@@ -99,7 +152,7 @@ private struct ModeGlyph: View {
             }
         }
         .font(.system(size: size * 0.5, weight: .semibold))
-        .foregroundStyle(state.mode.role.color)
+        .foregroundStyle(state.tint.color)
         .frame(width: size, height: size)
     }
 }
@@ -108,12 +161,34 @@ private struct TrailingMetric: View {
     let state: PathOSActivityAttributes.ContentState
 
     var body: some View {
-        if let eta = state.etaMinutes {
-            MetricText(value: "\(eta)", unit: "min", role: state.mode.role)
+        if let timing = state.timing(at: .now) {
+            switch timing {
+            case .startsIn(let start):
+                timed(to: start, label: "to start")
+            case .endsIn(_, let end):
+                timed(to: end, label: "left")
+            case .over:
+                EmptyView()
+            }
+        } else if let eta = state.etaMinutes {
+            MetricText(value: "\(eta)", unit: "min", role: state.tint)
         } else if let distance = state.distanceMeters {
             Text(GeoMath.formatDistance(distance))
                 .font(.headline.monospacedDigit())
                 .foregroundStyle(.ice)
+        }
+    }
+}
+
+extension TrailingMetric {
+    private func timed(to date: Date, label: String) -> some View {
+        VStack(alignment: .trailing, spacing: 1) {
+            Countdown(to: date)
+                .foregroundStyle(.ice)
+                .frame(maxWidth: 88, alignment: .trailing)
+            Text(label)
+                .font(.caption2.weight(.semibold))
+                .foregroundStyle(state.tint.color)
         }
     }
 }
@@ -133,14 +208,26 @@ private struct CompactMetric: View {
                 .foregroundStyle(.ice)
         case .exitCheck:
             Image(systemName: "umbrella.fill")
-                .foregroundStyle(state.mode.role.color)
+                .foregroundStyle(state.tint.color)
         case .spatialNote:
             Text("Note")
                 .font(.caption.weight(.semibold))
                 .foregroundStyle(.ice)
         case .venue:
-            Image(systemName: "sparkle")
-                .foregroundStyle(state.mode.role.color)
+            switch state.timing(at: .now) {
+            case .startsIn(let date), .endsIn(_, let date):
+                Countdown(to: date, font: .caption.weight(.semibold))
+                    .foregroundStyle(.ice)
+                    .frame(maxWidth: 44)
+            default:
+                if state.notes?.contains(where: { $0.symbol == "umbrella.fill" }) == true {
+                    Image(systemName: "umbrella.fill")
+                        .foregroundStyle(SignalRole.attention.color)
+                } else {
+                    Image(systemName: "sparkle")
+                        .foregroundStyle(state.tint.color)
+                }
+            }
         case .journey:
             Text(state.etaMinutes.map { "\($0)m" } ?? "Metro")
                 .font(.caption.weight(.semibold).monospacedDigit())
@@ -168,6 +255,18 @@ private struct CabLinksRow: View {
                         .background(Color.elevatedSurface, in: Capsule())
                 }
             }
+        }
+    }
+}
+
+extension PathOSActivityAttributes.ContentState {
+    /// The small label over the title: what a timed item is doing, else the mode.
+    func caption(at now: Date) -> String {
+        switch timing(at: now) {
+        case .startsIn: "Starting soon"
+        case .endsIn: "On now"
+        case .over: "Just finished"
+        case nil: mode.caption
         }
     }
 }

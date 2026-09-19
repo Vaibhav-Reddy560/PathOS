@@ -14,6 +14,8 @@ nonisolated struct RadarItem: Identifiable, Hashable, Sendable {
     var distanceMeters: Double?
     var start: Date?
     var isEvent: Bool
+    /// The heading it sits under, where a category is split by kind ("Metro stations").
+    var section: String? = nil
 }
 
 /// Which families of signals are drawn on the map.

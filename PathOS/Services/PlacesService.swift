@@ -2,7 +2,7 @@ import CoreLocation
 import MapKit
 import Observation
 
-nonisolated struct PlaceSummary: Identifiable, Hashable, Sendable {
+nonisolated struct PlaceSummary: Identifiable, Hashable, Codable, Sendable {
     var id: String
     var name: String
     var categoryName: String
@@ -57,6 +57,12 @@ nonisolated enum RadarCategory: String, CaseIterable, Identifiable, Sendable {
         case .outdoors: "tree.fill"
         case .transit: "tram.fill"
         }
+    }
+
+    /// What Radar scans for this category: Everything is each of the others, scanned on its own,
+    /// since one combined search comes back as a single short list that some categories miss.
+    var scanned: [RadarCategory] {
+        self == .all ? [.food, .nightlife, .culture, .outdoors] : [self]
     }
 
     var poiCategories: [MKPointOfInterestCategory] {

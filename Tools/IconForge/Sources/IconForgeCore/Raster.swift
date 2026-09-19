@@ -218,7 +218,8 @@ public enum Raster {
         return image(ctx)
     }
 
-    public static func writePNG(_ image: CGImage, to url: URL) throws {
+    /// Opaque unless asked otherwise: the app icon must not carry alpha, but the launch icon has to.
+    public static func writePNG(_ image: CGImage, to url: URL, keepingAlpha: Bool = false) throws {
         try FileManager.default.createDirectory(at: url.deletingLastPathComponent(),
                                                 withIntermediateDirectories: true)
         guard let destination = CGImageDestinationCreateWithURL(
@@ -226,7 +227,7 @@ public enum Raster {
         ) else {
             throw RasterError.cannotWrite(url.path)
         }
-        CGImageDestinationAddImage(destination, opaque(image), nil)
+        CGImageDestinationAddImage(destination, keepingAlpha ? image : opaque(image), nil)
         guard CGImageDestinationFinalize(destination) else { throw RasterError.cannotWrite(url.path) }
     }
 
@@ -234,6 +235,17 @@ public enum Raster {
         let ctx = context(size: size)
         ctx.interpolationQuality = .high
         ctx.draw(source, in: CGRect(x: 0, y: 0, width: size, height: size))
+        return image(ctx)
+    }
+
+    /// For shapes that aren't square, like the mark on its own.
+    public static func resized(_ source: CGImage, width: Int, height: Int) -> CGImage {
+        let ctx = CGContext(
+            data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: width * 4,
+            space: colorSpace, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+        )!
+        ctx.interpolationQuality = .high
+        ctx.draw(source, in: CGRect(x: 0, y: 0, width: width, height: height))
         return image(ctx)
     }
 }

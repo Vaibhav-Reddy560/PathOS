@@ -40,6 +40,76 @@ public struct IconRenderer {
         let logoMask = Raster.mask(path: logoPath, size: size, fillRule: logo.fillRule)
         let outsideLogo = Raster.inverted(logoMask)
 
+        drawBackdrop(in: ctx, logoMask: logoMask, palette: palette, settings: settings)
+
+        // The backdrop the glass will refract, captured before anything is drawn on top of it.
+        let backdrop = Raster.image(ctx)
+
+        // 6 — the logo sits above the map, so it casts onto it
+        shadow(ctx, mask: logoMask, size: size, offset: CGPoint(x: 0, y: -26 * k), blur: 44 * k, alpha: 0.78)
+        shadow(ctx, mask: logoMask, size: size, offset: CGPoint(x: 0, y: -6 * k), blur: 9 * k, alpha: 0.70)
+        // An occlusion ring hugging the whole outline, not just the lit side. Where the mark
+        // happens to cross a lit road or a green pool, this is what keeps the two apart — and it
+        // works outside the mark, so it costs the glass nothing.
+        shadow(ctx, mask: logoMask, size: size, offset: .zero, blur: 5 * k, alpha: 0.55)
+
+        // 7–10 — the mark itself, lit as glass
+        ctx.draw(litMark(logo: logo, path: logoPath, mask: logoMask, backdrop: backdrop,
+                         palette: palette, settings: settings), in: full)
+
+        // 11 — a halo rather than a neon glow. The broad sweep of gloss that used to sit here is
+        // gone: the shading pass computes real highlights from the surface, and a flat wash over
+        // the top only cancels them out.
+        ctx.saveGState()
+        ctx.setBlendMode(.plusLighter)
+        Raster.clipped(ctx, to: Raster.blurred(logoMask, radius: 30 * k)) { inner in
+            Raster.clipped(inner, to: outsideLogo) { halo in
+                halo.setFillColor(palette.ion.cg(0.10))
+                halo.fill(full)
+            }
+        }
+        ctx.restoreGState()
+
+        // 12 — the icon's own surface
+        Raster.clipped(ctx, to: Raster.linearMask(size: size, from: CGPoint(x: 0, y: s),
+                                                  to: CGPoint(x: 0.78 * s, y: 0.18 * s),
+                                                  stops: [(0, 1), (1, 0)])) { inner in
+            inner.setFillColor(CGColor(gray: 1, alpha: 0.060))
+            inner.fill(full)
+        }
+
+        // 13 — rim light. Soft on purpose: iOS masks the icon with its own squircle, and a hard
+        // line drawn a few pixels from where that mask lands looks like a box someone drew.
+        let lit = edgeBand(size: size, depth: 16 * k, softness: 9 * k)
+        ctx.saveGState()
+        Raster.clipped(ctx, to: Raster.linearMask(size: size, from: CGPoint(x: 0, y: s), to: CGPoint(x: 0, y: 0.34 * s),
+                                                  stops: [(0, 1), (1, 0)])) { inner in
+            Raster.clipped(inner, to: lit) { band in
+                band.setFillColor(CGColor(gray: 1, alpha: 0.20))
+                band.fill(full)
+            }
+        }
+        Raster.clipped(ctx, to: Raster.linearMask(size: size, from: CGPoint(x: 0, y: 0.30 * s), to: CGPoint(x: 0, y: 0),
+                                                  stops: [(0, 0), (1, 1)])) { inner in
+            Raster.clipped(inner, to: edgeBand(size: size, depth: 13 * k, softness: 7 * k)) { band in
+                band.setFillColor(CGColor(gray: 0, alpha: 0.22))
+                band.fill(full)
+            }
+        }
+        ctx.restoreGState()
+
+        return Raster.image(ctx)
+    }
+
+    // MARK: Stages
+
+    /// Stages 1–5: the ground, the city, the route and the depth, drawn onto `ctx`.
+    private static func drawBackdrop(in ctx: CGContext, logoMask: CGImage, palette: Palette, settings: Settings) {
+        let size = settings.size
+        let s = Double(size)
+        let k = s / 1024
+        let full = CGRect(x: 0, y: 0, width: s, height: s)
+
         // 1 — base. The ground carries the app's own hue rather than being neutral black, so the
         // tile has a colour of its own the way every icon on the home screen does.
         let lift = settings.groundLift
@@ -105,17 +175,13 @@ public struct IconRenderer {
             inner.draw(mapSoftened, in: full)
         }
         vignette(ctx, size: s, strength: 0.34)
+    }
 
-        // The backdrop the glass will refract, captured before anything is drawn on top of it.
-        let backdrop = Raster.image(ctx)
-
-        // 6 — the logo sits above the map, so it casts onto it
-        shadow(ctx, mask: logoMask, size: size, offset: CGPoint(x: 0, y: -26 * k), blur: 44 * k, alpha: 0.78)
-        shadow(ctx, mask: logoMask, size: size, offset: CGPoint(x: 0, y: -6 * k), blur: 9 * k, alpha: 0.70)
-        // An occlusion ring hugging the whole outline, not just the lit side. Where the mark
-        // happens to cross a lit road or a green pool, this is what keeps the two apart — and it
-        // works outside the mark, so it costs the glass nothing.
-        shadow(ctx, mask: logoMask, size: size, offset: .zero, blur: 5 * k, alpha: 0.55)
+    /// Stages 7–10: the mark's colour, lit as glass over `backdrop`. Transparent everywhere else.
+    private static func litMark(logo: SVGDocument, path logoPath: CGPath, mask logoMask: CGImage,
+                                backdrop: CGImage, palette: Palette, settings: Settings) -> CGImage {
+        let size = settings.size
+        let k = Double(size) / 1024
 
         // 7 — the mark's colour, drawn on its own so the lighting below can modulate it
         let bounds = logoPath.boundingBoxOfPath
@@ -137,54 +203,26 @@ public struct IconRenderer {
         // re-forms around whatever SVG is dropped in.
         var light = GlassShading.Light()
         light.bevel = settings.glassBevel
-        ctx.draw(
-            GlassShading.render(mask: logoMask, backdrop: backdrop, body: Raster.image(bodyCtx),
-                                size: size, scale: k, light: light),
-            in: full
-        )
+        return GlassShading.render(mask: logoMask, backdrop: backdrop, body: Raster.image(bodyCtx),
+                                   size: size, scale: k, light: light)
+    }
 
-        // 11 — a halo rather than a neon glow. The broad sweep of gloss that used to sit here is
-        // gone: the shading pass computes real highlights from the surface, and a flat wash over
-        // the top only cancels them out.
-        ctx.saveGState()
-        ctx.setBlendMode(.plusLighter)
-        Raster.clipped(ctx, to: Raster.blurred(logoMask, radius: 30 * k)) { inner in
-            Raster.clipped(inner, to: outsideLogo) { halo in
-                halo.setFillColor(palette.ion.cg(0.10))
-                halo.fill(full)
-            }
-        }
-        ctx.restoreGState()
+    /// The mark on its own, lit exactly as it is in the icon but with no tile, shadow or halo:
+    /// for the launch screen, where it stands on the app's own background. Cropped to the mark.
+    public static func renderMark(logo: SVGDocument, palette: Palette, settings: Settings = Settings()) -> CGImage {
+        let size = settings.size
+        let ctx = Raster.context(size: size)
+        let logoPath = place(logo, in: Double(size), scale: settings.logoScale)
+        let logoMask = Raster.mask(path: logoPath, size: size, fillRule: logo.fillRule)
+        drawBackdrop(in: ctx, logoMask: logoMask, palette: palette, settings: settings)
+        let mark = litMark(logo: logo, path: logoPath, mask: logoMask, backdrop: Raster.image(ctx),
+                           palette: palette, settings: settings)
 
-        // 12 — the icon's own surface
-        Raster.clipped(ctx, to: Raster.linearMask(size: size, from: CGPoint(x: 0, y: s),
-                                                  to: CGPoint(x: 0.78 * s, y: 0.18 * s),
-                                                  stops: [(0, 1), (1, 0)])) { inner in
-            inner.setFillColor(CGColor(gray: 1, alpha: 0.060))
-            inner.fill(full)
-        }
-
-        // 13 — rim light. Soft on purpose: iOS masks the icon with its own squircle, and a hard
-        // line drawn a few pixels from where that mask lands looks like a box someone drew.
-        let lit = edgeBand(size: size, depth: 16 * k, softness: 9 * k)
-        ctx.saveGState()
-        Raster.clipped(ctx, to: Raster.linearMask(size: size, from: CGPoint(x: 0, y: s), to: CGPoint(x: 0, y: 0.34 * s),
-                                                  stops: [(0, 1), (1, 0)])) { inner in
-            Raster.clipped(inner, to: lit) { band in
-                band.setFillColor(CGColor(gray: 1, alpha: 0.20))
-                band.fill(full)
-            }
-        }
-        Raster.clipped(ctx, to: Raster.linearMask(size: size, from: CGPoint(x: 0, y: 0.30 * s), to: CGPoint(x: 0, y: 0),
-                                                  stops: [(0, 0), (1, 1)])) { inner in
-            Raster.clipped(inner, to: edgeBand(size: size, depth: 13 * k, softness: 7 * k)) { band in
-                band.setFillColor(CGColor(gray: 0, alpha: 0.22))
-                band.fill(full)
-            }
-        }
-        ctx.restoreGState()
-
-        return Raster.image(ctx)
+        // Path space is y-up; image rows run top-down.
+        let bounds = logoPath.boundingBoxOfPath.insetBy(dx: -3, dy: -3).integral
+        let crop = CGRect(x: bounds.minX, y: Double(size) - bounds.maxY, width: bounds.width, height: bounds.height)
+            .intersection(CGRect(x: 0, y: 0, width: size, height: size))
+        return mark.cropping(to: crop) ?? mark
     }
 
     // MARK: Placing the mark

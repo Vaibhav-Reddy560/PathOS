@@ -5,15 +5,14 @@ nonisolated struct AmbientAlert: Identifiable, Equatable, Sendable {
     nonisolated enum Action: Hashable, Sendable {
         case requestLocation
         case openSettings
-        case startCommute
-        case showNow
-        case showRadar
         case pointTo(CompassTarget)
         case endGuidance
         case endJourney
         case endTrip
     }
 
+    /// Only things the alert itself can do. A button that just opened a deck screen read as an
+    /// action and did nothing of the kind, so alerts don't carry them.
     nonisolated struct Button: Hashable, Sendable {
         var title: String
         var symbol: String
@@ -35,6 +34,9 @@ nonisolated struct AmbientAlert: Identifiable, Equatable, Sendable {
     var detail: String
     var buttons: [Button] = []
     var isDismissible = true
+
+    /// The weather and where you are: always true, so never news. The deck shows both too.
+    var isBackground: Bool { id == "weather" || id == "idle" }
 }
 
 /// Plain values the alert rules read, so they can be tested without the app running.
@@ -73,11 +75,6 @@ nonisolated struct AlertSnapshot: Sendable {
         var isLate: Bool
     }
 
-    nonisolated struct Commute: Sendable {
-        var destinationName: String?
-        var minutes: Int?
-    }
-
     nonisolated struct Event: Sendable {
         var id: String
         var title: String
@@ -99,7 +96,6 @@ nonisolated struct AlertSnapshot: Sendable {
     var guidance: Guidance?
     var journey: Journey?
     var trip: Trip? = nil
-    var commute: Commute?
     var nextEvent: Event?
     var weather: Weather?
     var venueName: String
@@ -110,6 +106,12 @@ nonisolated struct AlertSnapshot: Sendable {
 nonisolated enum AmbientAlerts {
     /// Events starting this soon get an amber alert.
     static let eventSoonWindow: TimeInterval = 30 * 60
+
+    /// Nothing worth a glance: the island rests on PathOS's name, and the background alerts wait
+    /// in its expanded list until something takes the name's place.
+    static func isQuiet(_ alerts: [AmbientAlert]) -> Bool {
+        alerts.first?.isBackground ?? true
+    }
 
     static func prioritized(_ snapshot: AlertSnapshot, dismissed: Set<String> = []) -> [AmbientAlert] {
         var alerts: [AmbientAlert] = []
@@ -181,8 +183,7 @@ nonisolated enum AmbientAlerts {
                     compactText: event.title,
                     metric: event.start.formatted(date: .omitted, time: .shortened),
                     headline: event.title,
-                    detail: "Today at \(event.start.formatted(date: .omitted, time: .shortened)).",
-                    buttons: [AmbientAlert.Button(title: "Show Radar", symbol: "dot.radiowaves.left.and.right", action: .showRadar)]
+                    detail: "Today at \(event.start.formatted(date: .omitted, time: .shortened))."
                 ))
             }
         }
@@ -266,20 +267,6 @@ nonisolated enum AmbientAlerts {
             ))
         }
 
-        if let commute = snapshot.commute {
-            alerts.append(AmbientAlert(
-                id: "commute",
-                role: .you,
-                priority: 21,
-                symbol: "tram.fill",
-                compactText: commute.destinationName.map { "To \($0)" } ?? "Commute",
-                metric: commute.minutes.map { "\($0) min" },
-                headline: commute.destinationName.map { "Commute to \($0)" } ?? "Commute",
-                detail: commute.minutes.map { "About \($0) min door to door." } ?? "Route unavailable · cabs one tap away.",
-                buttons: [AmbientAlert.Button(title: "Details", symbol: "list.bullet", action: .showNow)]
-            ))
-        }
-
         // World: the ambient default.
         if let weather = snapshot.weather {
             alerts.append(AmbientAlert(
@@ -290,8 +277,7 @@ nonisolated enum AmbientAlerts {
                 compactText: weather.summary,
                 metric: "\(Int(weather.temperatureC.rounded()))°",
                 headline: "\(weather.summary), \(Int(weather.temperatureC.rounded()))°C",
-                detail: "\(weather.rainChanceNext2h)% chance of rain in the next 2 hours.",
-                buttons: [AmbientAlert.Button(title: "Environment", symbol: "cloud.sun", action: .showNow)]
+                detail: "\(weather.rainChanceNext2h)% chance of rain in the next 2 hours."
             ))
         }
 

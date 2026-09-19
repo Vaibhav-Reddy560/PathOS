@@ -31,33 +31,6 @@ protocol EventSource {
     func events(near location: CLLocation) async -> [LocalEvent]
 }
 
-/// Entertainment venues from Apple Maps. They're places, not events: India has no free events
-/// API, so real events come from your calendars, your mail, and what you scan or add.
-final class VenueEventSource: EventSource {
-    private let places: PlacesService
-
-    init(places: PlacesService) {
-        self.places = places
-    }
-
-    func events(near location: CLLocation) async -> [LocalEvent] {
-        let venues = (try? await places.browse(.culture, near: location, radius: 5_000)) ?? []
-        return venues.prefix(12).map { venue in
-            LocalEvent(
-                id: "venue:\(venue.id)",
-                title: venue.name,
-                subtitle: venue.categoryName,
-                start: nil,
-                latitude: venue.latitude,
-                longitude: venue.longitude,
-                distanceMeters: venue.distanceMeters,
-                source: .venue,
-                symbol: venue.symbol
-            )
-        }
-    }
-}
-
 /// Upcoming events captured from posters with Snap-to-Action.
 final class ScannedEventSource: EventSource {
     private let context: ModelContext

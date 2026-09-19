@@ -67,3 +67,48 @@ extension View {
             .foregroundStyle(Color.ice)
     }
 }
+
+/// A start and end time stacked in a column: "11:15 AM" over "to 12:10 PM". The "to" says which
+/// is which, and the column is wide enough, at any text size, that neither wraps.
+struct TimeSpan: View {
+    var start: String
+    var end: String?
+    var isDone = false
+
+    @ScaledMetric(relativeTo: .subheadline) private var width: CGFloat = 80
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(start)
+                .font(.subheadline.weight(.semibold).monospacedDigit())
+                .foregroundStyle(isDone ? .mist : .ice)
+            if let end {
+                Text("to \(end)")
+                    .font(.caption.monospacedDigit())
+                    .foregroundStyle(.mist)
+            }
+        }
+        .lineLimit(1)
+        .minimumScaleFactor(0.8)
+        .frame(width: width, alignment: .leading)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(end.map { "\(start) to \($0)" } ?? start)
+    }
+}
+
+/// An icon and a one-line title, filling its button. Built outside the main actor, as the photo
+/// picker asks for its label there.
+nonisolated struct OneLineButtonLabel: View {
+    var title: String
+    var symbol: String
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Image(systemName: symbol)
+            Text(title)
+                .lineLimit(1)
+        }
+        .font(.body.weight(.semibold))
+        .frame(maxWidth: .infinity, minHeight: 36)
+    }
+}

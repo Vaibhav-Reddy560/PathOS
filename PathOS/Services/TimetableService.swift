@@ -8,6 +8,8 @@ import UIKit
 @Observable
 final class TimetableService {
     private(set) var lastImportSummary: String?
+    /// Subjects the last import found in the same slot, of which you take one.
+    private(set) var electives: [[String]] = []
 
     @ObservationIgnored private let context: ModelContext
     @ObservationIgnored private let ai: AIClient
@@ -72,10 +74,19 @@ final class TimetableService {
 
     /// Reads a timetable out of pasted text. Returns what it found; nothing is saved until `replaceAll`.
     func readTimetable(from text: String) async -> [TimetableEntry] {
+        electives = []
+        // A table copied from a spreadsheet or a document, or a list as timetables arrive in
+        // messages, reads exactly without the model.
+        if let reading = TimetableGrid(delimitedText: text)?.reading() {
+            return accept(reading, from: "the table")
+        }
+        if let reading = TimetableList.reading(from: text) {
+            return accept(reading, from: "the list")
+        }
         guard ai.isAvailable, let rows = try? await ai.extractTimetable(from: text) else {
             lastImportSummary = ai.isAvailable
                 ? "Couldn't read that as a timetable. Try a clearer photo, or add classes by hand."
-                : "Apple Intelligence is off, so PathOS can't read timetables. Add classes by hand."
+                : "Apple Intelligence is off, so PathOS can only read timetables laid out as a table. Add classes by hand."
             return []
         }
 
@@ -86,12 +97,33 @@ final class TimetableService {
         return entries
     }
 
+    /// A photo of a timetable is almost always a grid, so it's read as a table first: which class
+    /// sits under which day and time. Only a photo with no table in it falls back to its text.
     func readTimetable(from image: UIImage) async -> [TimetableEntry] {
+        electives = []
+        if let grids = try? await TableReader.tables(in: image) {
+            let teachers = grids.reduce(into: [String: String]()) { found, grid in
+                found.merge(FacultyTable.teachers(in: grid)) { first, _ in first }
+            }
+            if let reading = grids.compactMap({ $0.reading() }).max(by: { $0.classes.count < $1.classes.count }) {
+                return accept(FacultyTable.apply(teachers, to: reading), from: "the photo's table")
+            }
+        }
         guard let ocr = try? await OCRParser.recognizeText(in: image), !ocr.isEmpty else {
             lastImportSummary = "No readable text in that image."
             return []
         }
         return await readTimetable(from: ocr.fullText)
+    }
+
+    private func accept(_ reading: TimetableReading, from source: String) -> [TimetableEntry] {
+        electives = reading.electives
+        let entries = reading.classes.map { item in
+            TimetableEntry(subject: item.subject, weekday: item.weekday, startMinutes: item.start,
+                           endMinutes: item.end, room: item.room, teacher: item.teacher)
+        }
+        lastImportSummary = "Read \(entries.count) classes across \(Set(entries.map(\.weekday)).count) days from \(source). Check them before saving."
+        return entries
     }
 
     private static func entry(from row: TimetableRow) -> TimetableEntry? {

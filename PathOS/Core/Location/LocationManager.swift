@@ -14,6 +14,8 @@ final class LocationManager: NSObject {
     @ObservationIgnored private var updatesTask: Task<Void, Never>?
     @ObservationIgnored private var backgroundSession: CLBackgroundActivitySession?
     @ObservationIgnored private var headingClients = 0
+    /// Called when a move of a few hundred metres wakes PathOS; see `setSignificantChangesActive`.
+    @ObservationIgnored var onSignificantChange: ((CLLocation) -> Void)?
 
     override init() {
         super.init()
@@ -64,6 +66,18 @@ final class LocationManager: NSObject {
         } else {
             backgroundSession?.invalidate()
             backgroundSession = nil
+        }
+    }
+
+    /// Wakes PathOS, even after it has been closed, each time you've moved a few hundred metres.
+    /// Cheap enough to leave on all day, unlike live updates; needs Always access to work in the
+    /// background.
+    func setSignificantChangesActive(_ active: Bool) {
+        guard CLLocationManager.significantLocationChangeMonitoringAvailable() else { return }
+        if active {
+            manager.startMonitoringSignificantLocationChanges()
+        } else {
+            manager.stopMonitoringSignificantLocationChanges()
         }
     }
 
@@ -118,6 +132,17 @@ extension LocationManager: CLLocationManagerDelegate {
         MainActor.assumeIsolated {
             self.headingDegrees = heading
             self.headingAccuracy = accuracy
+        }
+    }
+
+    /// Only significant changes arrive here; live updates come through `CLLocationUpdate`.
+    nonisolated func locationManager(_ manager: CLLocationManager, didUpdateLocations locations: [CLLocation]) {
+        guard let latest = locations.last else { return }
+        MainActor.assumeIsolated {
+            if self.location.map({ latest.timestamp > $0.timestamp }) ?? true {
+                self.location = latest
+            }
+            self.onSignificantChange?(latest)
         }
     }
 

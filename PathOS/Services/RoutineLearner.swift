@@ -66,9 +66,9 @@ final class RoutineLearner {
                 hour: reminder.hour,
                 minute: reminder.minute,
                 title: "Heading out soon?",
-                body: "You usually leave around \(Self.format(minutes: departure)). Tap for walking time, metro and cabs.",
+                body: "You usually leave around \(Self.format(minutes: departure)). Tap for travel time, the nearest metro and cabs.",
                 category: NotificationService.Category.commute,
-                link: URL(string: "pathos://commute/start")
+                link: URL(string: "pathos://commute")
             )
         }
     }

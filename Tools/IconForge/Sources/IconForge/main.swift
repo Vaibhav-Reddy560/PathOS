@@ -24,6 +24,10 @@ let paletteURL = argument("palette").map { URL(fileURLWithPath: $0) }
 let outputURL = argument("out").map { URL(fileURLWithPath: $0) }
     ?? root.appendingPathComponent("PathOS/Resources/Assets.xcassets/AppIcon.appiconset/AppIcon.png")
 let previewsURL = argument("previews").map { URL(fileURLWithPath: $0) }
+// The launch screen's mark follows the app icon. A trial render with --out leaves it alone,
+// unless --launch says where to put one.
+let launchURL = argument("launch").map { URL(fileURLWithPath: $0) }
+    ?? (argument("out") == nil ? root.appendingPathComponent("PathOS/Resources/Assets.xcassets/LaunchMark.imageset") : nil)
 
 var settings = IconRenderer.Settings()
 if let size = argument("size").flatMap(Int.init) { settings.size = size }
@@ -56,6 +60,13 @@ do {
     let icon = IconRenderer.render(logo: logo, palette: palette, settings: settings)
     try Raster.writePNG(icon, to: outputURL)
     print("icon    \(settings.size)px -> \(outputURL.path)")
+
+    if let launchURL {
+        let mark = IconRenderer.renderMark(logo: logo, palette: palette, settings: settings)
+        try LaunchMark.write(mark, toImageSet: launchURL)
+        let points = LaunchMark.points(for: mark)
+        print("launch  \(points.width)x\(points.height)pt @2x/@3x -> \(launchURL.path)")
+    }
 
     // Home-screen sizes, so the mark can be checked where it actually gets looked at.
     if let previewsURL {

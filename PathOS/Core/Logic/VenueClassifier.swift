@@ -38,7 +38,7 @@ nonisolated enum VenueKind: String, Codable, CaseIterable, Sendable {
     }
 }
 
-nonisolated enum POIGroup: String, Sendable {
+nonisolated enum POIGroup: String, Codable, Sendable {
     case transit
     case shopping
     case dining

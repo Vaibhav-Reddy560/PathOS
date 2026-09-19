@@ -109,19 +109,7 @@ final class CalendarEventSource: EventSource {
         guard Self.isEnabled else { return [] }
         let now = Date()
         let predicate = eventKit.predicateForEvents(withStart: now.addingTimeInterval(-6 * 3_600), end: now.addingTimeInterval(CalendarEvents.horizon), calendars: nil)
-        let items = eventKit.events(matching: predicate).map { event in
-            CalendarItem(
-                id: event.eventIdentifier ?? UUID().uuidString,
-                title: event.title ?? "Event",
-                start: event.startDate,
-                end: event.endDate,
-                isAllDay: event.isAllDay,
-                location: event.location,
-                calendarName: event.calendar?.title ?? "Calendar",
-                latitude: event.structuredLocation?.geoLocation?.coordinate.latitude,
-                longitude: event.structuredLocation?.geoLocation?.coordinate.longitude
-            )
-        }
+        let items = eventKit.events(matching: predicate).map(Self.item(from:))
         let mirrored = Set(store.all().compactMap(\.calendarEventID))
         var result: [LocalEvent] = []
         for item in CalendarEvents.select(items, mirroredIDs: mirrored, now: now).prefix(20) {
@@ -134,6 +122,34 @@ final class CalendarEventSource: EventSource {
             result.append(CalendarEvents.localEvent(item, coordinate: coordinate, from: location))
         }
         return result
+    }
+
+    static func item(from event: EKEvent) -> CalendarItem {
+        CalendarItem(
+            id: event.eventIdentifier ?? UUID().uuidString,
+            title: event.title ?? "Event",
+            start: event.startDate,
+            end: event.endDate,
+            isAllDay: event.isAllDay,
+            location: event.location,
+            calendarName: event.calendar?.title ?? "Calendar",
+            latitude: event.structuredLocation?.geoLocation?.coordinate.latitude,
+            longitude: event.structuredLocation?.geoLocation?.coordinate.longitude
+        )
+    }
+
+    private static let reader = EKEventStore()
+
+    /// Your Apple Calendar's events between two dates, less the ones PathOS put there itself, for
+    /// Day. Online meetings belong here rather than on the map. Empty until calendars are turned
+    /// on in Settings.
+    static func items(from start: Date, to end: Date, excluding mirrored: Set<String>) -> [CalendarItem] {
+        guard isEnabled, start < end else { return [] }
+        let predicate = reader.predicateForEvents(withStart: start, end: end, calendars: nil)
+        return reader.events(matching: predicate)
+            .map(item(from:))
+            .filter { !mirrored.contains($0.id) }
+            .sorted { $0.start < $1.start }
     }
 
     /// Asks for full calendar access. PathOS already writes to your calendar; reading it is new.

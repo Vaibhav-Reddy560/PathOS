@@ -1,3 +1,4 @@
+import CoreLocation
 import Foundation
 import Testing
 @testable import PathOS
@@ -97,5 +98,25 @@ struct MetroRouterTests {
         }
         #expect(tomorrow == date(weekday: 4, hour: 5))
         #expect(MetroSchedule.headway(for: purple, at: date(weekday: 2, hour: 9), calendar: calendar) == 8)
+    }
+
+    // MARK: Stations near you
+
+    @Test func theNearestStationsShowEvenWhenNoneIsAWalkAway() {
+        // Hebbal, over five kilometres from the nearest platform.
+        let stations = MetroNetwork.nearbyStations(to: .init(latitude: 13.0358, longitude: 77.5970))
+        #expect(stations.map(\.station.name) == ["Sandal Soap Factory", "Yeshwanthpur", "Srirampura"])
+        #expect(stations[0].distance > 5_000)
+    }
+
+    @Test func everyStationInWalkingDistanceIsListedOnce() {
+        // Majestic is on two lines; it's listed once, and the Railway Station is a walk away too.
+        let stations = MetroNetwork.nearbyStations(to: .init(latitude: 12.9757, longitude: 77.5728), atLeast: 1)
+        #expect(stations.map(\.station.name) == [majestic, "Krantivira Sangolli Rayanna Railway Station"])
+        #expect(Set(MetroNetwork.nearbyStations(to: .init(latitude: 12.9757, longitude: 77.5728)).map(\.station.name)).count == 3)
+    }
+
+    @Test func anotherCityHasNoStations() {
+        #expect(MetroNetwork.nearbyStations(to: .init(latitude: 28.6139, longitude: 77.2090)).isEmpty)
     }
 }

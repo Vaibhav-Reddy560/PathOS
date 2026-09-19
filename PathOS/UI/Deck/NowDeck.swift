@@ -1,13 +1,13 @@
 import SwiftData
 import SwiftUI
 
-/// Now: where you are, the environment around you, and your commute.
+/// Now: where you are, the environment around you, and getting around.
 struct NowDeck: View {
     @Environment(AppState.self) private var state
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @Query private var savedPlaces: [SavedPlace]
 
-    @State private var isStartingCommute = false
+    @State private var isTogglingPin = false
 
     var body: some View {
         ScrollView {
@@ -33,6 +33,9 @@ struct NowDeck: View {
             .padding(.bottom, 32)
         }
         .scrollIndicators(.hidden)
+        .task {
+            await state.refreshCommute()
+        }
     }
 
     // MARK: Sections
@@ -95,27 +98,53 @@ struct NowDeck: View {
                             .font(.subheadline)
                             .foregroundStyle(.mist)
                     }
+                    if state.isContextPinned {
+                        Label("On your Lock Screen", systemImage: "lock.fill")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(.aurora)
+                            .padding(.top, 2)
+                    }
                 }
                 Spacer(minLength: 0)
-                Button {
-                    Task {
-                        let shown = await state.liveActivities.show(state.context.venueActivityState())
-                        if shown {
-                            state.showToast("Context pinned to your Lock Screen")
-                        } else {
-                            state.showToast("Live Activities are off for PathOS", role: .attention, symbol: "exclamationmark.circle.fill")
-                        }
-                    }
-                } label: {
-                    Image(systemName: "rectangle.badge.plus")
-                        .font(.system(size: 16, weight: .semibold))
-                        .frame(width: 44, height: 44)
-                        .contentShape(.circle)
-                }
-                .pathSecondaryAction()
-                .buttonBorderShape(.circle)
-                .accessibilityLabel("Show context on Lock Screen")
+                pinButton
             }
+        }
+    }
+
+    /// Pins the context to the Lock Screen, and unpins it again. Green while it's pinned.
+    @ViewBuilder
+    private var pinButton: some View {
+        let isPinned = state.isContextPinned
+        let button = Button {
+            Task { await togglePin() }
+        } label: {
+            Image(systemName: isPinned ? "pin.fill" : "pin")
+                .font(.system(size: 16, weight: .semibold))
+                .frame(width: 44, height: 44)
+                .contentShape(.circle)
+        }
+        .buttonBorderShape(.circle)
+        .disabled(isTogglingPin)
+        .accessibilityLabel(isPinned ? "Unpin from Lock Screen" : "Pin to Lock Screen")
+        .accessibilityHint(isPinned ? "Takes PathOS off the Lock Screen" : "Keeps rain warnings, your next class or event, and directions on the Lock Screen")
+
+        if isPinned {
+            button.pathPrimaryAction()
+        } else {
+            button.pathSecondaryAction()
+        }
+    }
+
+    private func togglePin() async {
+        isTogglingPin = true
+        defer { isTogglingPin = false }
+        if state.isContextPinned {
+            await state.unpinContext()
+            state.showToast("Unpinned from your Lock Screen", symbol: "pin.slash.fill")
+        } else if await state.pinContext() {
+            state.showToast("Pinned to your Lock Screen", symbol: "pin.fill")
+        } else {
+            state.showToast("Live Activities are off for PathOS", role: .attention, symbol: "exclamationmark.circle.fill")
         }
     }
 
@@ -170,65 +199,35 @@ struct NowDeck: View {
         }
     }
 
+    /// Travel times and the nearest metro, one way to plan a ride, and cabs. There used to be a
+    /// Start commute button beside the planner: it put these same times on the Lock Screen, read as
+    /// a second way to travel, and had no end. Pinning the context does its job now.
     private var commuteSection: some View {
         VStack(alignment: .leading, spacing: 10) {
             DeckSectionHeader(
-                title: "Commute",
-                trailing: state.routine.todaysDeparture().map { "Usually \(RoutineLearner.format(minutes: $0))" }
+                title: "Getting around",
+                trailing: state.routine.todaysDeparture().map { "You usually leave \(RoutineLearner.format(minutes: $0))" }
             )
             ContentTile {
                 VStack(alignment: .leading, spacing: 14) {
-                    if let commute = state.commute {
-                        if let name = commute.destinationName {
-                            Text("To \(name)")
-                                .font(.headline)
-                                .foregroundStyle(.ice)
-                        }
-                        VStack(alignment: .leading, spacing: 10) {
-                            if let transit = commute.transitMinutes {
-                                CommuteLine(symbol: "tram.fill", value: "\(transit)", unit: "min", text: "by transit")
-                            }
-                            if let walk = commute.walkMinutes {
-                                CommuteLine(symbol: "figure.walk", value: "\(walk)", unit: "min", text: "walk")
-                            }
-                            if let station = commute.stationName {
-                                CommuteLine(symbol: "tram.circle", value: "\(commute.stationWalkMinutes ?? 0)", unit: "min", text: "to \(station)")
-                            }
-                        }
-                    } else {
-                        Text(state.routine.loggedDepartures < RoutineModel.minimumSamples
-                             ? "PathOS learns when you leave home. Reminders start after a few departures."
-                             : "Start your commute for live ETAs, the nearest metro and cabs on your Lock Screen.")
-                            .font(.subheadline)
-                            .foregroundStyle(.mist)
-                    }
-
-                    Button {
-                        Task {
-                            isStartingCommute = true
-                            let shown = await state.startCommute()
-                            isStartingCommute = false
-                            if !shown {
-                                state.showToast("Couldn't start the commute. Check location and Live Activities.", role: .attention, symbol: "exclamationmark.circle.fill")
-                            }
-                        }
-                    } label: {
-                        Label(isStartingCommute ? "Working…" : "Start commute", systemImage: "arrow.triangle.turn.up.right.diamond.fill")
-                            .font(.headline)
-                            .frame(maxWidth: .infinity, minHeight: 36)
-                    }
-                    .pathPrimaryAction()
-                    .disabled(isStartingCommute)
+                    travelTimes
 
                     if state.transit.journey == nil {
-                        Button {
-                            state.planJourney(from: nil)
-                        } label: {
-                            Label("Plan a metro or bus journey", systemImage: "tram.fill")
-                                .font(.subheadline.weight(.semibold))
-                                .frame(maxWidth: .infinity, minHeight: 32)
+                        VStack(alignment: .leading, spacing: 8) {
+                            Button {
+                                state.planJourney(from: nil)
+                            } label: {
+                                Label("Plan a metro or bus journey", systemImage: "tram.fill")
+                                    .font(.headline)
+                                    .lineLimit(1)
+                                    .minimumScaleFactor(0.8)
+                                    .frame(maxWidth: .infinity, minHeight: 36)
+                            }
+                            .pathPrimaryAction()
+                            Text("Stop by stop on your Lock Screen, with a nudge before you change or get off.")
+                                .font(.caption)
+                                .foregroundStyle(.mist)
                         }
-                        .pathSecondaryAction()
                     }
 
                     HStack(spacing: 8) {
@@ -238,6 +237,7 @@ struct NowDeck: View {
                             } label: {
                                 Label(provider.name, systemImage: provider.symbol)
                                     .font(.caption.weight(.semibold))
+                                    .lineLimit(1)
                                     .frame(maxWidth: .infinity, minHeight: 28)
                             }
                             .pathSecondaryAction()
@@ -245,6 +245,37 @@ struct NowDeck: View {
                     }
                 }
             }
+        }
+    }
+
+    @ViewBuilder
+    private var travelTimes: some View {
+        if let commute = state.commute {
+            VStack(alignment: .leading, spacing: 10) {
+                if let name = commute.destinationName {
+                    Text("To \(name)")
+                        .font(.headline)
+                        .foregroundStyle(.ice)
+                }
+                if let transit = commute.transitMinutes {
+                    CommuteLine(symbol: "tram.fill", value: "\(transit)", unit: "min", text: "by transit")
+                }
+                if let walk = commute.walkMinutes {
+                    CommuteLine(symbol: "figure.walk", value: "\(walk)", unit: "min", text: "walk")
+                }
+                if let station = commute.stationName, let distance = commute.stationDistanceMeters {
+                    // Past a couple of kilometres nobody walks it, so it's the distance that helps.
+                    if distance > 2_000 {
+                        CommuteLine(symbol: "tram.circle", value: String(format: "%.1f", distance / 1_000), unit: "km", text: "to \(station) metro")
+                    } else {
+                        CommuteLine(symbol: "tram.circle", value: "\(commute.stationWalkMinutes ?? 1)", unit: "min", text: "walk to \(station) metro")
+                    }
+                }
+            }
+        } else {
+            Text(hasHomeAndWork ? "Working out travel times…" : "Set Home and Work below for travel times between them.")
+                .font(.subheadline)
+                .foregroundStyle(.mist)
         }
     }
 

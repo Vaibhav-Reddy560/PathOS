@@ -1,5 +1,6 @@
 import CoreGraphics
 import Foundation
+import ImageIO
 import Testing
 @testable import IconForgeCore
 
@@ -195,5 +196,53 @@ struct IconRendererTests {
             return (0..<(96 * 96 * 4)).map { data[$0] }
         }
         #expect(bytes() == bytes())
+    }
+}
+
+/// The launch screen shows the mark alone, with no tile behind it.
+struct LaunchMarkTests {
+    private func alpha(_ image: CGImage, x: Int, y: Int) -> UInt8 {
+        let ctx = CGContext(data: nil, width: image.width, height: image.height, bitsPerComponent: 8,
+                            bytesPerRow: image.width * 4, space: Raster.colorSpace,
+                            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
+        ctx.draw(image, in: CGRect(x: 0, y: 0, width: image.width, height: image.height))
+        let pixels = ctx.data!.bindMemory(to: UInt8.self, capacity: image.width * image.height * 4)
+        return pixels[(y * image.width + x) * 4 + 3]
+    }
+
+    private func renderedMark() throws -> CGImage {
+        let logo = try SVGParser.parse(contentsOf: repoRoot().appendingPathComponent("PathOS_Logo.svg"))
+        let palette = try Palette(contentsOf: repoRoot().appendingPathComponent("Shared/PathOSPalette.swift"))
+        var settings = IconRenderer.Settings()
+        settings.size = 512
+        return IconRenderer.renderMark(logo: logo, palette: palette, settings: settings)
+    }
+
+    @Test func theMarkStandsAloneWithNoTile() throws {
+        let mark = try renderedMark()
+        // Cropped to the logo, so it has the logo's proportions rather than the icon's square.
+        let logo = try SVGParser.parse(contentsOf: repoRoot().appendingPathComponent("PathOS_Logo.svg"))
+        let aspect = Double(mark.width) / Double(mark.height)
+        #expect(abs(aspect - logo.bounds.width / logo.bounds.height) < 0.03)
+        // Every corner is empty: there is no ground, tile or shadow behind the figure.
+        for (x, y) in [(0, 0), (mark.width - 1, 0), (0, mark.height - 1), (mark.width - 1, mark.height - 1)] {
+            #expect(alpha(mark, x: x, y: y) == 0)
+        }
+        // And somewhere in it, the figure is solid.
+        let solid = (0..<mark.height).contains { y in
+            (0..<mark.width).contains { x in alpha(mark, x: x, y: y) == 255 }
+        }
+        #expect(solid)
+    }
+
+    @Test func theImageSetKeepsItsAlpha() throws {
+        let mark = try renderedMark()
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent("launch-\(UUID().uuidString)")
+        try LaunchMark.write(mark, toImageSet: folder)
+        let source = CGImageSourceCreateWithURL(folder.appendingPathComponent("LaunchMark@3x.png") as CFURL, nil)!
+        let image = CGImageSourceCreateImageAtIndex(source, 0, nil)!
+        #expect(image.width == LaunchMark.widthPoints * 3)
+        #expect(image.alphaInfo != .none && image.alphaInfo != .noneSkipLast)
+        #expect(FileManager.default.fileExists(atPath: folder.appendingPathComponent("Contents.json").path))
     }
 }

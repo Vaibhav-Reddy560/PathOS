@@ -15,30 +15,27 @@ struct DayDeck: View {
 
     @State private var day = Calendar.current.startOfDay(for: Date())
     @State private var now = Date()
+    /// A day in detail, or the month around it at a glance.
+    @AppStorage("pathos.dayViewMode") private var mode: DayViewMode = .day
+    /// Any day of the month the calendar shows.
+    @State private var month = MonthGrid.month(0, from: Date())
+    /// Your Apple Calendar's own events for the days on screen.
+    @State private var calendarItems: [CalendarItem] = []
 
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 20) {
-                dayPicker
-                if let trip = tripForDay {
-                    tripBanner(trip)
+                Picker("View", selection: $mode) {
+                    ForEach(DayViewMode.allCases) { mode in
+                        Text(mode.title).tag(mode)
+                    }
                 }
-                summary
-                if isPast || (isToday && !daySummary.isEmpty) {
-                    Text(daySummary.sentence)
-                        .font(.subheadline)
-                        .foregroundStyle(.mist)
-                        .padding(.horizontal, 4)
-                        .accessibilityLabel("Day summary: \(daySummary.sentence)")
+                .pickerStyle(.segmented)
+
+                switch mode {
+                case .day: dayView
+                case .month: monthView
                 }
-                if isToday, let next = nextItem {
-                    nextUp(next)
-                }
-                if isToday {
-                    MailInbox()
-                }
-                schedule
-                actions
             }
             .padding(.horizontal, 20)
             .padding(.bottom, 32)
@@ -51,6 +48,60 @@ struct DayDeck: View {
                 try? await Task.sleep(for: .seconds(30))
             }
         }
+        .task(id: shownRange) {
+            calendarItems = CalendarEventSource.items(
+                from: shownRange.lowerBound,
+                to: shownRange.upperBound,
+                excluding: Set(allEvents.compactMap(\.calendarEventID))
+            )
+        }
+        .onChange(of: mode) { _, mode in
+            if mode == .month { month = MonthGrid.month(0, from: day) }
+        }
+    }
+
+    // MARK: Views
+
+    @ViewBuilder
+    private var dayView: some View {
+        dayPicker
+        if let trip = tripForDay {
+            tripBanner(trip)
+        }
+        summary
+        if isPast || (isToday && !daySummary.isEmpty) {
+            Text(daySummary.sentence)
+                .font(.subheadline)
+                .foregroundStyle(.mist)
+                .padding(.horizontal, 4)
+                .accessibilityLabel("Day summary: \(daySummary.sentence)")
+        }
+        if isToday, let next = nextItem {
+            nextUp(next)
+        }
+        if isToday {
+            MailInbox()
+        }
+        schedule(title: isPast ? "What happened" : "Schedule")
+        actions
+    }
+
+    @ViewBuilder
+    private var monthView: some View {
+        MonthCalendar(month: $month, selected: $day) { date in
+            items(on: date).prefix(3).map(\.role)
+        }
+
+        schedule(title: day.formatted(.dateTime.weekday(.wide).day().month(.wide)))
+
+        Button {
+            withAnimation(PathMotion.control) { mode = .day }
+        } label: {
+            Label("Open this day", systemImage: "list.bullet.below.rectangle")
+                .font(.subheadline.weight(.semibold))
+                .frame(maxWidth: .infinity, minHeight: 32)
+        }
+        .pathSecondaryAction()
     }
 
     // MARK: Sections
@@ -127,7 +178,7 @@ struct DayDeck: View {
                     unit: distance > 0 && parts.count > 1 ? String(parts[1]) : nil,
                     role: .you
                 )
-                MetricView(label: "Events", value: "\(events.count)", role: .world)
+                MetricView(label: "Events", value: "\(events.count + calendarItems(on: day).count)", role: .world)
                 MetricView(label: "Saved here", value: "\(memoriesSaved)", role: .you)
                 Spacer(minLength: 0)
             }
@@ -176,10 +227,9 @@ struct DayDeck: View {
         }
     }
 
-    @ViewBuilder
-    private var schedule: some View {
+    private func schedule(title: String) -> some View {
         VStack(alignment: .leading, spacing: 10) {
-            DeckSectionHeader(title: isPast ? "What happened" : "Schedule", trailing: items.isEmpty ? nil : "\(items.count)")
+            DeckSectionHeader(title: title, trailing: items.isEmpty ? nil : "\(items.count)")
             if isDayOff {
                 EmptyState(symbol: "figure.walk.motion", title: "No classes today", message: "You marked this day off. Events still show here.", role: .you)
             } else if items.isEmpty {
@@ -218,50 +268,53 @@ struct DayDeck: View {
             }
             .pathSecondaryAction()
 
-            HStack(spacing: 10) {
+            // Two to a row, each label on one line; stacked when the text is too large for that.
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: 10) { tripAndTimetableButtons }
+                VStack(spacing: 10) { tripAndTimetableButtons }
+            }
+
+            if !timetableEntries.isEmpty {
                 Button {
-                    state.isTripsPresented = true
+                    state.timetable.setDayOff(day, isOff: !isDayOff)
                 } label: {
-                    Label(trips.isEmpty ? "Plan a trip" : "Trips", systemImage: "suitcase.rolling")
-                        .font(.subheadline.weight(.semibold))
-                        .frame(maxWidth: .infinity, minHeight: 32)
+                    OneLineButtonLabel(title: isDayOff ? "Classes are on today" : "No classes today",
+                                       symbol: isDayOff ? "arrow.uturn.backward" : "xmark.circle")
                 }
                 .pathSecondaryAction()
-
-                Button {
-                    state.isTimetablePresented = true
-                } label: {
-                    Label(timetableEntries.isEmpty ? "Add timetable" : "Timetable", systemImage: "graduationcap")
-                        .font(.subheadline.weight(.semibold))
-                        .frame(maxWidth: .infinity, minHeight: 32)
-                }
-                .pathSecondaryAction()
-
-                if !timetableEntries.isEmpty {
-                    Button {
-                        state.timetable.setDayOff(day, isOff: !isDayOff)
-                    } label: {
-                        Label(isDayOff ? "Classes are on" : "No classes today", systemImage: isDayOff ? "arrow.uturn.backward" : "xmark.circle")
-                            .font(.subheadline.weight(.semibold))
-                            .frame(maxWidth: .infinity, minHeight: 32)
-                    }
-                    .pathSecondaryAction()
-                }
             }
         }
     }
 
+    @ViewBuilder
+    private var tripAndTimetableButtons: some View {
+        Button {
+            state.isTripsPresented = true
+        } label: {
+            OneLineButtonLabel(title: trips.isEmpty ? "Plan a trip" : "Trips", symbol: "suitcase.rolling")
+        }
+        .pathSecondaryAction()
+
+        Button {
+            state.isTimetablePresented = true
+        } label: {
+            OneLineButtonLabel(title: timetableEntries.isEmpty ? "Add timetable" : "Timetable", symbol: "graduationcap")
+        }
+        .pathSecondaryAction()
+    }
+
     // MARK: Data
 
-    private var plannedEvents: [PlannedEvent] {
-        DayPlan.events(allEvents.map(EventStore.plannedEvent), on: day)
+    private var events: [PathEvent] { events(on: day) }
+    private var classSessions: [ClassSession] { classSessions(on: day) }
+    private var legs: [TripLeg] { legs(on: day) }
+    private var items: [DayItem] { items(on: day) }
+
+    private func events(on day: Date) -> [PathEvent] {
+        DayPlan.events(allEvents.map(EventStore.plannedEvent), on: day).compactMap { event(for: $0.id) }
     }
 
-    private var events: [PathEvent] {
-        plannedEvents.compactMap { event(for: $0.id) }
-    }
-
-    private var classSessions: [ClassSession] {
+    private func classSessions(on day: Date) -> [ClassSession] {
         TimetableRoutine.sessions(
             slots: timetableEntries.map(TimetableService.slot),
             skips: timetableExceptions.map(TimetableService.skip),
@@ -269,16 +322,30 @@ struct DayDeck: View {
         )
     }
 
-    private var legs: [TripLeg] {
+    private func legs(on day: Date) -> [TripLeg] {
         let planned = TripPlan.legs(trips.flatMap { $0.legs }.map(TripStore.plannedLeg), on: day)
         let byID = Dictionary(uniqueKeysWithValues: trips.flatMap { $0.legs }.map { ($0.id, $0) })
         return planned.compactMap { byID[$0.id] }
     }
 
-    /// Everything happening on this day — legs, classes and events — earliest first.
-    private var items: [DayItem] {
-        (events.map(DayItem.event) + classSessions.map(DayItem.classSession) + legs.map(DayItem.leg))
+    private func calendarItems(on day: Date) -> [CalendarItem] {
+        guard let interval = Calendar.current.dateInterval(of: .day, for: day) else { return [] }
+        return calendarItems.filter { $0.start < interval.end && ($0.end > interval.start || $0.start >= interval.start) }
+    }
+
+    /// Everything happening on a day — legs, classes, events and your calendar's own — earliest first.
+    private func items(on day: Date) -> [DayItem] {
+        (events(on: day).map(DayItem.event) + classSessions(on: day).map(DayItem.classSession)
+            + legs(on: day).map(DayItem.leg) + calendarItems(on: day).map(DayItem.calendar))
             .sorted { $0.start < $1.start }
+    }
+
+    /// The days on screen, whose calendar events are read: the month's grid, or the one day.
+    private var shownRange: Range<Date> {
+        let days = mode == .month ? MonthGrid.days(around: month) : [day]
+        let start = days.first ?? day
+        let end = Calendar.current.date(byAdding: .day, value: 1, to: days.last ?? day) ?? day
+        return start..<end
     }
 
     private var tripForDay: Trip? {
@@ -288,7 +355,7 @@ struct DayDeck: View {
     private var daySummary: DaySummary {
         DaySummary(
             distanceMeters: dayLog?.distanceMeters ?? 0,
-            eventCount: events.count,
+            eventCount: events.count + calendarItems(on: day).count,
             classCount: classSessions.count,
             legCount: legs.count,
             memoryCount: memoriesSaved,
@@ -339,12 +406,15 @@ enum DayItem: Identifiable {
     case event(PathEvent)
     case classSession(ClassSession)
     case leg(TripLeg)
+    /// From your Apple Calendar, which PathOS reads but doesn't own.
+    case calendar(CalendarItem)
 
     var id: String {
         switch self {
         case .event(let event): "event:\(event.id.uuidString)"
         case .classSession(let session): "class:\(session.id)"
         case .leg(let leg): "leg:\(leg.id.uuidString)"
+        case .calendar(let item): "calendar:\(item.id)"
         }
     }
 
@@ -353,6 +423,7 @@ enum DayItem: Identifiable {
         case .event(let event): event.title
         case .classSession(let session): session.subject
         case .leg(let leg): "\(leg.mode.label) to \(leg.destination)"
+        case .calendar(let item): item.title
         }
     }
 
@@ -361,6 +432,7 @@ enum DayItem: Identifiable {
         case .event(let event): event.start
         case .classSession(let session): session.start
         case .leg(let leg): leg.departure
+        case .calendar(let item): item.start
         }
     }
 
@@ -369,12 +441,16 @@ enum DayItem: Identifiable {
         case .event(let event): event.end
         case .classSession(let session): session.end
         case .leg(let leg): TripStore.plannedLeg(leg).arrivalEstimate() ?? leg.departure.addingTimeInterval(3_600)
+        case .calendar(let item): item.end
         }
     }
 
     var isAllDay: Bool {
-        if case .event(let event) = self { return event.isAllDay }
-        return false
+        switch self {
+        case .event(let event): event.isAllDay
+        case .calendar(let item): item.isAllDay
+        default: false
+        }
     }
 
     var placeName: String? {
@@ -382,6 +458,7 @@ enum DayItem: Identifiable {
         case .event(let event): event.placeName
         case .classSession(let session): session.room
         case .leg(let leg): "from \(leg.origin)"
+        case .calendar(let item): item.location?.split(separator: "\n").first.map(String.init)
         }
     }
 
@@ -390,6 +467,12 @@ enum DayItem: Identifiable {
         case .event(let event): event.coordinate
         case .classSession: nil
         case .leg(let leg): leg.destinationCoordinate
+        case .calendar(let item):
+            if let latitude = item.latitude, let longitude = item.longitude {
+                CLLocationCoordinate2D(latitude: latitude, longitude: longitude)
+            } else {
+                nil
+            }
         }
     }
 
@@ -398,6 +481,7 @@ enum DayItem: Identifiable {
         case .event(let event): event.tags
         case .classSession(let session): session.isMoved ? ["Changed today"] : []
         case .leg: []
+        case .calendar(let item): [item.calendarName]
         }
     }
 
@@ -406,6 +490,21 @@ enum DayItem: Identifiable {
         case .event: "calendar"
         case .classSession: "graduationcap.fill"
         case .leg(let leg): leg.mode.symbol
+        case .calendar: isOnline ? "video.fill" : "calendar"
+        }
+    }
+
+    /// Happens on a call rather than somewhere.
+    var isOnline: Bool {
+        guard case .calendar(let item) = self else { return false }
+        return item.location.map(MailTriage.isOnline) ?? false
+    }
+
+    /// Your own plans are green; events, yours or your calendar's, are the world's cyan.
+    var role: SignalRole {
+        switch self {
+        case .classSession, .leg: .you
+        case .event, .calendar: .world
         }
     }
 
@@ -432,17 +531,11 @@ private struct DayItemRow: View {
         let isNow = item.isUnderway(now: now)
 
         HStack(spacing: 14) {
-            VStack(spacing: 2) {
-                Text(item.isAllDay ? "All" : item.start.formatted(date: .omitted, time: .shortened))
-                    .font(.subheadline.weight(.semibold).monospacedDigit())
-                    .foregroundStyle(isDone ? .mist : .ice)
-                if !item.isAllDay && !item.isMoment {
-                    Text(item.end.formatted(date: .omitted, time: .shortened))
-                        .font(.caption.monospacedDigit())
-                        .foregroundStyle(.mist)
-                }
-            }
-            .frame(width: 62, alignment: .leading)
+            TimeSpan(
+                start: item.isAllDay ? "All day" : item.start.formatted(date: .omitted, time: .shortened),
+                end: item.isAllDay || item.isMoment ? nil : item.end.formatted(date: .omitted, time: .shortened),
+                isDone: isDone
+            )
 
             VStack(alignment: .leading, spacing: 3) {
                 Label {
@@ -485,6 +578,11 @@ private struct DayItemRow: View {
             case .event(let event): state.eventSheet = EventSheetRequest(editing: event.id, text: nil)
             case .classSession: state.isTimetablePresented = true
             case .leg: state.isTripsPresented = true
+            case .calendar(let item):
+                // Apple Calendar owns these; it opens at the event's day.
+                if let url = URL(string: "calshow:\(Int(item.start.timeIntervalSinceReferenceDate))") {
+                    UIApplication.shared.open(url)
+                }
             }
         }
         .contextMenu {
@@ -515,4 +613,12 @@ private struct DayItemRow: View {
         .accessibilityElement(children: .combine)
         .accessibilityAddTraits(.isButton)
     }
+}
+
+enum DayViewMode: String, CaseIterable, Identifiable {
+    case day
+    case month
+
+    var id: String { rawValue }
+    var title: String { self == .day ? "Day" : "Month" }
 }

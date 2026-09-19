@@ -95,7 +95,10 @@ struct IslandAssistantPanel: View {
             .accessibilityLabel(state.voice.isListening ? "Stop listening" : "Start listening")
 
             VStack(alignment: .leading, spacing: 2) {
-                InstrumentLabel(status, role: state.voice.isListening ? .you : nil)
+                HStack(spacing: 6) {
+                    PathOSMark(height: 13)
+                    InstrumentLabel(status, role: state.voice.isListening ? .you : nil)
+                }
                 Text(headline)
                     .font(.headline)
                     .foregroundStyle(.ice)
@@ -122,11 +125,16 @@ struct IslandAssistantPanel: View {
 
     private func answer(_ turn: AssistantTurn) -> some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text(turn.answer)
-                .font(.body)
-                .foregroundStyle(.ice)
-                .lineLimit(6)
-                .fixedSize(horizontal: false, vertical: true)
+            // PathOS's own face on what it says, the way chat apps sign their replies.
+            HStack(alignment: .top, spacing: 10) {
+                PathOSMark(height: 18)
+                    .padding(.top, 2)
+                Text(turn.answer)
+                    .font(.body)
+                    .foregroundStyle(.ice)
+                    .lineLimit(6)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
 
             if !turn.places.isEmpty {
                 ScrollView(.horizontal) {

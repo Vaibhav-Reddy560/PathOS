@@ -97,31 +97,16 @@ struct EventSheet: View {
                     }
                 }
 
-            HStack(spacing: 10) {
-                Button {
-                    sourceText = UIPasteboard.general.string ?? sourceText
-                } label: {
-                    Label("Paste", systemImage: "doc.on.clipboard")
-                        .frame(maxWidth: .infinity, minHeight: 30)
-                }
-                .buttonStyle(.bordered)
-
-                PhotosPicker(selection: $photoItem, matching: .images) {
-                    Label("Screenshot", systemImage: "photo")
-                        .frame(maxWidth: .infinity, minHeight: 30)
-                }
-                .buttonStyle(.bordered)
-
-                Button {
-                    Task { await read(text: sourceText) }
-                } label: {
-                    Label(isReading ? "Reading…" : "Read it", systemImage: "apple.intelligence")
-                        .frame(maxWidth: .infinity, minHeight: 30)
-                }
-                .buttonStyle(.borderedProminent)
-                .disabled(sourceText.trimmingCharacters(in: .whitespaces).isEmpty || isReading)
+            ImportActions(
+                photoTitle: "Screenshot",
+                photoItem: $photoItem,
+                isReading: isReading,
+                canRead: !sourceText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            ) {
+                sourceText = UIPasteboard.general.string ?? sourceText
+            } read: {
+                Task { await read(text: sourceText) }
             }
-            .labelStyle(.titleAndIcon)
 
             if let readNote {
                 Text(readNote)
@@ -191,25 +176,11 @@ struct EventSheet: View {
     private var whereSection: some View {
         Section {
             TextField("Place", text: $placeName)
-            HStack(spacing: 10) {
-                Button {
-                    Task { await useCurrentLocation() }
-                } label: {
-                    Label("I'm here", systemImage: "location.fill")
-                        .frame(maxWidth: .infinity, minHeight: 30)
-                }
-                .buttonStyle(.bordered)
-
-                Button {
-                    Task { await findOnMap() }
-                } label: {
-                    Label(isLocating ? "Finding…" : "Find on map", systemImage: "map")
-                        .frame(maxWidth: .infinity, minHeight: 30)
-                }
-                .buttonStyle(.bordered)
-                .disabled(placeName.trimmingCharacters(in: .whitespaces).isEmpty || isLocating)
+            // Side by side while both labels fit on one line; stacked at large text sizes.
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: 10) { placeButtons }
+                VStack(spacing: 10) { placeButtons }
             }
-            .labelStyle(.titleAndIcon)
 
             if coordinate != nil {
                 Label("Pinned on the map", systemImage: "checkmark.circle.fill")
@@ -221,6 +192,24 @@ struct EventSheet: View {
         } footer: {
             Text("With a place pinned, PathOS can point you there and show the event on the map.")
         }
+    }
+
+    @ViewBuilder
+    private var placeButtons: some View {
+        Button {
+            Task { await useCurrentLocation() }
+        } label: {
+            OneLineButtonLabel(title: "I'm here", symbol: "location.fill")
+        }
+        .buttonStyle(SourceButtonStyle(isEnabled: true))
+
+        Button {
+            Task { await findOnMap() }
+        } label: {
+            OneLineButtonLabel(title: isLocating ? "Finding…" : "Find on map", symbol: "map")
+        }
+        .buttonStyle(SourceButtonStyle(isEnabled: !placeName.trimmingCharacters(in: .whitespaces).isEmpty && !isLocating))
+        .disabled(placeName.trimmingCharacters(in: .whitespaces).isEmpty || isLocating)
     }
 
     private var tagsSection: some View {

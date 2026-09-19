@@ -16,7 +16,7 @@ final class NotificationService: NSObject {
     }
 
     nonisolated enum Action {
-        static let startCommute = "pathos.action.startCommute"
+        static let pinContext = "pathos.action.pinContext"
         static let trackLeg = "pathos.action.trackLeg"
     }
 
@@ -33,7 +33,7 @@ final class NotificationService: NSObject {
         center.setNotificationCategories([
             UNNotificationCategory(
                 identifier: Category.commute,
-                actions: [UNNotificationAction(identifier: Action.startCommute, title: "Start commute", options: [.foreground])],
+                actions: [UNNotificationAction(identifier: Action.pinContext, title: "Pin to Lock Screen", options: [.foreground])],
                 intentIdentifiers: []
             ),
             UNNotificationCategory(identifier: Category.spatialNote, actions: [], intentIdentifiers: []),
@@ -150,7 +150,7 @@ extension NotificationService: UNUserNotificationCenterDelegate {
         let action = response.actionIdentifier
         let link = response.notification.request.content.userInfo["link"] as? String
         let target: URL? = switch action {
-        case Action.startCommute: URL(string: "pathos://commute/start")
+        case Action.pinContext: URL(string: "pathos://context/pin")
         // The leg's own link, with "/track" to start following it rather than just show it.
         case Action.trackLeg: link.flatMap { URL(string: $0 + "/track") }
         default: link.flatMap(URL.init(string:))

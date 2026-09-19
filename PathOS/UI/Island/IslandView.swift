@@ -1,8 +1,9 @@
 import SwiftUI
 
 /// The OS alert layer: a solid Void capsule under the status bar, echoing the Dynamic Island.
-/// Compact, it shows the most important thing right now; tapped, it grows to show every alert
-/// with its actions. It also becomes the assistant when you ask PathOS something.
+/// Compact, it shows the most important thing right now, or PathOS's name when nothing is worth
+/// a glance, the way a chat app titles its screen; tapped, it grows to show every alert with its
+/// actions. It also becomes the assistant when you ask PathOS something.
 ///
 /// One view, one background: the compact row is always present and only the height changes,
 /// so the capsule can never shrink below its own text mid-animation.
@@ -42,6 +43,8 @@ struct IslandView: View {
         .dynamicTypeSize(...DynamicTypeSize.accessibility2)
         .animation(PathMotion.resolve(PathMotion.island, reduceMotion: reduceMotion), value: isExpanded)
         .animation(PathMotion.resolve(PathMotion.island, reduceMotion: reduceMotion), value: state.isAssistantActive)
+        // The capsule reshapes when news replaces the name, and when it hands the name back.
+        .animation(PathMotion.resolve(PathMotion.island, reduceMotion: reduceMotion), value: alerts.first?.id)
         .onChange(of: alerts.first?.id, initial: true) {
             announceIfNew()
         }
@@ -62,6 +65,7 @@ struct IslandView: View {
 
     private func compactRow(_ top: AmbientAlert) -> some View {
         let queued = alerts.dropFirst().filter { $0.role != .world && $0.id != "idle" }.count
+        let isQuiet = AmbientAlerts.isQuiet(alerts)
 
         return Button {
             if isExpanded {
@@ -71,23 +75,31 @@ struct IslandView: View {
             }
         } label: {
             HStack(spacing: 10) {
-                Image(systemName: top.symbol)
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(top.role.color)
-                    .symbolEffect(.breathe, isActive: top.role == .critical && !reduceMotion)
-                Text(top.compactText)
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(.ice)
-                    .lineLimit(1)
-                if let metric = top.metric {
-                    Text(metric)
-                        .font(.subheadline.weight(.semibold).monospacedDigit())
+                // Open, the list says what's on, so the heading is PathOS rather than a repeat of
+                // the first alert.
+                if isQuiet || isExpanded {
+                    PathOSWordmark()
+                        .padding(.horizontal, 2)
+                        .transition(.opacity)
+                } else {
+                    Image(systemName: top.symbol)
+                        .font(.subheadline.weight(.semibold))
                         .foregroundStyle(top.role.color)
-                }
-                if queued > 0, !isExpanded {
-                    Text("+\(queued)")
-                        .font(.caption.weight(.bold).monospacedDigit())
-                        .foregroundStyle(.mist)
+                        .symbolEffect(.breathe, isActive: top.role == .critical && !reduceMotion)
+                    Text(top.compactText)
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(.ice)
+                        .lineLimit(1)
+                    if let metric = top.metric {
+                        Text(metric)
+                            .font(.subheadline.weight(.semibold).monospacedDigit())
+                            .foregroundStyle(top.role.color)
+                    }
+                    if queued > 0, !isExpanded {
+                        Text("+\(queued)")
+                            .font(.caption.weight(.bold).monospacedDigit())
+                            .foregroundStyle(.mist)
+                    }
                 }
                 if isExpanded {
                     Spacer(minLength: 8)
@@ -101,7 +113,7 @@ struct IslandView: View {
             .contentShape(.rect)
         }
         .buttonStyle(.plain)
-        .accessibilityLabel("\(top.role.spokenPrefix): \(top.headline)")
+        .accessibilityLabel(isQuiet ? "PathOS. \(top.headline)" : "\(top.role.spokenPrefix): \(top.headline)")
         .accessibilityHint(isExpanded ? "Collapses" : alerts.count > 1 ? "Shows \(alerts.count) alerts" : "Shows details")
     }
 
@@ -110,7 +122,7 @@ struct IslandView: View {
     private var expandedList: some View {
         let shown = alerts.filter { $0.id != "idle" || alerts.count == 1 }
 
-        return VStack(alignment: .leading, spacing: 16) {
+        return VStack(alignment: .leading, spacing: 18) {
             ForEach(shown.prefix(4)) { alert in
                 AlertRow(alert: alert) {
                     collapse()
@@ -174,64 +186,79 @@ private struct AlertRow: View {
     @Environment(AppState.self) private var state
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack(alignment: .top, spacing: 12) {
-                SignalGlyph(symbol: alert.symbol, role: alert.role, size: 36)
-                VStack(alignment: .leading, spacing: 3) {
+        HStack(alignment: .top, spacing: 12) {
+            SignalGlyph(symbol: alert.symbol, role: alert.role, size: 30)
+
+            // The title is the island's own size and the detail smaller, so an alert never reads
+            // louder than the island that holds it.
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
                     Text(alert.headline)
-                        .font(.headline)
+                        .font(.subheadline.weight(.semibold))
                         .foregroundStyle(.ice)
-                    Text(alert.detail)
-                        .font(.subheadline)
-                        .foregroundStyle(.mist)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Spacer(minLength: 4)
+                    if let metric = alert.metric {
+                        Text(metric)
+                            .font(.subheadline.weight(.semibold).monospacedDigit())
+                            .foregroundStyle(alert.role.color)
+                    }
                 }
-                Spacer(minLength: 0)
-                if let metric = alert.metric {
-                    Text(metric)
-                        .font(.pathMetric)
-                        .foregroundStyle(alert.role.color)
+                Text(alert.detail)
+                    .font(.footnote)
+                    .foregroundStyle(.mist)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                if !alert.buttons.isEmpty {
+                    HStack(spacing: 8) {
+                        ForEach(alert.buttons, id: \.self) { button in
+                            actionButton(button)
+                        }
+                    }
+                    .padding(.top, 6)
                 }
             }
             .accessibilityElement(children: .combine)
             .accessibilityLabel("\(alert.role.spokenPrefix): \(alert.headline). \(alert.detail)")
 
-            if !alert.buttons.isEmpty || alert.isDismissible {
-                HStack(spacing: 8) {
-                    ForEach(alert.buttons, id: \.self) { button in
-                        if button.isPrimary {
-                            Button {
-                                state.perform(button.action)
-                                onAction()
-                            } label: {
-                                Label(button.title, systemImage: button.symbol)
-                                    .font(.subheadline.weight(.semibold))
-                                    .frame(minHeight: 30)
-                            }
-                            .pathPrimaryAction()
-                        } else {
-                            Button {
-                                state.perform(button.action)
-                                onAction()
-                            } label: {
-                                Label(button.title, systemImage: button.symbol)
-                                    .font(.subheadline.weight(.semibold))
-                                    .frame(minHeight: 30)
-                            }
-                            .pathSecondaryAction()
-                        }
-                    }
-                    Spacer(minLength: 0)
-                    if alert.isDismissible {
-                        Button("Dismiss") {
-                            state.dismissedAlertIDs.insert(alert.id)
-                        }
-                        .font(.subheadline.weight(.semibold))
+            if alert.isDismissible {
+                Button {
+                    state.dismissedAlertIDs.insert(alert.id)
+                } label: {
+                    Image(systemName: "xmark")
+                        .font(.caption2.weight(.bold))
                         .foregroundStyle(.mist)
-                        .frame(minHeight: 44)
-                    }
+                        .frame(width: 26, height: 26)
+                        .background(Color.elevatedSurface, in: .circle)
+                        .frame(width: 44, height: 44)
+                        .contentShape(.circle)
                 }
-                .padding(.leading, 48)
+                .buttonStyle(.plain)
+                // A full-size target that doesn't push the row's text in.
+                .padding(.vertical, -9)
+                .padding(.trailing, -9)
+                .accessibilityLabel("Dismiss \(alert.headline)")
             }
+        }
+    }
+
+    @ViewBuilder
+    private func actionButton(_ button: AmbientAlert.Button) -> some View {
+        let label = Label(button.title, systemImage: button.symbol)
+            .font(.footnote.weight(.semibold))
+            .frame(minHeight: 30)
+        if button.isPrimary {
+            Button {
+                state.perform(button.action)
+                onAction()
+            } label: { label }
+            .pathPrimaryAction()
+        } else {
+            Button {
+                state.perform(button.action)
+                onAction()
+            } label: { label }
+            .pathSecondaryAction()
         }
     }
 }
