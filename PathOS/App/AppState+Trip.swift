@@ -117,7 +117,7 @@ extension AppState {
         refreshBackgroundSession()
         Task {
             await notifications.removePending(withPrefix: tripNotificationPrefix)
-            await liveActivities.end()
+            await liveActivities.end(.journey)
             await refreshPinnedContext()
         }
         if let name {
@@ -339,6 +339,7 @@ extension AppState {
                 notes: [.init(symbol: "flag.checkered", text: "To \(trip.destinationName)", role: .you)],
                 role: status.isBehind ? .attention : .you
             ),
+            lane: .journey,
             staleAfter: 1_800,
             relevance: status.isBehind ? 96 : 94
         )

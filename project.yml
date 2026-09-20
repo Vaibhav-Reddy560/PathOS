@@ -68,6 +68,9 @@ targets:
         UIFileSharingEnabled: true
         LSSupportsOpeningDocumentsInPlace: true
         UIBackgroundModes:
+          # Spoken turns keep playing with the phone locked — the point of them is that you're
+          # driving and not looking at it.
+          - audio
           - location
           - fetch
           - processing

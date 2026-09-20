@@ -106,6 +106,26 @@ final class SoundClassifier {
         if let level = update.levelDB { levelDB = level }
         if let label = update.label { topLabel = label.replacingOccurrences(of: "_", with: " ") }
         scene = SoundSceneRules.scene(levelDB: levelDB, label: update.label ?? topLabel, confidence: update.confidence)
+        remember(scene)
+    }
+
+    /// Kept on disk with its time, because the microphone stops when PathOS closes and an alert
+    /// fires long after: the last thing heard is the only clue to what it's up against.
+    private func remember(_ scene: SoundScene) {
+        guard scene != .unknown else { return }
+        UserDefaults.standard.set(scene.rawValue, forKey: Self.lastSceneKey)
+        UserDefaults.standard.set(Date(), forKey: Self.lastSceneAtKey)
+    }
+
+    static let lastSceneKey = "pathos.lastScene"
+    static let lastSceneAtKey = "pathos.lastSceneAt"
+
+    /// What PathOS last heard, and when.
+    static var lastHeard: (scene: SoundScene, at: Date)? {
+        guard let raw = UserDefaults.standard.string(forKey: lastSceneKey),
+              let scene = SoundScene(rawValue: raw),
+              let at = UserDefaults.standard.object(forKey: lastSceneAtKey) as? Date else { return nil }
+        return (scene, at)
     }
 }
 

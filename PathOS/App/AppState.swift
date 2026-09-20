@@ -220,6 +220,11 @@ final class AppState {
         }
     }
 
+    /// Whether an urgent alert is said a second time when the first may have been missed.
+    var repeatsUrgentAlerts: Bool = UserDefaults.standard.object(forKey: "pathos.repeatsUrgentAlerts") as? Bool ?? true {
+        didSet { UserDefaults.standard.set(repeatsUrgentAlerts, forKey: "pathos.repeatsUrgentAlerts") }
+    }
+
     /// Whether the turns are spoken while you're being led somewhere.
     var speaksDirections: Bool = UserDefaults.standard.object(forKey: "pathos.speaksDirections") as? Bool ?? true {
         didSet {
@@ -398,8 +403,10 @@ final class AppState {
         switch phase {
         case .active:
             isForeground = true
-            // Anything on screen counts as seen, so it won't buzz later.
+            // Anything on screen counts as seen, so it won't buzz later — including any second
+            // nudge that hasn't fired yet.
             announcedAlertIDs = AmbientAlerts.announcedIDs(ambientAlerts)
+            notifications.cancelRepeats()
             location.startUpdates()
             barometer.start()
             ai.refreshStatus()
@@ -556,6 +563,7 @@ final class AppState {
         if !isContextPinned {
             await liveActivities.show(
                 .init(mode: .exitCheck, title: advice.headline, subtitle: advice.detail, symbol: advice.symbol, deepLink: link),
+                lane: .alert,
                 staleAfter: 2 * 3600,
                 relevance: 90
             )
@@ -583,11 +591,12 @@ final class AppState {
             surfacedMemory = (LockScreenContext.Memory(title: note.title, body: note.body), Date())
             await refreshPinnedContext()
             // Directions keep the Lock Screen during a journey, so the note comes as a notification.
-            shown = liveActivities.isRunning && liveActivities.currentMode == .venue
+            shown = liveActivities.isRunning(.context)
         } else {
             shown = await liveActivities.show(
                 .init(mode: .spatialNote, title: note.title, subtitle: note.body, symbol: "mappin.and.ellipse", deepLink: link),
-                staleAfter: 3600,
+                lane: .alert,
+                staleAfter: 3_600,
                 relevance: 80
             )
         }
@@ -821,15 +830,27 @@ final class AppState {
         guard !isForeground, notifications.isAuthorized else { return }
         let alerts = ambientAlerts
         for alert in AmbientAlerts.notifiable(previous: announcedAlertIDs, current: alerts) {
+            // How hard to try depends on what it is and on the last thing PathOS heard: a buzz
+            // in traffic is easily missed, so an urgent one in a loud place says itself twice.
+            let plan = AlertEscalation.plan(
+                role: alert.role,
+                heardNoise: SoundClassifier.lastHeard,
+                repeatsUrgent: repeatsUrgentAlerts,
+                isSpeaking: speaksDirections && trip != nil
+            )
             notifications.post(
                 id: "pathos.alert.\(alert.id)",
                 title: alert.headline,
                 body: alert.detail,
                 category: NotificationService.Category.ambient,
                 link: URL(string: "pathos://dashboard"),
-                timeSensitive: alert.role == .critical,
-                sound: haptics.shouldPlaySound
+                timeSensitive: plan.isTimeSensitive,
+                sound: haptics.shouldPlaySound,
+                repeatAfter: plan.repeatAfter
             )
+            if plan.speaks {
+                speech.speak("\(alert.headline). \(alert.detail)")
+            }
         }
         announcedAlertIDs = AmbientAlerts.announcedIDs(alerts)
     }
@@ -1018,6 +1039,7 @@ final class AppState {
                 etaMinutes: progress.minutesRemaining,
                 deepLink: URL(string: "pathos://day")
             ),
+            lane: .journey,
             staleAfter: 3_600,
             relevance: progress.isLate ? 92 : 88
         )
@@ -1038,7 +1060,7 @@ final class AppState {
             etaMinutes: progress.estimatedMinutesRemaining,
             deepLink: URL(string: "pathos://dashboard")
         )
-        await liveActivities.showIfChanged(state, staleAfter: 3_600, relevance: 95)
+        await liveActivities.showIfChanged(state, lane: .journey, staleAfter: 3_600, relevance: 95)
     }
 
     /// Live Text camera where supported; the photo picker otherwise (e.g. the simulator).
@@ -1146,11 +1168,11 @@ final class AppState {
         }
         pinnedCompassTarget = target
         refreshBackgroundSession()
-        let shown = await liveActivities.show(compassState(for: target), staleAfter: 1_800, relevance: 70)
+        let shown = await liveActivities.show(compassState(for: target), lane: .pointer, staleAfter: 1_800, relevance: 70)
         compassTask?.cancel()
         compassTask = Task {
             while !Task.isCancelled, let target = pinnedCompassTarget {
-                await liveActivities.updateThrottled(compassState(for: target))
+                await liveActivities.updateThrottled(compassState(for: target), lane: .pointer)
                 try? await Task.sleep(for: .seconds(1))
             }
         }
@@ -1381,43 +1403,33 @@ final class AppState {
         surfacedMemory = nil
         location.setSignificantChangesActive(location.hasAlwaysAccess)
         // Directions stay until they're done; only the context comes off.
-        if liveActivities.currentMode == .venue {
-            await liveActivities.end()
-        }
+        await liveActivities.end(.context)
     }
 
-    /// Redraws the pinned context, unless directions have the Lock Screen.
+    /// Redraws the pinned context on its own card. Directions have a card of their own, so this
+    /// no longer has to wait for them to finish.
     @discardableResult
     func refreshPinnedContext(now: Date = Date()) async -> Bool {
         guard isContextPinned else { return false }
-        if liveActivities.isRunning, let mode = liveActivities.currentMode, Self.directionModes.contains(mode) {
-            return true
-        }
         if context.venue.kind == .home, routine.todaysDeparture(now: now) != nil {
             await refreshCommute()
         }
         let content = LockScreenContext.content(for: lockScreenInputs(now: now))
-        return await liveActivities.showIfChanged(content.state, staleDate: content.staleDate, relevance: 60)
+        return await liveActivities.showIfChanged(content.state, lane: .context, staleDate: content.staleDate, relevance: 60)
     }
 
-    /// Something that had the Lock Screen is done with it: the pinned context takes it back, or
-    /// it comes off.
+    /// Directions are done with their card: it comes off, and the context is redrawn in case it
+    /// was holding back anything while they ran.
     private func releaseLockScreen(from mode: PathOSActivityAttributes.Mode) async {
-        guard liveActivities.currentMode == mode else { return }
-        if isContextPinned {
-            // Past the directions guard, which would otherwise see them still up.
-            let content = LockScreenContext.content(for: lockScreenInputs(now: Date()))
-            await liveActivities.show(content.state, staleDate: content.staleDate, relevance: 60)
-        } else {
-            await liveActivities.end()
-        }
+        await liveActivities.end(.journey, ifMode: mode)
+        await refreshPinnedContext()
     }
 
     /// On opening PathOS: unpins if you swiped the context off the Lock Screen, and otherwise
     /// puts it back if iOS ended it after its eight hours, or starts it afresh before it would.
     private func reconcilePinnedContext() async {
         guard isContextPinned else { return }
-        if liveActivities.wasRemovedByYou {
+        if liveActivities.wasRemovedByYou(.context) {
             await unpinContext()
             return
         }

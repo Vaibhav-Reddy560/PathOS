@@ -109,11 +109,16 @@ struct SettingsView: View {
 
                 Section {
                     Toggle("Adapt alerts to surroundings", isOn: $state.adaptiveSound)
+                    Toggle("Say urgent alerts twice", isOn: $state.repeatsUrgentAlerts)
                     LabeledContent("Right now", value: state.sound.scene.label)
+                    if let heard = SoundClassifier.lastHeard, state.sound.scene == .unknown {
+                        LabeledContent("Last heard", value: "\(heard.scene.label), \(heard.at.formatted(.relative(presentation: .named)))")
+                            .font(.footnote)
+                    }
                 } header: {
                     InstrumentLabel("Sound scene")
                 } footer: {
-                    Text("Noisy places get strong double haptics; quiet places get gentle, silent alerts. The mic is only analysed while PathOS is open.")
+                    Text("The microphone is only listened to while PathOS is open, so a locked phone in a loud place is something PathOS can't hear. What it heard last is remembered instead: anything urgent then breaks through a Focus, is said a second time after 45 seconds in case the first buzz was missed, and is spoken aloud while you're following a way. Opening PathOS cancels the second one. Quiet places get gentle, silent alerts.")
                 }
 
                 Section {
@@ -198,7 +203,8 @@ struct SettingsView: View {
                         Task {
                             if let advice = await state.context.evaluateExit(at: state.location.location) {
                                 await state.liveActivities.show(
-                                    .init(mode: .exitCheck, title: advice.headline, subtitle: advice.detail, symbol: advice.symbol, deepLink: URL(string: "pathos://dashboard"))
+                                    .init(mode: .exitCheck, title: advice.headline, subtitle: advice.detail, symbol: advice.symbol, deepLink: URL(string: "pathos://dashboard")),
+                                    lane: .alert
                                 )
                                 state.haptics.alert()
                                 testResult = advice.headline
@@ -210,7 +216,7 @@ struct SettingsView: View {
                     Button("End Live Activity") {
                         Task {
                             await state.unpinContext()
-                            await state.liveActivities.end()
+                            await state.liveActivities.endAll()
                         }
                     }
                     .foregroundStyle(.coral)

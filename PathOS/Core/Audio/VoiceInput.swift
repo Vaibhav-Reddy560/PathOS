@@ -102,7 +102,11 @@ final class SpeechOutput {
     @ObservationIgnored private let synthesizer = AVSpeechSynthesizer()
 
     func speak(_ text: String) {
-        try? AVAudioSession.sharedInstance().setCategory(.playback, mode: .spokenAudio, options: [.duckOthers])
+        // Spoken over whatever is playing, and while the screen is off: with `.duckOthers` the
+        // music drops for a moment instead of stopping, and `.playback` keeps it going in the
+        // background, which is where directions are actually needed.
+        try? AVAudioSession.sharedInstance().setCategory(.playback, mode: .spokenAudio,
+                                                         options: [.duckOthers, .interruptSpokenAudioAndMixWithOthers])
         try? AVAudioSession.sharedInstance().setActive(true)
         let utterance = AVSpeechUtterance(string: text)
         utterance.voice = AVSpeechSynthesisVoice(language: "en-IN") ?? AVSpeechSynthesisVoice(language: "en-US")

@@ -119,7 +119,9 @@ private struct NoteLine: View {
             Text(note.text)
                 .font(.footnote)
                 .foregroundStyle(.ice)
-                .lineLimit(1)
+                // Two lines: a line cut in half is the half you needed.
+                .lineLimit(2)
+                .fixedSize(horizontal: false, vertical: true)
         }
     }
 }

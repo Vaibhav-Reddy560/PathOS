@@ -1,6 +1,23 @@
 import ActivityKit
 import Foundation
 
+/// Which card this is. PathOS keeps one Live Activity per lane, so two things happening at once
+/// get a card each — the pinned context stays put while a journey runs — rather than being cut
+/// down to share one.
+nonisolated enum ActivityLane: String, Codable, Hashable, Sendable, CaseIterable {
+    /// Where you are and what's next: the card you pin.
+    case context
+    /// A way being followed, a metro journey, or a trip leg.
+    case journey
+    /// The pointer.
+    case pointer
+    /// Something that just happened and can't wait: an exit check, a note you left here.
+    case alert
+
+    /// Which gives way when iOS won't start another: the least urgent first.
+    static let byImportance: [ActivityLane] = [.context, .alert, .pointer, .journey]
+}
+
 /// Shared between the app (which starts/updates activities) and the widget extension (which renders them).
 nonisolated struct PathOSActivityAttributes: ActivityAttributes {
     nonisolated enum Mode: String, Codable, Hashable, Sendable {
@@ -88,4 +105,6 @@ nonisolated struct PathOSActivityAttributes: ActivityAttributes {
     }
 
     var sessionName: String
+    /// Fixed when the card is started: it's what tells one of PathOS's cards from another.
+    var lane: ActivityLane = .context
 }

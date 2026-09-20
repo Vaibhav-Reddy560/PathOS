@@ -157,7 +157,9 @@ nonisolated enum LockScreenContext {
         }
 
         var shown = state
-        shown.notes = notes.isEmpty ? nil : Array(notes.prefix(2))
+        // Three now, not two: the context has a card of its own, so it no longer has to leave
+        // room for a journey that has one too.
+        shown.notes = notes.isEmpty ? nil : Array(notes.prefix(3))
         return Content(state: shown, staleDate: max(staleDate, now.addingTimeInterval(60)))
     }
 

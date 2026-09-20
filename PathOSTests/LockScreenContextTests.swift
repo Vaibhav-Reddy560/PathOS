@@ -140,13 +140,15 @@ struct LockScreenContextTests {
         #expect(shown.state.notes == nil)
     }
 
-    @Test func neverMoreThanTwoNotes() {
+    /// Three at most: the context has a card to itself now, but a Lock Screen card is still
+    /// small, and a fourth line would be the one that gets clipped.
+    @Test func neverMoreThanThreeNotes() {
         let physics = lesson("Physics", at(9, 15), at(10))
         let maths = lesson("Maths", at(10, 15), at(11))
         let commute = LockScreenContext.Commute(destination: "Work", minutes: 35, mode: .car, usualDeparture: 9 * 60)
         let shown = content(now: at(9), agenda: [physics, maths], weather: wet, advice: rain, commute: commute,
                             memory: .init(title: "Locker 12", body: ""))
-        #expect(shown.state.notes?.count == 2)
+        #expect(shown.state.notes?.count == 3)
     }
 
     @Test func aDeadlineCountsDownToWhenItsDue() {

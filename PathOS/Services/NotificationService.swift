@@ -63,12 +63,35 @@ final class NotificationService: NSObject {
     }
 
     /// Delivers immediately.
-    func post(id: String, title: String, body: String, category: String? = nil, link: URL? = nil, timeSensitive: Bool = false, sound: Bool = true) {
+    func post(id: String, title: String, body: String, category: String? = nil, link: URL? = nil,
+              timeSensitive: Bool = false, sound: Bool = true, repeatAfter: TimeInterval? = nil) {
         let content = makeContent(title: title, body: body, category: category, link: link, sound: sound)
         if timeSensitive {
             content.interruptionLevel = .timeSensitive
         }
         center.add(UNNotificationRequest(identifier: id, content: content, trigger: nil), withCompletionHandler: nil)
+
+        // A second one, in case the first went unheard. Opening PathOS takes it back.
+        guard let repeatAfter, repeatAfter > 0 else { return }
+        let again = makeContent(title: title, body: body, category: category, link: link, sound: sound)
+        again.interruptionLevel = timeSensitive ? .timeSensitive : .active
+        center.add(
+            UNNotificationRequest(
+                identifier: AlertEscalation.repeatID(of: id),
+                content: again,
+                trigger: UNTimeIntervalNotificationTrigger(timeInterval: repeatAfter, repeats: false)
+            ),
+            withCompletionHandler: nil
+        )
+    }
+
+    /// Takes back every nudge that hasn't fired yet: you're holding the phone, so you've seen it.
+    func cancelRepeats() {
+        center.getPendingNotificationRequests { requests in
+            let ids = requests.map(\.identifier).filter { $0.hasSuffix(".again") }
+            guard !ids.isEmpty else { return }
+            UNUserNotificationCenter.current().removePendingNotificationRequests(withIdentifiers: ids)
+        }
     }
 
     /// Delivers once at `date`, for events and journeys planned ahead.
