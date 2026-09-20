@@ -1,0 +1,92 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 760 386" width="760" height="386"
+     role="img" aria-label="The PathOS palette and what each colour means">
+  <title>Colour carries meaning</title>
+  <rect width="760" height="386" rx="22" fill="#0C1114"/>
+  <text x="44" y="42" font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Text', system-ui, sans-serif"
+        font-size="16" fill="#8E9B98">Every component takes a role, never a colour</text>
+  
+  <g opacity="1">
+    <animate attributeName="opacity" values="0;1" dur="0.5s" begin="0.0s" fill="freeze"/>
+    <rect x="44" y="54" width="34" height="34" rx="11" fill="#B8F36B"/>
+    <circle cx="61" cy="71" r="17" fill="none" stroke="#B8F36B" stroke-opacity="0.45" stroke-width="2">
+      <animate attributeName="r" values="17;26;17" dur="3.4s" begin="1.2s" repeatCount="indefinite"/>
+      <animate attributeName="stroke-opacity" values="0.45;0;0.45" dur="3.4s" begin="1.2s" repeatCount="indefinite"/>
+    </circle>
+    <text x="104" y="68" font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Text', system-ui, sans-serif"
+          font-size="19" font-weight="600" fill="#E8F0ED">Aurora</text>
+    <text x="104" y="88" font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Text', system-ui, sans-serif"
+          font-size="15" fill="#8E9B98">You: your location, your route, your actions</text>
+    <text x="660" y="76" font-family="ui-monospace, SFMono-Regular, Menlo, monospace"
+          font-size="15" fill="#B8F36B" opacity="0.85">#B8F36B</text>
+  </g>
+  <g opacity="1">
+    <animate attributeName="opacity" values="0;1" dur="0.5s" begin="0.15s" fill="freeze"/>
+    <rect x="44" y="106" width="34" height="34" rx="11" fill="#65E6D0"/>
+    <circle cx="61" cy="123" r="17" fill="none" stroke="#65E6D0" stroke-opacity="0.45" stroke-width="2">
+      <animate attributeName="r" values="17;26;17" dur="3.4s" begin="1.45s" repeatCount="indefinite"/>
+      <animate attributeName="stroke-opacity" values="0.45;0;0.45" dur="3.4s" begin="1.45s" repeatCount="indefinite"/>
+    </circle>
+    <text x="104" y="120" font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Text', system-ui, sans-serif"
+          font-size="19" font-weight="600" fill="#E8F0ED">Ion</text>
+    <text x="104" y="140" font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Text', system-ui, sans-serif"
+          font-size="15" fill="#8E9B98">The world: places, events, transit, weather</text>
+    <text x="660" y="128" font-family="ui-monospace, SFMono-Regular, Menlo, monospace"
+          font-size="15" fill="#65E6D0" opacity="0.85">#65E6D0</text>
+  </g>
+  <g opacity="1">
+    <animate attributeName="opacity" values="0;1" dur="0.5s" begin="0.3s" fill="freeze"/>
+    <rect x="44" y="158" width="34" height="34" rx="11" fill="#FFBF69"/>
+    <circle cx="61" cy="175" r="17" fill="none" stroke="#FFBF69" stroke-opacity="0.45" stroke-width="2">
+      <animate attributeName="r" values="17;26;17" dur="3.4s" begin="1.7s" repeatCount="indefinite"/>
+      <animate attributeName="stroke-opacity" values="0.45;0;0.45" dur="3.4s" begin="1.7s" repeatCount="indefinite"/>
+    </circle>
+    <text x="104" y="172" font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Text', system-ui, sans-serif"
+          font-size="19" font-weight="600" fill="#E8F0ED">Amber</text>
+    <text x="104" y="192" font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Text', system-ui, sans-serif"
+          font-size="15" fill="#8E9B98">Worth a glance: rain, running late</text>
+    <text x="660" y="180" font-family="ui-monospace, SFMono-Regular, Menlo, monospace"
+          font-size="15" fill="#FFBF69" opacity="0.85">#FFBF69</text>
+  </g>
+  <g opacity="1">
+    <animate attributeName="opacity" values="0;1" dur="0.5s" begin="0.44999999999999996s" fill="freeze"/>
+    <rect x="44" y="210" width="34" height="34" rx="11" fill="#FF6B5F"/>
+    <circle cx="61" cy="227" r="17" fill="none" stroke="#FF6B5F" stroke-opacity="0.45" stroke-width="2">
+      <animate attributeName="r" values="17;26;17" dur="3.4s" begin="1.95s" repeatCount="indefinite"/>
+      <animate attributeName="stroke-opacity" values="0.45;0;0.45" dur="3.4s" begin="1.95s" repeatCount="indefinite"/>
+    </circle>
+    <text x="104" y="224" font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Text', system-ui, sans-serif"
+          font-size="19" font-weight="600" fill="#E8F0ED">Coral</text>
+    <text x="104" y="244" font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Text', system-ui, sans-serif"
+          font-size="15" fill="#8E9B98">Urgent: location is off</text>
+    <text x="660" y="232" font-family="ui-monospace, SFMono-Regular, Menlo, monospace"
+          font-size="15" fill="#FF6B5F" opacity="0.85">#FF6B5F</text>
+  </g>
+  <g opacity="1">
+    <animate attributeName="opacity" values="0;1" dur="0.5s" begin="0.6s" fill="freeze"/>
+    <rect x="44" y="262" width="34" height="34" rx="11" fill="#E8F0ED"/>
+    <circle cx="61" cy="279" r="17" fill="none" stroke="#E8F0ED" stroke-opacity="0.45" stroke-width="2">
+      <animate attributeName="r" values="17;26;17" dur="3.4s" begin="2.2s" repeatCount="indefinite"/>
+      <animate attributeName="stroke-opacity" values="0.45;0;0.45" dur="3.4s" begin="2.2s" repeatCount="indefinite"/>
+    </circle>
+    <text x="104" y="276" font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Text', system-ui, sans-serif"
+          font-size="19" font-weight="600" fill="#E8F0ED">Ice</text>
+    <text x="104" y="296" font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Text', system-ui, sans-serif"
+          font-size="15" fill="#8E9B98">What you read</text>
+    <text x="660" y="284" font-family="ui-monospace, SFMono-Regular, Menlo, monospace"
+          font-size="15" fill="#E8F0ED" opacity="0.85">#E8F0ED</text>
+  </g>
+  <g opacity="1">
+    <animate attributeName="opacity" values="0;1" dur="0.5s" begin="0.75s" fill="freeze"/>
+    <rect x="44" y="314" width="34" height="34" rx="11" fill="#090B0D" stroke="#8E9B98" stroke-opacity="0.5" stroke-width="1.5"/>
+    <circle cx="61" cy="331" r="17" fill="none" stroke="#090B0D" stroke-opacity="0.45" stroke-width="2">
+      <animate attributeName="r" values="17;26;17" dur="3.4s" begin="2.45s" repeatCount="indefinite"/>
+      <animate attributeName="stroke-opacity" values="0.45;0;0.45" dur="3.4s" begin="2.45s" repeatCount="indefinite"/>
+    </circle>
+    <text x="104" y="328" font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Text', system-ui, sans-serif"
+          font-size="19" font-weight="600" fill="#E8F0ED">Void</text>
+    <text x="104" y="348" font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Text', system-ui, sans-serif"
+          font-size="15" fill="#8E9B98">The ground everything sits on</text>
+    <text x="660" y="336" font-family="ui-monospace, SFMono-Regular, Menlo, monospace"
+          font-size="15" fill="#8E9B98" opacity="0.9">#090B0D</text>
+  </g>
+</svg>
