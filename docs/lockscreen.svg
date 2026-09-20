@@ -1,0 +1,45 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 760 330" width="760" height="330" role="img"
+     aria-label="Two Lock Screen cards at once: the pinned context, and the journey being followed">
+  <title>A card each, in full</title>
+  <rect width="760" height="330" rx="24" fill="#0C1114"/>
+  <text x="380" y="44" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Text', system-ui, sans-serif" font-size="17" fill="#8E9B98">
+    Two things at once, each with a whole card
+  </text>
+  
+  <g>
+    <animate attributeName="opacity" values="0;1" dur="0.6s" begin="0.4s" fill="freeze"/>
+    <animateTransform attributeName="transform" type="translate" values="0,14;0,0" dur="0.6s" begin="0.4s" fill="freeze"/>
+    <rect x="60" y="60" width="640" height="112" rx="26" fill="#12181C" stroke="#8E9B98" stroke-opacity="0.25" stroke-width="1.5"/>
+    <circle cx="92" cy="92" r="9" fill="#65E6D0"/>
+    <text x="110" y="98" font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Text', system-ui, sans-serif" font-size="13" fill="#65E6D0">PathOS</text>
+    <text x="110" y="120" font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Text', system-ui, sans-serif" font-size="18" font-weight="600" fill="#E8F0ED">Physics · LH-3, BMS College</text>
+    <text x="668" y="104" text-anchor="end" font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Text', system-ui, sans-serif" font-size="17" font-weight="600" fill="#65E6D0">in 22 min</text>
+    
+    <g>
+      <circle cx="92" cy="134" r="4" fill="#65E6D0" opacity="0.8"/>
+      <text x="108" y="139" font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Text', system-ui, sans-serif" font-size="14" fill="#C9D3D0">Leave by 8:35 · 25 min by road</text>
+    </g>
+    <g>
+      <circle cx="92" cy="158" r="4" fill="#65E6D0" opacity="0.8"/>
+      <text x="108" y="163" font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Text', system-ui, sans-serif" font-size="14" fill="#C9D3D0">Take an umbrella · 71% rain in 2 h</text>
+    </g>
+  </g>
+  <g>
+    <animate attributeName="opacity" values="0;1" dur="0.6s" begin="0.9s" fill="freeze"/>
+    <animateTransform attributeName="transform" type="translate" values="0,14;0,0" dur="0.6s" begin="0.9s" fill="freeze"/>
+    <rect x="60" y="188" width="640" height="112" rx="26" fill="#12181C" stroke="#8E9B98" stroke-opacity="0.25" stroke-width="1.5"/>
+    <circle cx="92" cy="220" r="9" fill="#B8F36B"/>
+    <text x="110" y="226" font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Text', system-ui, sans-serif" font-size="13" fill="#65E6D0">PathOS</text>
+    <text x="110" y="248" font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Text', system-ui, sans-serif" font-size="18" font-weight="600" fill="#E8F0ED">Ride to National College</text>
+    <text x="668" y="232" text-anchor="end" font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Text', system-ui, sans-serif" font-size="17" font-weight="600" fill="#B8F36B">14 min</text>
+    
+    <g>
+      <circle cx="92" cy="262" r="4" fill="#B8F36B" opacity="0.8"/>
+      <text x="108" y="267" font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Text', system-ui, sans-serif" font-size="14" fill="#C9D3D0">4 stops · about 11 min</text>
+    </g>
+    <g>
+      <circle cx="92" cy="286" r="4" fill="#B8F36B" opacity="0.8"/>
+      <text x="108" y="291" font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Text', system-ui, sans-serif" font-size="14" fill="#C9D3D0">then auto to BMS College</text>
+    </g>
+  </g>
+</svg>

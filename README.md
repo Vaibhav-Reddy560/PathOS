@@ -48,10 +48,14 @@ auto at the far end. Most travel apps will plan the middle. PathOS plans all thr
 -->
 
 <div align="center">
-<img src="docs/screens/map.png" width="30%" alt="The map, with the deck collapsed">
-<img src="docs/screens/now.png" width="30%" alt="Now: where you are, the weather, travel times">
-<img src="docs/screens/ways.png" width="30%" alt="Ways to get there, with every leg and fare">
+<img src="docs/screens/map.png" width="29%" alt="The map, with the deck collapsed">
+&nbsp;&nbsp;&nbsp;
+<img src="docs/screens/now.png" width="29%" alt="Now: where you are, the weather, travel times">
+&nbsp;&nbsp;&nbsp;
+<img src="docs/screens/ways.png" width="29%" alt="Ways to get there, with every leg and fare">
 </div>
+
+<br>
 
 ### The map is the interface
 
@@ -75,8 +79,10 @@ leg's time and what it costs**.
 ### Following a way, turn by turn
 
 <div align="center">
-<img src="docs/screens/driving.png" width="32%" alt="The driving view: the route, the arrow, the turn ahead">
+<img src="docs/screens/driving.png" width="31%" alt="The driving view: the route, the arrow, the turn ahead">
 </div>
+
+<br>
 
 Pick a way and PathOS follows it. On a road leg the map hands over to MapKit's own navigation
 tracking — its puck, its camera, its rotation — with the route drawn on it, the turn ahead in a
@@ -89,6 +95,12 @@ the map leans back in for the last leg.
 
 ### Leaving on time
 
+<div align="center">
+<img src="docs/leaving.svg" alt="The hour before a 9:00 class: in good time, leave by 8:35, leave now" width="100%">
+</div>
+
+<br>
+
 For the next thing today that happens somewhere — a session at Work, or any event with a place —
 PathOS works out when you would have to set off, and says so: quietly within the hour, plainly
 when it is time, and clearly once you would arrive late. On the island, on the Lock Screen, and
@@ -97,8 +109,16 @@ as a notification with the app closed.
 ### Mail that becomes your day
 
 <div align="center">
-<img src="docs/screens/mail.png" width="32%" alt="Mail from several accounts in one list">
+<img src="docs/mail-flow.svg" alt="Mail is read on the phone, offered for your day, and approved by you" width="100%">
 </div>
+
+<br>
+
+<div align="center">
+<img src="docs/screens/mail.png" width="31%" alt="Mail from several accounts in one list">
+</div>
+
+<br>
 
 Connect one Gmail account or several. PathOS reads new mail **on the phone** with Apple
 Intelligence, pulls out the events, deadlines and updates, and offers them for your day — you
@@ -117,6 +137,12 @@ Save where you parked, with photos and tags. Walk away, come back, and PathOS su
 Lock Screen as you approach. Geofenced, so it costs nothing while you are away.
 
 ### A Lock Screen that keeps up
+
+<div align="center">
+<img src="docs/lockscreen.svg" alt="Two Lock Screen cards at once: the pinned context and the journey" width="80%">
+</div>
+
+<br>
 
 Pin the context and the Lock Screen leads with whatever matters now — the session starting in
 twenty minutes, the umbrella you will want, the note you left at this spot, when to leave. Two

@@ -1,0 +1,61 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 250" width="1200" height="250" role="img"
+     aria-label="The hour before something starts: in good time, leave by, leave now">
+  <title>Knowing when to set off</title>
+  <rect width="1200" height="250" rx="24" fill="#0C1114"/>
+  <text x="600" y="46" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Text', system-ui, sans-serif" font-size="17" fill="#8E9B98">
+    A 9:00 class, twenty-five minutes away — what PathOS says, and when
+  </text>
+  
+  <g>
+    <rect x="140" y="108" width="330" height="14" rx="7" fill="#65E6D0" opacity="0.28"/>
+    <rect x="140" y="108" width="330" height="14" rx="7" fill="#65E6D0">
+      <animate attributeName="width" values="0;330" dur="0.8s" begin="0.3s" fill="freeze"/>
+    </rect>
+    <text x="305" y="152" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Text', system-ui, sans-serif" font-size="15" fill="#65E6D0">in good time</text>
+  </g>
+  <g>
+    <rect x="470" y="108" width="330" height="14" rx="7" fill="#B8F36B" opacity="0.28"/>
+    <rect x="470" y="108" width="330" height="14" rx="7" fill="#B8F36B">
+      <animate attributeName="width" values="0;330" dur="0.8s" begin="1.0s" fill="freeze"/>
+    </rect>
+    <text x="635" y="152" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Text', system-ui, sans-serif" font-size="15" fill="#B8F36B">within the hour</text>
+  </g>
+  <g>
+    <rect x="800" y="108" width="260" height="14" rx="7" fill="#FFBF69" opacity="0.28"/>
+    <rect x="800" y="108" width="260" height="14" rx="7" fill="#FFBF69">
+      <animate attributeName="width" values="0;260" dur="0.8s" begin="1.7s" fill="freeze"/>
+    </rect>
+    <text x="930" y="152" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Text', system-ui, sans-serif" font-size="15" fill="#FFBF69">time to go</text>
+  </g>
+  
+  <g>
+    <circle cx="140" cy="115" r="9" fill="#0C1114" stroke="#8E9B98" stroke-width="2"/>
+    <text x="140" y="88" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Text', system-ui, sans-serif" font-size="16" font-weight="600" fill="#E8F0ED">8:00</text>
+    <text x="140" y="196" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Text', system-ui, sans-serif" font-size="14" fill="#8E9B98">Quiet</text>
+  </g>
+  <g>
+    <circle cx="470" cy="115" r="9" fill="#0C1114" stroke="#8E9B98" stroke-width="2"/>
+    <text x="470" y="88" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Text', system-ui, sans-serif" font-size="16" font-weight="600" fill="#E8F0ED">8:35</text>
+    <text x="470" y="196" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Text', system-ui, sans-serif" font-size="14" fill="#8E9B98">Leave by 8:35</text>
+  </g>
+  <g>
+    <circle cx="800" cy="115" r="9" fill="#0C1114" stroke="#8E9B98" stroke-width="2"/>
+    <text x="800" y="88" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Text', system-ui, sans-serif" font-size="16" font-weight="600" fill="#E8F0ED">8:50</text>
+    <text x="800" y="196" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Text', system-ui, sans-serif" font-size="14" fill="#8E9B98">Leave now</text>
+  </g>
+  <g>
+    <circle cx="1060" cy="115" r="9" fill="#0C1114" stroke="#8E9B98" stroke-width="2"/>
+    <text x="1060" y="88" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Text', system-ui, sans-serif" font-size="16" font-weight="600" fill="#E8F0ED">9:00</text>
+    <text x="1060" y="196" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Text', system-ui, sans-serif" font-size="14" fill="#8E9B98">Starts</text>
+  </g>
+  <g>
+    <circle cx="140" cy="115" r="13" fill="#E8F0ED" opacity="0.95">
+      <animate attributeName="cx" values="140;470;800;1060" keyTimes="0;0.34;0.72;1" dur="7s" begin="1.2s" repeatCount="indefinite"/>
+    </circle>
+    <circle cx="140" cy="115" r="13" fill="none" stroke="#E8F0ED" stroke-opacity="0.5" stroke-width="2">
+      <animate attributeName="cx" values="140;470;800;1060" keyTimes="0;0.34;0.72;1" dur="7s" begin="1.2s" repeatCount="indefinite"/>
+      <animate attributeName="r" values="13;24;13" dur="2.2s" repeatCount="indefinite"/>
+      <animate attributeName="stroke-opacity" values="0.5;0;0.5" dur="2.2s" repeatCount="indefinite"/>
+    </circle>
+  </g>
+</svg>
