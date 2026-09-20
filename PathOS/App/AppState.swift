@@ -115,6 +115,7 @@ final class AppState {
     let mail: MailService
     let changes: ChangeService
     let journeys: JourneyPlanner
+    let backups: BackupService
 
     var selectedTab: AppTab = .now
     var deckStop: DeckStop = .collapsed
@@ -322,6 +323,7 @@ final class AppState {
         mail = MailService(context: modelContext, ai: ai, eventStore: eventStore, places: places, notifications: notifications)
         changes = ChangeService(ai: ai, timetable: timetable, eventStore: eventStore, trips: trips, places: places)
         journeys = JourneyPlanner(places: places, transit: transit)
+        backups = BackupService(context: modelContext)
 
         haptics.isAdaptive = adaptiveSound
         notifications.onOpenURL = { [weak self] url in
@@ -363,6 +365,8 @@ final class AppState {
         await notifications.refreshStatus()
         await vault.syncGeofences(userLocation: location.location)
         scheduleBackgroundRefresh()
+        // A copy of everything, every couple of days, so the data outlives the app itself.
+        backups.writeIfDue()
     }
 
     /// Lifts the launch view once the map has something to centre on: your location, or the
@@ -687,6 +691,20 @@ final class AppState {
             longitude: coordinate.longitude,
             arriveBy: arriveBy
         )
+    }
+
+    /// After a backup is put back: everything on screen is rebuilt from the restored store, and
+    /// the geofences and reminders that were set for the old data are set again for the new.
+    func reloadAfterRestore() async {
+        selectedSignalID = nil
+        endTrip()
+        await vault.syncGeofences(userLocation: location.location)
+        timetable.refreshReminders()
+        eventStore.refreshReminders()
+        trips.refreshReminders()
+        await refreshDeparture()
+        await refreshPinnedContext()
+        showToast("Your data is back", symbol: "checkmark.circle.fill")
     }
 
     /// Shows a signal on the map: the deck gets out of the way and the map centres on it,

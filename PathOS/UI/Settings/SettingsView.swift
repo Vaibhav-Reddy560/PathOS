@@ -12,6 +12,9 @@ struct SettingsView: View {
     @AppStorage(CalendarEventSource.enabledKey) private var showsCalendarEvents = false
     @State private var calendarNote: String?
     @State private var appIcon = AppIconChoice.current
+    @State private var backupToShare: URL?
+    @State private var backupNote: String?
+    @State private var isImportingBackup = false
 
     var body: some View {
         @Bindable var state = state
@@ -36,6 +39,7 @@ struct SettingsView: View {
                 }
 
                 appIconSection
+                dataSection
 
                 Section {
                     LabeledContent("Location", value: locationStatus)
@@ -56,7 +60,7 @@ struct SettingsView: View {
                 Section {
                     Text("PathOS sends alerts from your iPhone itself — rain and pressure changes, arrivals at your saved places, and departure reminders. It can't use push notifications on a free Apple ID.")
                     Text("iOS decides when a backgrounded app may check, usually every 15–60 minutes, so an alert can lag the weather a little.")
-                    Text("The app also stops running 7 days after it's installed until it's installed again. Your data is kept.")
+                    Text("The app also stops running 7 days after it's installed until it's installed again. Installing it again keeps everything you've saved — see Your data above.")
                 } header: {
                     InstrumentLabel("How alerts work")
                 }
@@ -221,6 +225,9 @@ struct SettingsView: View {
             }
             .scrollContentBackground(.hidden)
             .background(Color.deepSurface)
+            .fileImporter(isPresented: $isImportingBackup, allowedContentTypes: [.json]) { result in
+                restore(from: result)
+            }
             .navigationTitle("Settings")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -228,6 +235,62 @@ struct SettingsView: View {
                     Button("Done") { dismiss() }
                 }
             }
+        }
+    }
+
+    /// Keeping the data: what survives, what doesn't, and the file that always does.
+    private var dataSection: some View {
+        Section {
+            LabeledContent("On this iPhone", value: state.backups.archive().summary)
+                .font(.footnote)
+
+            Button("Back up to a file", systemImage: "square.and.arrow.up") {
+                backUp()
+            }
+            if let backupToShare {
+                ShareLink(item: backupToShare) {
+                    Label("Save or send the backup", systemImage: "tray.and.arrow.up")
+                }
+            }
+            Button("Restore from a backup", systemImage: "square.and.arrow.down") {
+                isImportingBackup = true
+            }
+            if let lastBackup = state.backups.lastBackupAt {
+                LabeledContent("Last backup", value: lastBackup.formatted(date: .abbreviated, time: .shortened))
+                    .font(.footnote)
+            }
+            if let backupNote {
+                Text(backupNote)
+                    .font(.footnote)
+                    .foregroundStyle(backupNote.hasPrefix("Couldn't") ? .coral : .aurora)
+            }
+        } header: {
+            InstrumentLabel("Your data")
+        } footer: {
+            Text("Everything you save — places, memories and their photos, events, your schedule, trips, mail, expenses — lives on this iPhone in PathOS's own storage. Installing the app again every seven days keeps it, and so does an iPhone backup; deleting the app does not. PathOS writes a backup file every couple of days into **Files → On My iPhone → PathOS**. Keep one copy in iCloud Drive and nothing can be lost. The Google sign-in is deliberately left out of it — sign in again after restoring.")
+        }
+    }
+
+    private func backUp() {
+        do {
+            let url = try state.backups.write()
+            backupToShare = url
+            backupNote = "Saved to Files → On My iPhone → PathOS."
+        } catch {
+            backupNote = "Couldn't write the backup: \(error.localizedDescription)"
+        }
+    }
+
+    private func restore(from result: Result<URL, Error>) {
+        do {
+            let url = try result.get()
+            let opened = url.startAccessingSecurityScopedResource()
+            defer { if opened { url.stopAccessingSecurityScopedResource() } }
+            let archive = try state.backups.restore(from: Data(contentsOf: url))
+            backupNote = "Restored \(archive.summary)."
+            Task { await state.reloadAfterRestore() }
+        } catch {
+            backupNote = "Couldn't read that backup: \(error.localizedDescription)"
         }
     }
 

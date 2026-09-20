@@ -63,6 +63,10 @@ targets:
         NSPhotoLibraryUsageDescription: "PathOS can scan posters and receipts from your photos."
         NSSupportsLiveActivities: true
         NSSupportsLiveActivitiesFrequentUpdates: true
+        # The automatic backups live in Documents; these two make that folder visible in Files,
+        # so a copy can be moved to iCloud Drive and outlive the app.
+        UIFileSharingEnabled: true
+        LSSupportsOpeningDocumentsInPlace: true
         UIBackgroundModes:
           - location
           - fetch

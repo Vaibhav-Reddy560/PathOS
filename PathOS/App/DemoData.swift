@@ -122,6 +122,24 @@ extension AppState {
         if arguments.bool(forKey: "PathOSDemoMail") {
             seedDemoMail()
         }
+        // `-PathOSBackupCheck YES` writes a backup, wipes everything, restores it, and prints
+        // what survived — the whole round trip against the real store.
+        if arguments.bool(forKey: "PathOSBackupCheck") {
+            Task {
+                try? await Task.sleep(for: .seconds(3))
+                let before = backups.archive().summary
+                do {
+                    let url = try backups.write()
+                    let data = try Data(contentsOf: url)
+                    let restored = try backups.restore(from: data)
+                    await reloadAfterRestore()
+                    NSLog("PathOS backup check: before [%@] file [%@] after [%@]",
+                          before, restored.summary, backups.archive().summary)
+                } catch {
+                    NSLog("PathOS backup check: failed %@", error.localizedDescription)
+                }
+            }
+        }
         // `-PathOSAppIcon map|route` switches the Home Screen icon, so a trial one can be put on a
         // phone from here rather than tapped through Settings.
         if let icon = arguments.string(forKey: "PathOSAppIcon") {

@@ -42,6 +42,8 @@
 		<string>rapido</string>
 		<string>googlegmail</string>
 	</array>
+	<key>LSSupportsOpeningDocumentsInPlace</key>
+	<true/>
 	<key>NSCalendarsFullAccessUsageDescription</key>
 	<string>PathOS shows events from your calendars, including ones you subscribe to, on the map with their places.</string>
 	<key>NSCalendarsWriteOnlyAccessUsageDescription</key>
@@ -70,6 +72,8 @@
 		<string>fetch</string>
 		<string>processing</string>
 	</array>
+	<key>UIFileSharingEnabled</key>
+	<true/>
 	<key>UILaunchScreen</key>
 	<dict>
 		<key>UIColorName</key>

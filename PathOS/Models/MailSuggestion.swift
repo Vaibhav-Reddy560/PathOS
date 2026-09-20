@@ -31,6 +31,9 @@ final class MailSuggestion {
     var threadID: String?
     var createdAt: Date = Date()
 
+    /// An empty one, filled field by field when a backup is put back.
+    init() {}
+
     init(message: MailMessage, proposal: MailProposal, account: String? = nil) {
         self.account = account
         messageID = message.id
