@@ -33,6 +33,9 @@ targets:
         PRODUCT_NAME: PathOS
         PRODUCT_BUNDLE_IDENTIFIER: com.vaibhavreddy.pathos
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        # The map-only trial icon, chosen in Settings → App icon.
+        ASSETCATALOG_COMPILER_ALTERNATE_APPICON_NAMES: AppIconMap
+        ASSETCATALOG_COMPILER_INCLUDE_ALL_APPICON_ASSETS: YES
         ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
     info:
       path: PathOS/Info.plist
@@ -70,6 +73,7 @@ targets:
           - uber
           - olacabs
           - rapido
+          - googlegmail
 
   PathOSWidgets:
     type: app-extension

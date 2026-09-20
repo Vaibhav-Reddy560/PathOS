@@ -112,8 +112,8 @@ struct LockScreenContextTests {
     }
 
     @Test func theTravelTimeShowsAroundWhenYouUsuallyLeave() {
-        let commute = LockScreenContext.Commute(destination: "Work", minutes: 35, byTransit: true, usualDeparture: 9 * 60 + 10)
-        let note = PathOSActivityAttributes.Note(symbol: "tram.fill", text: "Work: 35 min by transit", role: .you)
+        let commute = LockScreenContext.Commute(destination: "Work", minutes: 35, mode: .car, usualDeparture: 9 * 60 + 10)
+        let note = PathOSActivityAttributes.Note(symbol: "car.fill", text: "Work: 35 min by car", role: .you)
         #expect(content(now: at(8), commute: commute).state.notes == [note])
         #expect(content(now: at(9, 50), commute: commute).state.notes == [note])
         #expect(content(now: at(6), commute: commute).state.notes == nil)
@@ -143,7 +143,7 @@ struct LockScreenContextTests {
     @Test func neverMoreThanTwoNotes() {
         let physics = lesson("Physics", at(9, 15), at(10))
         let maths = lesson("Maths", at(10, 15), at(11))
-        let commute = LockScreenContext.Commute(destination: "Work", minutes: 35, byTransit: true, usualDeparture: 9 * 60)
+        let commute = LockScreenContext.Commute(destination: "Work", minutes: 35, mode: .car, usualDeparture: 9 * 60)
         let shown = content(now: at(9), agenda: [physics, maths], weather: wet, advice: rain, commute: commute,
                             memory: .init(title: "Locker 12", body: ""))
         #expect(shown.state.notes?.count == 2)
@@ -156,5 +156,17 @@ struct LockScreenContextTests {
         #expect(shown.state.subtitle.hasPrefix("Due "))
         #expect(shown.staleDate == at(17))
         #expect(content(now: at(17, 5), agenda: [essay]).state.title == "Home")
+    }
+
+    @Test func whenToLeaveIsTheFirstNote() {
+        let physics = lesson("Physics", at(9), at(10), room: "LH-3")
+        let leave = AlertSnapshot.Departure(id: "Physics", title: "Physics", placeName: "BMS College", start: at(9), travelMinutes: 25,
+                                            byRoad: true, status: .leaveNow(leaveBy: at(8, 30)), isOnTheWay: false, latitude: 12.94, longitude: 77.56)
+        let shown = LockScreenContext.content(for: .init(
+            venueName: "Home", venueSymbol: "house.fill", weather: dry, exitAdvice: nil,
+            agenda: [physics], departure: leave, now: at(8, 31), calendar: calendar
+        ))
+        #expect(shown.state.notes?.first?.text == "Leave now · 25 min by road to BMS College")
+        #expect(shown.state.notes?.first?.role == .attention)
     }
 }

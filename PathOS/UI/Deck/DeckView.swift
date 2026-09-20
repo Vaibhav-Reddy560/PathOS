@@ -32,6 +32,7 @@ struct DeckPanel: View {
             let height = currentHeight(heights)
             let collapsed = heights[.collapsed] ?? 0
             let reveal = DeckLayout.reveal(deckHeight: height, collapsedHeight: collapsed)
+            let depth = DeckLayout.depth(deckHeight: height, collapsedHeight: collapsed, fullHeight: heights[.full] ?? 0)
             let shape = RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
 
             DeckView(
@@ -39,7 +40,12 @@ struct DeckPanel: View {
                 reveal: reveal,
                 drag: dragGesture(heights: heights)
             )
-            .frame(height: height, alignment: .top)
+            // A set width: content that wants more room is fitted or clipped, never allowed to
+            // widen the deck past the screen's edge, which a row of buttons once did.
+            .frame(width: max(0, proxy.size.width - 2 * DeckLayout.sideMargin), height: height, alignment: .top)
+            // Pulled all the way up, the deck is a page of its own: the map behind goes dark.
+            // Collapsed, it's glass over the map.
+            .background(Color.deepSurface.opacity(depth), in: shape)
             .clipShape(shape)
             .glassEffect(.regular, in: shape)
             .contentShape(shape)
@@ -56,7 +62,7 @@ struct DeckPanel: View {
             .padding(.bottom, DeckLayout.bottomMargin)
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
             .accessibilityAction(named: shownStop == .collapsed ? "Open" : "Collapse") {
-                state.deckStop = shownStop == .collapsed ? .half : .collapsed
+                state.deckStop = shownStop == .collapsed ? .full : .collapsed
             }
         }
         .ignoresSafeArea(.container)
@@ -176,14 +182,15 @@ struct DeckView: View {
             case .day: DayDeck()
             case .radar: RadarDeck()
             case .vault: VaultDeck()
+            case .search: SearchDeck()
             }
         }
     }
 }
 
 /// For a deck mode's main scroll view. Below full it stays still, so a drag moves the deck
-/// instead, the way a sheet's content does; at full, pulled down from its top, it lowers the deck
-/// to half. Only a pull that starts at the top counts: scrolling back up and overshooting it
+/// instead, the way a sheet's content does; at full, pulled down from its top, it collapses the
+/// deck. Only a pull that starts at the top counts: scrolling back up and overshooting it
 /// doesn't. Radar keeps that pull for scanning again.
 struct DeckScroll: ViewModifier {
     var lowersOnPull = true
@@ -208,7 +215,7 @@ struct DeckScroll: ViewModifier {
                     startedAtTop = isAtTop
                 } else if old == .interacting {
                     if lowersOnPull, startedAtTop, pull > 64 {
-                        state.deckStop = .half
+                        state.deckStop = .collapsed
                     }
                     startedAtTop = false
                 }

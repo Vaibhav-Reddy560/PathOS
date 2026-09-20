@@ -99,8 +99,8 @@ struct ChangeProposalCard: View {
         case .moveClass(_, let subject, _, _, _, _), .moveEvent(_, let subject, _, _), .moveLeg(_, let subject, _, _): "Move \(subject)"
         case .cancelClass(_, let subject, _, _), .cancelEvent(_, let subject, _): "Cancel \(subject)"
         case .cancelLeg(_, let title, _): "Remove \(title)"
-        case .dayOff: "No classes"
-        case .classesOn: "Classes back on"
+        case .dayOff: "Day off"
+        case .classesOn: "Schedule back on"
         case .renameEvent: "Rename event"
         case .addEvent(let title, _, _): "Add \(title)"
         }
@@ -154,14 +154,14 @@ struct ChangeProposalCard: View {
     private var note: String? {
         switch pending.change {
         case .cancelClass(_, _, _, let everyWeek):
-            everyWeek ? "It comes off your timetable. You can turn it back on from the Timetable sheet." : "Just this once. Every other week stays as it is."
+            everyWeek ? "It comes off your weekly schedule. You can turn it back on from Weekly schedule." : "Just this once. Every other week stays as it is."
         case .dayOff:
-            "Your timetable is skipped that day. Events and trips stay."
+            "Your weekly schedule is skipped that day. Events and trips stay."
         case .cancelEvent:
             "It's removed from PathOS and from your Calendar."
         case let .moveClass(_, _, _, from, to, everyWeek):
             !everyWeek && !Calendar.current.isDate(from.start, inSameDayAs: to.start)
-                ? "That day's class is cancelled and a one-off class is added on the new day."
+                ? "That day's session is cancelled and a one-off one is added on the new day."
                 : nil
         default:
             nil
@@ -182,11 +182,11 @@ struct ChangeProposalCard: View {
         let day = interval.start.formatted(.dateTime.weekday(.abbreviated).day().month(.abbreviated))
         let start = interval.start.formatted(date: .omitted, time: .shortened)
         guard interval.end > interval.start else { return "\(day), \(start)" }
-        return "\(day), \(start)–\(interval.end.formatted(date: .omitted, time: .shortened))"
+        return "\(day), " + .range(start, interval.end.formatted(date: .omitted, time: .shortened))
     }
 
     private static func weekly(_ interval: DateInterval) -> String {
-        "\(weekday(interval.start))s, \(interval.start.formatted(date: .omitted, time: .shortened))–\(interval.end.formatted(date: .omitted, time: .shortened))"
+        "\(weekday(interval.start))s, " + .range(interval.start.formatted(date: .omitted, time: .shortened), interval.end.formatted(date: .omitted, time: .shortened))
     }
 
     private static func moment(_ date: Date) -> String {

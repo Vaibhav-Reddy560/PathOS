@@ -288,20 +288,20 @@ private struct PlaceRow: View {
                 Text(kind.label)
                     .font(.headline)
                     .foregroundStyle(.ice)
+                if let place, place.name != kind.label {
+                    Text(place.name)
+                        .font(.subheadline)
+                        .foregroundStyle(.mist)
+                        .lineLimit(1)
+                }
                 InstrumentLabel(place.map { "\(Int($0.radius)) m geofence" } ?? "Not set")
             }
             Spacer(minLength: 0)
-            Button(place == nil ? "Set here" : "Move here") {
-                Task {
-                    if await state.setPlaceHere(kind) {
-                        state.showToast("\(kind.label) saved")
-                    } else {
-                        state.showToast("Couldn't get your location", role: .attention, symbol: "location.slash.fill")
-                    }
-                }
+            // Anywhere, not only where you're standing: found in Search, or picked on the map.
+            PlaceSetMenu(kind: kind, isSet: place != nil) {
+                state.searchSettingPlace = kind
+                state.showDeck(.search)
             }
-            .font(.subheadline.weight(.semibold))
-            .pathSecondaryAction()
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 12)

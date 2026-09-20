@@ -173,7 +173,7 @@ nonisolated struct DaySummary: Equatable, Sendable {
             parts.append(legCount == 1 ? "1 trip leg" : "\(legCount) trip legs")
         }
         if classCount > 0 {
-            parts.append(classCount == 1 ? "1 class" : "\(classCount) classes")
+            parts.append(classCount == 1 ? "1 session" : "\(classCount) sessions")
         }
         if eventCount > 0 {
             parts.append(eventCount == 1 ? "1 event" : "\(eventCount) events")

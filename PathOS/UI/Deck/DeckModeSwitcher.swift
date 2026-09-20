@@ -7,6 +7,7 @@ extension AppTab {
         case .day: "Day"
         case .radar: "Radar"
         case .vault: "Vault"
+        case .search: "Search"
         }
     }
 
@@ -16,6 +17,7 @@ extension AppTab {
         case .day: "calendar"
         case .radar: "dot.radiowaves.left.and.right"
         case .vault: "bookmark"
+        case .search: "magnifyingglass"
         }
     }
 }
@@ -28,7 +30,7 @@ struct DeckModeSwitcher: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
-    static let modes: [AppTab] = [.now, .day, .radar, .vault]
+    static let modes: [AppTab] = [.now, .day, .radar, .vault, .search]
 
     var body: some View {
         GlassEffectContainer(spacing: 4) {

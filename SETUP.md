@@ -70,18 +70,26 @@ xcodebuild test -scheme PathOS -destination 'platform=iOS Simulator,name=iPhone 
 | Receipt | Camera button on the right of the map → shoot a bill → **Log expense**. |
 | Event poster | Camera button → scan a poster → **Add to Calendar**. It shows up on the map and in Radar. |
 | Day | Pull up the deck → **Day**. Move between days with ‹ ›. Today shows **Next up** with a live countdown and **Point me there**; past days show what happened and how far you travelled. |
-| Trips | **Day → Plan a trip**: name it, set the days, then add legs (walk, scooter, car, cab, bus, metro, train, flight, ferry). Legs show in Day alongside classes and events, remind you 45 minutes before departure, and each day gets a summary of what it added up to. |
+| Trips | **Day → Plan a trip**: name it, set the days, then add legs (walk, scooter, car, cab, bus, metro, train, flight, ferry). Legs show in Day alongside sessions and events, remind you 45 minutes before departure, and each day gets a summary of what it added up to. |
+| Ways to get there | Search a place → **…** → **Ways to get there**, or the same button on any place card, or **Now → Getting around → Ways to get there** for Work. The metro ride joins at the station nearest you and leaves at the one nearest where you're going — always those two, since they're the answer you can check against what you know about the city. Another pair is used only when the nearest can't be: no route between them, or a ride covering less than 45% of the journey, which is what a stop-or-two hop with an auto doing the real travelling looks like. Each way is the whole journey: an auto to the station, the ride, the walk at the far end — with each leg's time and what it costs (auto, bike taxi and cab prices for a road leg; token and smart-card fares for the metro). **Follow this way** then tracks it: the Lock Screen carries the leg you're on, and PathOS says so when you fall behind. |
 | Metro journey | **Now → Plan a metro or bus journey**: pick any two stations (**I'm at a station** fills the first). You get the lines, which direction to board, where to change, and the time, fare and whether trains are running now. While travelling you get stops remaining, a **Change next** alert before each change, a **Get off next** alert one stop early, and a Lock Screen activity. These keep working with the phone in your pocket. |
 | Bus journey | Same sheet, **Bus**: pick two stops and choose a direct bus. Or tap a bus stop on the map (the small cyan squares) to see what runs from it. Timings are approximate. |
 | Change by talking | Open the assistant and say or type "move my 3pm class to 4", "cancel Thursday's lab", "no classes on Monday" or "push dinner to 9". A card shows the change: **Approve**, **Edit** or **Cancel**. Classes can change just once or every week. |
 | Trip tracking | Open PathOS during a trip leg, tap **Start tracking** on its departure reminder, or tap the leg's pin on the map. The Lock Screen shows the ETA and distance to go, and it says when you're running late. Metro legs between two stations are followed stop by stop. |
 | Calendar events | **Settings → Calendars → Show events from my calendars**. Subscribe to public calendars in the Calendar app, and their events appear on the map with times. |
-| Timetable | **Day → Add timetable**: paste your timetable or pick a photo of it, tap **Read it**, check what the model found, then Save. Classes then appear in Day every week, with a reminder 10 minutes before each. **No classes today** marks a day off; long-press a class to skip just that one. |
-| Add an event | **Day → Add an event**, or **Paste a message**: copy a WhatsApp message or invite, and the on-device model reads the title, time and venue out of it. Nothing saves until you confirm. Events also copy to your Apple Calendar. |
+| Weekly schedule | **Day → Schedule**: paste your weekly schedule (a college timetable or work shifts) or pick a photo of it, tap **Read it**, check what was found, then Save. Each session then appears in Day every week at your **Work** place, room first ("LH-3 · BMS College"), with a reminder 10 minutes before. **Take today off** skips a day; long-press a session to skip just that one. |
+| Add an event | **Day → Add an event**, or **Paste a message**: copy a WhatsApp message or invite, and the on-device model reads the title, time and venue out of it. Its place can be set by **Search** (type it, pick from what Apple Maps found), **I'm here**, or **Find on map**. Nothing saves until you confirm. Events also copy to your Apple Calendar. |
 | Tag a place | **Vault → Save this spot**: add tags (Parking, Study, Food… or your own) and up to 5 photos. Tags show in the Vault and on the place card. |
 | Place details | Tap any cyan place on the map, or a Radar row. The card shows street imagery where Apple has it, address, phone and website, plus **Photos, hours & reviews** for Apple's full card. |
-| Island alerts | The capsule under the status bar shows the most important thing right now: amber for rain or an event starting soon, green for your journey or guidance, cyan for weather. Tap it for details. |
-| Pinned context | **Now** → the pin beside where you are. The Lock Screen then leads with whatever matters: a class or event starting within the hour (counting down to its start) or under way (the time left, with a progress bar), else a note you left at this spot, else **Take an umbrella**, else where you are and the weather. Up to two notes follow, such as the umbrella, your travel time around when you usually leave, and what's next. During a metro or bus journey, a trip leg or the pointer, the directions take over and the context comes back after. Tap the pin again to unpin. iOS ends a Live Activity after eight hours or a restart; PathOS puts it back the next time you open it, unless you swiped it away. |
+| The deck | Two heights only: collapsed, or open to just under the island. Swipe up and it opens all the way; pull down from the top of its content and it collapses. Tapping a place on the map opens its card; **Show on the map** collapses the deck so you can see it. |
+| Getting around | **Now → Getting around**: to Work (or Home, from Work) by car and on a two-wheeler, then by metro or bus. The walk shows only when it's under 25 minutes. Apple Maps doesn't route two-wheelers, so that time is the car's less a fifth, marked with ~. |
+| Island alerts | The capsule under the status bar shows the most important thing right now: amber for rain or an event starting soon, green for your journey or guidance, cyan for weather. Tap it for details; open, it's exactly as wide as the deck. |
+| Pinned context | **Now** → the pin beside where you are. Every Lock Screen card PathOS puts up — the pinned context, a journey, a trip leg, the pointer — is headed **PathOS** in Ion teal, with what it's about on the line below. It leads with whatever matters: a session or event starting within the hour (counting down to its start) or under way (the time left, with a progress bar), else a note you left at this spot, else **Take an umbrella**, else where you are and the weather. Up to two notes follow, such as the umbrella, your travel time around when you usually leave, and what's next. During a metro or bus journey, a trip leg or the pointer, the directions take over and the context comes back after. Tap the pin again to unpin. iOS ends a Live Activity after eight hours or a restart; PathOS puts it back the next time you open it, unless you swiped it away. |
+| Following a way on the map | Collapse the deck while following a road leg and MapKit's own map takes over, following you the way it does in every app on the phone: its user puck, its camera, its rotation, held at street level. The leg's route is drawn in green, and the turn ahead sits in a banner with its own glyph — "In 200 m, turn left onto 32nd E Cross Road". On the metro or a bus it pulls back to the whole ride with its stations, then leans back in for the leg at the far end. The other pins step aside so only the journey is on the map, and the collapsed strip becomes the journey's numbers: arrival time, minutes left, distance to go. Turns are spoken aloud, once about 300 m out and once at the turn; the speaker button on the map mutes them. Where you are, the distance to the turn and the time left update about once a second, and leaving the route for three fixes running re-routes you, at most once every ten seconds. The map turns to your heading where there's a compass to read it, and simply keeps you centred where there isn't. Turns are spoken aloud, once about 300 m out and once at the turn; the speaker button on the map mutes them. Moving the map yourself stops it following until you tap **Recentre**. Turns are Apple Maps'; the distance to each is PathOS's from your own position. |
+| Following a way | While you're making a journey, Now leads with the leg you're on and what's left, the island shows it, and the Lock Screen carries it. Falling behind the plan is said plainly — "12 min behind · you should be at Jayadeva Hospital by now" — and if the journey was for something with a start time, it says how late you'd be for it. It's measured from where *you* are: no Indian operator publishes live train or bus positions. Starting a metro journey from the planner while you're away from the first station adds getting there as its own leg. |
+| Leaving on time | Automatic, for the next thing today that happens somewhere: your weekly schedule at **Work**, or an event with a place. From how long Apple Maps says it takes to get there from where you are (on foot under 1.5 km, by road otherwise), the island says **Leave by 8:35** within the hour, **Leave now** when it's time (amber, with **Point me there** and **Book a cab**), and **You'll be about 12 min late** once you wouldn't make it. Once you're there, or already on your way in good time, it stays quiet. Notifications come ten minutes before and when it's time to leave, with PathOS closed, and as you move with Always location. The pinned Lock Screen shows the same line. Once the time left is within about 15 minutes of the journey itself, **Getting around** leads with the ways of getting there, and a notification says the route is ready. |
+| Search | The magnifying glass to the right of Vault: any place or address Apple Maps knows, and your own saved places and notes. **Point me there**, or **…** to show it on the map, set it as Home or Work, or book a cab. |
+| Home and Work anywhere | **Search**, **Vault → Places** or **Now**: **Set**/**Change** → **Search for it**, **Pick on the map** (move the map under the pin, then **Set Work here**) or **Where I am now**. |
 | Exit check | Deck gear → **Run exit check now**, or leave Home when rain is forecast. |
 | Voice | Press the Action Button, or tap the waveform button on the map: "Top cafés within a 5-minute walk". The island opens into the assistant and answers appear on the map in cyan. |
 
@@ -119,6 +127,19 @@ no alpha — iOS applies the rounded mask itself). Useful flags:
 - `--glass-bevel 7` is how far in from the outline the glass rolls off.
 - `--route-style dashed` picks the green treatment. `IconVariants.png` at the repo root shows them
   side by side; regenerate it by rendering each style with `--out`.
+- `--map-detail fine` draws the city as a real map rather than a texture: side streets inside every
+  block, individual buildings, pocket parks, and a river the main roads cross as bridges. It skips
+  the edge blur, so everything stays sharp. The side streets and buildings come from a generator
+  of their own, so the standard map, and the app icon, never change because of them.
+
+**The map-only trial icon** is an alternate icon, `AppIconMap`, which you can switch to in
+**Settings → App icon** and switch back from. It has no route and no pins, just the mark on the
+fine map:
+
+```
+swift run --package-path Tools/IconForge -c release IconForge --route-style none --map-detail fine \
+  --out PathOS/Resources/Assets.xcassets/AppIconMap.appiconset/AppIconMap.png
+```
 - `--mask <file>` writes the mark's silhouette on its own, which is what the contrast measurements
   sample against.
 
@@ -298,7 +319,7 @@ Launch arguments open any state without tapping:
 
 ```sh
 xcrun simctl launch booted com.vaibhavreddy.pathos -PathOSDemoData YES \
-  -PathOSDeepLink pathos://radar -PathOSDeckDetent medium
+  -PathOSDeepLink pathos://radar -PathOSDeckDetent large
 ```
 
 - `-PathOSDemoData YES` seeds Home, Work, two memories and an event around MG Road, Bengaluru. Set the simulator location with `xcrun simctl location booted set 12.9716,77.5946`.
@@ -306,7 +327,7 @@ xcrun simctl launch booted com.vaibhavreddy.pathos -PathOSDemoData YES \
   the journey planner with `pathos://journey?from=Whitefield&to=Silk%20Institute`
   (add `&by=bus` for bus stop names).
 - `-PathOSChangeProposal YES` shows a drafted class move on the assistant, without the model.
-- `-PathOSDeckDetent medium|large` sets the deck height.
+- `-PathOSDeckDetent large` opens the deck.
 - `-PathOSIslandExpanded YES` holds the island open.
 - `-PathOSSelectFirstPlace YES` opens the first discovered place's card.
 - `-PathOSDemoReadouts YES` fills the peek strip's readouts, which the simulator has no weather or altimeter to supply.

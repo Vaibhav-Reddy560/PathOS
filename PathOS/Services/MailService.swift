@@ -27,9 +27,15 @@ final class MailService {
     }
 
     private(set) var accounts: [Account] = []
-    private(set) var isChecking = false
     private(set) var isConnecting = false
     private(set) var lastError: String?
+    /// Accounts being read right now, and how far each has got: a new account's first check
+    /// reads up to 30 messages, one at a time.
+    private(set) var reading: [String: (done: Int, total: Int)] = [:]
+    /// What went wrong on each account's last check, until one works.
+    private(set) var accountErrors: [String: String] = [:]
+
+    var isChecking: Bool { !reading.isEmpty }
     /// Senders whose mail comes first: addresses, or "@college.edu" for everyone there.
     private(set) var prioritySenders: [String] = UserDefaults.standard.stringArray(forKey: Keys.prioritySenders) ?? [] {
         didSet { UserDefaults.standard.set(prioritySenders, forKey: Keys.prioritySenders) }
@@ -101,6 +107,13 @@ final class MailService {
         }
     }
 
+    #if DEBUG
+    /// Accounts to lay the Mail tab out with, in the simulator; they have no sign-in to check.
+    func seedDemoAccounts(_ emails: [String]) {
+        accounts = emails.map { Account(email: $0, isSignedIn: true, lastCheckedAt: Date()) }
+    }
+    #endif
+
     /// The one account PathOS used to keep, moved into the list of accounts, once.
     private static func moveSingleAccountSetUp() {
         let defaults = UserDefaults.standard
@@ -137,7 +150,9 @@ final class MailService {
                 UserDefaults.standard.set(accounts.map(\.email), forKey: Keys.accounts)
             }
             lastError = nil
-            await check()
+            // This account alone, straight away: a check of the others may already be running,
+            // which once meant a new account wasn't read until the next one.
+            _ = await check(address, limit: 25, notify: false)
         } catch GoogleOAuthError.cancelled {
             return
         } catch {
@@ -212,15 +227,11 @@ final class MailService {
 
     /// Reads mail that arrived since the last check, account by account. `limit` caps how many
     /// messages each account has read, so a background check fits in the time iOS gives it; the
-    /// rest are picked up next time.
+    /// rest are picked up next time. An account already being read is left to finish.
     @discardableResult
     func check(limit: Int = 25, notify: Bool = false) async -> Int {
-        guard !isChecking else { return 0 }
-        isChecking = true
-        defer { isChecking = false }
-
         var found: [MailSuggestion] = []
-        for account in accounts where account.isSignedIn {
+        for account in accounts where account.isSignedIn && reading[account.email] == nil {
             found += await check(account.email, limit: limit, notify: notify)
         }
         if notify {
@@ -231,7 +242,9 @@ final class MailService {
     }
 
     private func check(_ email: String, limit: Int, notify: Bool) async -> [MailSuggestion] {
-        guard let session = sessions[email] else { return [] }
+        guard let session = sessions[email], reading[email] == nil else { return [] }
+        reading[email] = (0, 0)
+        defer { reading[email] = nil }
         let defaults = UserDefaults.standard
         let startedAt = Date()
         do {
@@ -242,7 +255,10 @@ final class MailService {
 
             var found: [MailSuggestion] = []
             var readAll = unread.count <= limit
-            for id in unread.prefix(limit) {
+            let batch = unread.prefix(limit)
+            reading[email] = (0, batch.count)
+            for (done, id) in batch.enumerated() {
+                reading[email] = (done, batch.count)
                 let message = MailParsing.message(from: try await session.message(id: id))
                 // Muted senders' mail isn't read at all; it's noted only so it's never fetched again.
                 let proposal: MailProposal
@@ -270,7 +286,7 @@ final class MailService {
             if let index = accounts.firstIndex(where: { $0.email == email }) {
                 accounts[index].lastCheckedAt = startedAt
             }
-            lastError = nil
+            accountErrors[email] = nil
             return found
         } catch GoogleOAuthError.signInExpired {
             if let index = accounts.firstIndex(where: { $0.email == email }) {
@@ -286,9 +302,24 @@ final class MailService {
                 )
             }
         } catch {
-            lastError = "\(email): \(error.localizedDescription)"
+            accountErrors[email] = error.localizedDescription
         }
         return []
+    }
+
+    /// The whole message, fetched again from Gmail to read in PathOS: only its summary is kept.
+    func fullMessage(_ suggestion: MailSuggestion) async throws -> MailMessage {
+        guard let email = account(of: suggestion), let session = sessions[email] else {
+            throw GoogleOAuthError.signInExpired
+        }
+        return MailParsing.message(from: try await session.message(id: suggestion.messageID))
+    }
+
+    /// The conversation in Gmail's app, when it's installed.
+    func gmailAppURL(for suggestion: MailSuggestion) -> URL? {
+        guard let email = account(of: suggestion),
+              let position = accounts.firstIndex(where: { $0.email == email }) else { return nil }
+        return MailParsing.gmailAppURL(threadID: suggestion.threadID ?? suggestion.messageID, accountPosition: position + 1)
     }
 
     /// The on-device model when it's available, rules when it isn't. Nil means try again later.

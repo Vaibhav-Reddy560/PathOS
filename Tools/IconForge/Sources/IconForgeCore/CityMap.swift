@@ -31,6 +31,22 @@ public struct CityPlan {
     /// known at draw time — so the choice is made there, from these.
     public var routeCandidates: [[CGPoint]]
     public var transform: CGAffineTransform
+    /// Only in a fine map: the side streets inside each block of the main grid, the buildings
+    /// between them, and the odd pocket park.
+    public var sideStreets: [[CGPoint]] = []
+    public var buildings: [[CGPoint]] = []
+    public var pocketParks: [[CGPoint]] = []
+    /// A river across the fine map, and how wide it runs.
+    public var river: [CGPoint] = []
+    public var riverWidth = 0.0
+}
+
+/// How much of the city the map shows.
+public enum MapDetail: String, CaseIterable, Sendable {
+    /// The main roads and a few plots in each block: a texture behind the mark.
+    case standard
+    /// Every side street and every building, drawn crisp, so the map reads as a real one.
+    case fine
 }
 
 /// How the map shows the one thing on it that belongs to you.
@@ -61,6 +77,13 @@ public enum CityMap {
         var horizontal: [Harmonic]
         var vertical: [Harmonic]
 
+        func scaled(_ factor: Double) -> Warp {
+            func scale(_ harmonics: [Harmonic]) -> [Harmonic] {
+                harmonics.map { Harmonic(amplitude: $0.amplitude * factor, frequency: $0.frequency, phase: $0.phase) }
+            }
+            return Warp(horizontal: scale(horizontal), vertical: scale(vertical))
+        }
+
         func callAsFunction(_ point: CGPoint) -> CGPoint {
             var x = point.x, y = point.y
             for h in horizontal { x += h.amplitude * sin(point.y * h.frequency + h.phase) }
@@ -69,7 +92,7 @@ public enum CityMap {
         }
     }
 
-    public static func plan(size: Double, seed: UInt64 = defaultSeed) -> CityPlan {
+    public static func plan(size: Double, seed: UInt64 = defaultSeed, detail: MapDetail = .standard) -> CityPlan {
         var rng = Seeded(seed: seed)
         let span = size * oversize
 
@@ -84,7 +107,10 @@ public enum CityMap {
                 )
             }
         }
-        let warp = Warp(horizontal: harmonics(), vertical: harmonics())
+        var warp = Warp(horizontal: harmonics(), vertical: harmonics())
+        // Drawn sharp, every wobble shows, and a strongly bent grid reads as rippled cloth rather
+        // than as streets. A fine map keeps the same bends, gentler.
+        if detail == .fine { warp = warp.scaled(0.18) }
 
         // Road positions: irregular spacing, so no two blocks are the same size.
         func positions() -> [Double] {
@@ -145,6 +171,7 @@ public enum CityMap {
         // Blocks fill the cells, set back from the roads that bound them and split into plots.
         var blocks: [[CGPoint]] = []
         var openAreas: [[CGPoint]] = []
+        var openCells: Set<[Int]> = []
         for rowIndex in 0..<(rows.count - 1) {
             for columnIndex in 0..<(columns.count - 1) {
                 let top = rows[rowIndex], bottom = rows[rowIndex + 1]
@@ -165,6 +192,7 @@ public enum CityMap {
                         )))
                     }
                     openAreas.append(Geometry.smoothPolyline(through: outline + [outline[0]], samplesPerSegment: 10))
+                    openCells.insert([rowIndex, columnIndex])
                     continue
                 }
 
@@ -220,9 +248,131 @@ public enum CityMap {
             .rotated(by: rotation)
             .translatedBy(x: -span / 2, y: -span / 2)
 
-        return CityPlan(streets: streets, blocks: blocks, openAreas: openAreas,
-                        junctions: junctions, route: route, routeStops: routeStops,
-                        routeCandidates: routeCandidates, transform: placement)
+        var plan = CityPlan(streets: streets, blocks: blocks, openAreas: openAreas,
+                            junctions: junctions, route: route, routeStops: routeStops,
+                            routeCandidates: routeCandidates, transform: placement)
+        if detail == .fine {
+            fillIn(&plan, rows: rows, columns: columns, openCells: openCells, span: span, seed: seed, warp: warp)
+        }
+        return plan
+    }
+
+    /// The fine map's side streets and buildings, inside the main grid's blocks. It draws from a
+    /// generator of its own, so the standard map, and the app icon made from it, never change.
+    private static func fillIn(_ plan: inout CityPlan, rows: [Double], columns: [Double], openCells: Set<[Int]>,
+                               span: Double, seed: UInt64, warp: Warp) {
+        var rng = Seeded(seed: seed ^ 0x51DE_57EE_75B1_0C4D)
+
+        // In from a main road, and in from a side street: room for the road and a pavement.
+        let mainSetback = span * 0.0095, sideSetback = span * 0.0048
+        let buildingGap = span * 0.0021
+
+        // A river across the lower part of the icon, below the mark's feet, meandering gently.
+        // Nothing is built in it; the main roads cross it as bridges.
+        let bends = (0...6).map { index -> CGPoint in
+            let t = Double(index) / 6
+            return CGPoint(x: -span * 0.1 + t * span * 1.2,
+                           y: span * (0.27 + 0.05 * sin(t * 2 * .pi * 1.1 + rng.double(0...0.6)) + rng.double(-0.012...0.012)))
+        }
+        plan.river = Geometry.smoothPolyline(through: bends, samplesPerSegment: 24).map { warp($0) }
+        plan.riverWidth = span * 0.042
+        let riverRoom = plan.riverWidth / 2 + mainSetback
+        func isInRiver(_ point: CGPoint) -> Bool {
+            plan.river.indices.dropFirst().contains { index in
+                Geometry.distance(from: point, toSegment: plan.river[index - 1], plan.river[index]) < riverRoom
+            }
+        }
+        /// Tested at its corners, the middle of each side and its centre: closer together than the
+        /// river is wide, so the river can't slip between them.
+        func isInRiver(_ shape: [CGPoint]) -> Bool {
+            let sides = shape.indices.map { index in
+                let a = shape[index], b = shape[(index + 1) % shape.count]
+                return CGPoint(x: (a.x + b.x) / 2, y: (a.y + b.y) / 2)
+            }
+            let centre = CGPoint(x: shape.map(\.x).reduce(0, +) / Double(shape.count),
+                                 y: shape.map(\.y).reduce(0, +) / Double(shape.count))
+            return (shape + sides + [centre]).contains(where: isInRiver)
+        }
+
+        func line(_ from: CGPoint, _ to: CGPoint) -> [CGPoint] {
+            (0...24).map { step in
+                let t = Double(step) / 24
+                return warp(CGPoint(x: from.x + (to.x - from.x) * t, y: from.y + (to.y - from.y) * t))
+            }
+        }
+        func quad(_ x0: Double, _ y0: Double, _ x1: Double, _ y1: Double) -> [CGPoint] {
+            [CGPoint(x: x0, y: y0), CGPoint(x: x1, y: y0), CGPoint(x: x1, y: y1), CGPoint(x: x0, y: y1)].map { warp($0) }
+        }
+        /// Cuts `from...to` at irregular spacing near `spacing`.
+        func cuts(_ from: Double, _ to: Double, spacing: Double) -> [Double] {
+            let count = max(1, Int(((to - from) / spacing).rounded()))
+            let step = (to - from) / Double(count)
+            return (0...count).map { index in
+                index == 0 || index == count ? from + step * Double(index)
+                    : from + step * (Double(index) + rng.double(-0.18...0.18))
+            }
+        }
+
+        for rowIndex in 0..<(rows.count - 1) {
+            for columnIndex in 0..<(columns.count - 1) where !openCells.contains([rowIndex, columnIndex]) {
+                let top = rows[rowIndex], bottom = rows[rowIndex + 1]
+                let left = columns[columnIndex], right = columns[columnIndex + 1]
+                // Side streets every so often, one way more densely than the other, as a
+                // neighbourhood's lanes run mostly one way.
+                let alongX = rng.chance(0.5)
+                let xs = cuts(left, right, spacing: span * (alongX ? 0.058 : 0.095))
+                let ys = cuts(top, bottom, spacing: span * (alongX ? 0.095 : 0.058))
+                for x in xs.dropFirst().dropLast() {
+                    // Now and then a lane stops at a building rather than running through.
+                    if rng.chance(0.14) {
+                        let stop = top + (bottom - top) * rng.double(0.35...0.7)
+                        plan.sideStreets.append(line(CGPoint(x: x, y: rng.chance(0.5) ? top : bottom), CGPoint(x: x, y: stop)))
+                    } else {
+                        plan.sideStreets.append(line(CGPoint(x: x, y: top), CGPoint(x: x, y: bottom)))
+                    }
+                }
+                for y in ys.dropFirst().dropLast() {
+                    plan.sideStreets.append(line(CGPoint(x: left, y: y), CGPoint(x: right, y: y)))
+                }
+
+                for i in 0..<(xs.count - 1) {
+                    for j in 0..<(ys.count - 1) {
+                        let x0 = xs[i] + (i == 0 ? mainSetback : sideSetback)
+                        let x1 = xs[i + 1] - (i == xs.count - 2 ? mainSetback : sideSetback)
+                        let y0 = ys[j] + (j == 0 ? mainSetback : sideSetback)
+                        let y1 = ys[j + 1] - (j == ys.count - 2 ? mainSetback : sideSetback)
+                        guard x1 - x0 > buildingGap * 3, y1 - y0 > buildingGap * 3 else { continue }
+                        if rng.chance(0.06) {
+                            let park = quad(x0, y0, x1, y1)
+                            if !isInRiver(park) { plan.pocketParks.append(park) }
+                            continue
+                        }
+                        // A row of buildings along the longer side, two deep where there's room.
+                        let wide = x1 - x0 >= y1 - y0
+                        let length = wide ? x1 - x0 : y1 - y0, depth = wide ? y1 - y0 : x1 - x0
+                        let deep = depth > span * 0.045 ? 2 : 1
+                        for row in 0..<deep {
+                            let d0 = Double(row) / Double(deep) * depth + (row > 0 ? buildingGap / 2 : 0)
+                            let d1 = Double(row + 1) / Double(deep) * depth - (row < deep - 1 ? buildingGap / 2 : 0)
+                            var along = 0.0
+                            while along < length - buildingGap {
+                                let width = min(length - along, span * rng.double(0.015...0.036))
+                                // A plot left empty now and then, so the rows don't read as a comb.
+                                if !rng.chance(0.08), width > buildingGap * 2 {
+                                    let a0 = along, a1 = along + width - buildingGap
+                                    let back = rng.double(0...(0.25 * (d1 - d0)))
+                                    let building = wide
+                                        ? quad(x0 + a0, y0 + d0 + (row == 0 ? 0 : back), x0 + a1, y0 + d1 - (row == 0 ? back : 0))
+                                        : quad(x0 + d0 + (row == 0 ? 0 : back), y0 + a0, x0 + d1 - (row == 0 ? back : 0), y0 + a1)
+                                    if !isInRiver(building) { plan.buildings.append(building) }
+                                }
+                                along += width
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
 
     // MARK: Drawing
@@ -245,6 +395,10 @@ public enum CityMap {
 
     public static func draw(_ plan: CityPlan, in ctx: CGContext, palette: Palette,
                             scale: Double, ink: Ink = Ink()) {
+        if !plan.buildings.isEmpty {
+            drawFine(plan, in: ctx, palette: palette, scale: scale, intensity: ink.intensity)
+            return
+        }
         ctx.saveGState()
         ctx.concatenate(plan.transform)
         ctx.setLineCap(.round)
@@ -282,6 +436,73 @@ public enum CityMap {
             ctx.setFillColor(palette.ice.cg(ink.junction * ink.intensity))
             ctx.fillPath()
         }
+        ctx.restoreGState()
+    }
+
+    /// A fine map, drawn the way a night map is: buildings as crisp footprints, parks as quiet
+    /// patches, and roads as light lines inside darker edges, widest on top, so the hierarchy
+    /// reads at a glance and every edge stays sharp.
+    static func drawFine(_ plan: CityPlan, in ctx: CGContext, palette: Palette, scale: Double, intensity: Double) {
+        ctx.saveGState()
+        ctx.concatenate(plan.transform)
+        ctx.setLineCap(.round)
+        ctx.setLineJoin(.round)
+
+        func fill(_ shapes: [[CGPoint]], _ colour: CGColor) {
+            for shape in shapes { ctx.addPath(Geometry.path(shape, closed: true)) }
+            ctx.setFillColor(colour)
+            ctx.fillPath()
+        }
+
+        fill(plan.openAreas, palette.ion.cg(0.10 * intensity))
+        fill(plan.pocketParks, palette.ion.cg(0.075 * intensity))
+        fill(plan.buildings, palette.ice.cg(0.085 * intensity))
+        for building in plan.buildings { ctx.addPath(Geometry.path(building, closed: true)) }
+        ctx.setStrokeColor(palette.ice.cg(0.105 * intensity))
+        ctx.setLineWidth(1.0 * scale)
+        ctx.strokePath()
+
+        func ranked(_ rank: Int) -> [[CGPoint]] {
+            plan.streets.filter { $0.rank == rank }.map(\.points)
+        }
+        // Side streets, then the grid's own roads by rank, narrowest first so wider ones cross over.
+        // Evenly brighter than a plain night map, so the streets read at icon size. Brightness
+        // belongs to the whole network: lighting a few stretches and not others only looked like
+        // scratches across the map.
+        let tiers: [(lines: [[CGPoint]], width: Double, core: Double)] = [
+            (plan.sideStreets, 3.2, 0.17),
+            (ranked(2), 5.0, 0.25),
+            (ranked(1), 6.6, 0.31),
+            (ranked(0), 12, 0.44),
+        ]
+        for (index, tier) in tiers.enumerated() {
+            // The river goes over the lesser roads, which end at its banks, and under the main
+            // ones, which cross it as bridges.
+            if index == tiers.count - 1, !plan.river.isEmpty {
+                ctx.addPath(Geometry.path(plan.river))
+                ctx.setStrokeColor(palette.ion.cg(0.22 * intensity))
+                ctx.setLineWidth((plan.riverWidth + 5) * scale)
+                ctx.strokePath()
+                ctx.addPath(Geometry.path(plan.river))
+                ctx.setStrokeColor(palette.ionCool.scaled(0.62).mixed(with: palette.void, 0.22).cg(intensity))
+                ctx.setLineWidth(plan.riverWidth * scale)
+                ctx.strokePath()
+            }
+            for points in tier.lines { ctx.addPath(Geometry.path(points)) }
+            ctx.setStrokeColor(palette.void.cg(0.55 * intensity))
+            ctx.setLineWidth((tier.width + 2.4) * scale)
+            ctx.strokePath()
+            for points in tier.lines { ctx.addPath(Geometry.path(points)) }
+            ctx.setStrokeColor(palette.mist.cg(tier.core * intensity))
+            ctx.setLineWidth(tier.width * scale)
+            ctx.strokePath()
+
+        }
+        // A fine centre line down the arterials, the one bright thread in the network.
+        for points in tiers[3].lines { ctx.addPath(Geometry.path(points)) }
+        ctx.setStrokeColor(palette.ice.cg(0.20 * intensity))
+        ctx.setLineWidth(1.4 * scale)
+        ctx.strokePath()
         ctx.restoreGState()
     }
 

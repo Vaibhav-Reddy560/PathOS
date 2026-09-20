@@ -11,6 +11,7 @@ struct SettingsView: View {
     @State private var accountToDisconnect: String?
     @AppStorage(CalendarEventSource.enabledKey) private var showsCalendarEvents = false
     @State private var calendarNote: String?
+    @State private var appIcon = AppIconChoice.current
 
     var body: some View {
         @Bindable var state = state
@@ -33,6 +34,8 @@ struct SettingsView: View {
                     .padding(.vertical, 4)
                     .accessibilityElement(children: .combine)
                 }
+
+                appIconSection
 
                 Section {
                     LabeledContent("Location", value: locationStatus)
@@ -152,6 +155,19 @@ struct SettingsView: View {
                             .foregroundStyle(.mist)
                         Link("github.com", destination: URL(string: "https://github.com/Vonter/bmtc-gtfs")!)
                     }
+                    ForEach(RoadFares.data.sources, id: \.what) { source in
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(source.what)
+                                .foregroundStyle(.ice)
+                            Text([source.licence, "read \(source.retrieved)"].joined(separator: " · "))
+                                .foregroundStyle(.mist)
+                            if let url = URL(string: source.url), !source.url.isEmpty {
+                                Link(url.host() ?? source.url, destination: url)
+                            }
+                        }
+                    }
+                    Text("Fares for autos, bike taxis and cabs are shown as ranges because only the auto's is set by the city; app fares move with demand, and PathOS never states one as a price.")
+                        .foregroundStyle(.mist)
                     VStack(alignment: .leading, spacing: 2) {
                         Text("Launch screen map")
                             .foregroundStyle(.ice)
@@ -212,6 +228,41 @@ struct SettingsView: View {
                     Button("Done") { dismiss() }
                 }
             }
+        }
+    }
+
+    private var appIconSection: some View {
+        Section {
+            ForEach(AppIconChoice.allCases) { choice in
+                Button {
+                    Task {
+                        // iOS confirms the change with its own alert, showing the new icon.
+                        try? await UIApplication.shared.setAlternateIconName(choice.alternateName)
+                        appIcon = AppIconChoice.current
+                    }
+                } label: {
+                    HStack(spacing: 12) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(choice.title)
+                                .foregroundStyle(.ice)
+                            Text(choice.detail)
+                                .font(.footnote)
+                                .foregroundStyle(.mist)
+                        }
+                        Spacer(minLength: 8)
+                        if appIcon == choice {
+                            Image(systemName: "checkmark")
+                                .font(.body.weight(.semibold))
+                                .foregroundStyle(.aurora)
+                        }
+                    }
+                    .contentShape(.rect)
+                }
+                .buttonStyle(.plain)
+                .accessibilityAddTraits(appIcon == choice ? .isSelected : [])
+            }
+        } header: {
+            InstrumentLabel("App icon")
         }
     }
 
@@ -298,6 +349,40 @@ struct SettingsView: View {
         case .restricted: "Restricted"
         case .notDetermined: "Not asked yet"
         @unknown default: "Unknown"
+        }
+    }
+}
+
+/// The icon on your Home Screen: the usual one, or the map-only trial.
+private enum AppIconChoice: String, CaseIterable, Identifiable {
+    case route
+    case map
+
+    var id: Self { self }
+
+    static var current: AppIconChoice {
+        UIApplication.shared.alternateIconName == AppIconChoice.map.alternateName ? .map : .route
+    }
+
+    /// nil is the app's main icon.
+    var alternateName: String? {
+        switch self {
+        case .route: nil
+        case .map: "AppIconMap"
+        }
+    }
+
+    var title: String {
+        switch self {
+        case .route: "With a route"
+        case .map: "Map only"
+        }
+    }
+
+    var detail: String {
+        switch self {
+        case .route: "The mark on a city map, with a green route to an orange pin."
+        case .map: "Trial: just the mark, on a sharper, more detailed map."
         }
     }
 }

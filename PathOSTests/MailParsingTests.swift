@@ -93,8 +93,10 @@ struct MailParsingTests {
         #expect(MailParsing.searchQuery(since: since, now: since.addingTimeInterval(3_600)).hasPrefix("after:1799999700 "))
     }
 
-    @Test func messagesOpenInTheConnectedAccount() {
-        #expect(MailParsing.webURL(messageID: "18f1", account: "me@gmail.com")?.absoluteString == "https://mail.google.com/mail/u/me@gmail.com/#all/18f1")
-        #expect(MailParsing.webURL(messageID: "18f1", account: nil)?.absoluteString == "https://mail.google.com/mail/u/0/#all/18f1")
+    /// Gmail's app, at the conversation, in the account at that place in its list. Gmail on the
+    /// web was tried first, and on a phone it showed an error page.
+    @Test func messagesOpenInGmailsApp() {
+        #expect(MailParsing.gmailAppURL(threadID: "18f1a2", accountPosition: 2)?.absoluteString
+                == "googlegmail:///cv=18f1a2/accountId=2&create-new-tab")
     }
 }

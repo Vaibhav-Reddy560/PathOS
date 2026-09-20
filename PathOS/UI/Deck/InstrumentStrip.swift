@@ -46,17 +46,48 @@ struct InstrumentStrip: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .contentShape(.rect)
         .onTapGesture { state.showDeck(.now) }
+        .animation(PathMotion.control, value: state.tripStatus)
         .accessibilityElement(children: .combine)
         .accessibilityAddTraits(.isButton)
         .accessibilityHint("Shows what's around you now")
     }
 
     private var venueName: String {
-        state.context.venue.name ?? state.context.venue.kind.label
+        // Following a way, the strip carries the journey: where you are matters less than when
+        // you'll be there.
+        if state.trip != nil, let arrival = arrivalTime {
+            return arrival
+        }
+        return state.context.venue.name ?? state.context.venue.kind.label
+    }
+
+    /// The clock time you'd arrive at, from what's left of the journey.
+    private var arrivalTime: String? {
+        guard let status = state.tripStatus, !status.hasArrived else { return nil }
+        return Date().addingTimeInterval(TimeInterval(status.minutesRemaining * 60))
+            .formatted(date: .omitted, time: .shortened)
     }
 
     /// Most useful first, because the tail is what gets dropped when space runs out.
     private var readouts: [Readout] {
+        // While a way is being followed: when you'll arrive, how long is left, how far to the
+        // next handover — the three numbers a journey is actually about.
+        if state.trip != nil, let status = state.tripStatus, !status.hasArrived {
+            var items = [Readout(id: "remaining", value: "\(status.minutesRemaining)", unit: "min",
+                                 role: status.isBehind ? .attention : .you)]
+            if let position = state.tripStep {
+                items.append(Readout(id: "distance",
+                                     value: GeoMath.formatDistance(position.metresRemaining)
+                                        .replacingOccurrences(of: " km", with: "")
+                                        .replacingOccurrences(of: " m", with: ""),
+                                     unit: position.metresRemaining >= 1_000 ? "km" : "m",
+                                     role: .world))
+            }
+            if status.isBehind {
+                items.append(Readout(id: "behind", value: "\(status.minutesBehind)", unit: "min late", role: .attention))
+            }
+            return items
+        }
         var items: [Readout] = []
         if let snapshot = state.weather.snapshot {
             items.append(Readout(id: "temperature", value: "\(Int(snapshot.temperatureC.rounded()))", unit: "°C", role: .world))

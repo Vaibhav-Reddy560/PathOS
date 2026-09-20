@@ -68,7 +68,7 @@ struct TripPlanTests {
 
         // 8_400 rather than 8_450: 8.45 sits just below the rounding boundary in binary.
         let busy = DaySummary(distanceMeters: 8_400, eventCount: 2, classCount: 3, legCount: 0, memoryCount: 1)
-        #expect(busy.sentence == "Travelled 8.4 km, 3 classes, 2 events and saved 1 spot.")
+        #expect(busy.sentence == "Travelled 8.4 km, 3 sessions, 2 events and saved 1 spot.")
 
         let onTrip = DaySummary(distanceMeters: 120_000, eventCount: 0, classCount: 0, legCount: 2,
                                 memoryCount: 0, tripName: "Goa", tripDayNumber: 2, tripDayCount: 5)

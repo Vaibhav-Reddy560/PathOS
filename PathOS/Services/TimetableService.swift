@@ -37,8 +37,13 @@ final class TimetableService {
 
     var hasTimetable: Bool { !entries().isEmpty }
 
+    /// The day's sessions, each at your Work place.
     func sessions(on day: Date) -> [ClassSession] {
-        TimetableRoutine.sessions(slots: entries().map(Self.slot), skips: exceptions().map(Self.skip), on: day)
+        let work = ((try? context.fetch(FetchDescriptor<SavedPlace>())) ?? []).first { $0.kind == .work }
+        return ClassSession.at(
+            TimetableRoutine.sessions(slots: entries().map(Self.slot), skips: exceptions().map(Self.skip), on: day),
+            name: work?.name, latitude: work?.latitude, longitude: work?.longitude
+        )
     }
 
     func isDayOff(_ day: Date) -> Bool {
@@ -85,15 +90,15 @@ final class TimetableService {
         }
         guard ai.isAvailable, let rows = try? await ai.extractTimetable(from: text) else {
             lastImportSummary = ai.isAvailable
-                ? "Couldn't read that as a timetable. Try a clearer photo, or add classes by hand."
-                : "Apple Intelligence is off, so PathOS can only read timetables laid out as a table. Add classes by hand."
+                ? "Couldn't read that as a schedule. Try a clearer photo, or add sessions by hand."
+                : "Apple Intelligence is off, so PathOS can only read schedules laid out as a table. Add sessions by hand."
             return []
         }
 
         let entries = rows.compactMap(Self.entry(from:))
         lastImportSummary = entries.isEmpty
-            ? "No classes found in that text."
-            : "Found \(entries.count) classes across \(Set(entries.map(\.weekday)).count) days. Check them before saving."
+            ? "No sessions found in that text."
+            : "Found \(entries.count) sessions across \(Set(entries.map(\.weekday)).count) days. Check them before saving."
         return entries
     }
 
@@ -122,7 +127,7 @@ final class TimetableService {
             TimetableEntry(subject: item.subject, weekday: item.weekday, startMinutes: item.start,
                            endMinutes: item.end, room: item.room, teacher: item.teacher)
         }
-        lastImportSummary = "Read \(entries.count) classes across \(Set(entries.map(\.weekday)).count) days from \(source). Check them before saving."
+        lastImportSummary = "Read \(entries.count) sessions across \(Set(entries.map(\.weekday)).count) days from \(source). Check them before saving."
         return entries
     }
 
@@ -224,7 +229,7 @@ final class TimetableService {
         }
     }
 
-    func setDayOff(_ day: Date, isOff: Bool, reason: String = "No classes") {
+    func setDayOff(_ day: Date, isOff: Bool, reason: String = "Day off") {
         let dayStart = Calendar.current.startOfDay(for: day)
         let existing = exceptions().filter { $0.entryID == nil && Calendar.current.isDate($0.dayStart, inSameDayAs: dayStart) }
         if isOff {
@@ -250,7 +255,7 @@ final class TimetableService {
                 guard let day = Calendar.current.date(byAdding: .day, value: dayOffset, to: Date()) else { continue }
                 for session in sessions(on: day) {
                     guard let fireDate = DayPlan.reminderDate(start: session.start, minutesBefore: Self.reminderMinutesBefore, now: Date()) else { continue }
-                    let place = session.room.map { " · \($0)" } ?? ""
+                    let place = session.whereText.map { " · \($0)" } ?? ""
                     notifications.schedule(
                         id: session.notificationID,
                         at: fireDate,
@@ -270,7 +275,8 @@ final class TimetableService {
     }
 }
 
-/// Today's and tomorrow's classes flow into Radar, the map and the island like any other event.
+/// Today's and tomorrow's sessions flow into Radar, the map and the island like any other event,
+/// at your Work place.
 final class TimetableEventSource: EventSource {
     private let service: TimetableService
 
@@ -288,10 +294,12 @@ final class TimetableEventSource: EventSource {
                 LocalEvent(
                     id: "class:\(session.id)",
                     title: session.subject,
-                    subtitle: session.room ?? "Class",
+                    subtitle: session.whereText ?? "Session",
                     start: session.start,
+                    latitude: session.latitude,
+                    longitude: session.longitude,
                     source: .scanned,
-                    symbol: "graduationcap.fill"
+                    symbol: "calendar.day.timeline.left"
                 )
             }
     }

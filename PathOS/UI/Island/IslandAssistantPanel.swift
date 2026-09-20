@@ -9,7 +9,7 @@ struct IslandAssistantPanel: View {
 
     private let suggestions = [
         "Top cafés within a 5-minute walk",
-        "No classes tomorrow",
+        "Day off tomorrow",
         "Where did I park?",
         "Will it rain in the next two hours?",
         "Nearest metro station",
@@ -141,8 +141,7 @@ struct IslandAssistantPanel: View {
                     HStack(spacing: 8) {
                         ForEach(turn.places) { place in
                             Button {
-                                state.selectedSignalID = "place:\(place.id)"
-                                state.deckStop = .half
+                                state.pointOut("place:\(place.id)")
                             } label: {
                                 HStack(spacing: 6) {
                                     Image(systemName: place.symbol)

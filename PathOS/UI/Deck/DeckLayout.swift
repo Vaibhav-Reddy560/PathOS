@@ -1,12 +1,11 @@
 import SwiftUI
 import UIKit
 
-/// The deck's three resting heights.
+/// The deck's two resting heights. There was a third, half the screen, but a deck that could
+/// stop midway was one more place to land by accident: now it's closed or open.
 nonisolated enum DeckStop: Hashable, Sendable, CaseIterable {
     /// Just the strip and the controls, floating above the bottom of the screen.
     case collapsed
-    /// Half the screen, the map still in view above it.
-    case half
     /// Up to just under the island.
     case full
 }
@@ -55,8 +54,6 @@ nonisolated enum DeckLayout {
     static let bottomMargin: CGFloat = 16
     /// Below the top of the safe area when full: clear of the island.
     static let fullTopClearance: CGFloat = 60
-    /// Half open, the deck's top sits this far down the screen, as a sheet's medium height does.
-    static let halfFraction: CGFloat = 0.5
     /// How far past its collapsed height the deck is pulled before its cards have fully faded in.
     static let revealDistance: CGFloat = 72
 
@@ -82,7 +79,6 @@ nonisolated enum DeckLayout {
         let tallest = screen - keyboard - topSafeArea - fullTopClearance - bottomMargin
         let height: CGFloat = switch stop {
         case .collapsed: collapsed
-        case .half: screen * (1 - halfFraction) - bottomMargin
         case .full: tallest
         }
         return max(collapsed, min(height, tallest))
@@ -110,6 +106,18 @@ nonisolated enum DeckLayout {
     /// How much of the deck's cards show, from 0 collapsed to 1 a short pull above it.
     static func reveal(deckHeight: CGFloat, collapsedHeight: CGFloat) -> Double {
         min(max((deckHeight - collapsedHeight - 2) / revealDistance, 0), 1)
+    }
+
+    /// Past this share of the way up, the glass starts to darken.
+    static let depthStart: CGFloat = 0.5
+
+    /// How dark the deck's glass is: clear for the first half of the way up, then darkening to
+    /// full, where it's solid, as a sheet at its largest was. Only a finger holding it partway
+    /// ever sees it in between.
+    static func depth(deckHeight: CGFloat, collapsedHeight: CGFloat, fullHeight: CGFloat) -> Double {
+        let from = collapsedHeight + (fullHeight - collapsedHeight) * depthStart
+        guard fullHeight > from else { return 0 }
+        return min(max((deckHeight - from) / (fullHeight - from), 0), 1)
     }
 
     /// Glass above the strip: the card's when collapsed, rising to the open deck's as the cards

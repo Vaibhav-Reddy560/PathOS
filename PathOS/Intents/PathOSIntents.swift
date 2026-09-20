@@ -55,7 +55,7 @@ nonisolated struct FindMySpotIntent: AppIntent {
 /// Runs without opening the app, so a Shortcuts time-of-day automation can pin it each morning.
 nonisolated struct PinContextIntent: LiveActivityIntent {
     static let title: LocalizedStringResource = "Pin Context to Lock Screen"
-    static let description = IntentDescription("Keeps rain warnings, your next class or event, and when to leave on your Lock Screen.")
+    static let description = IntentDescription("Keeps rain warnings, what's next on your schedule, and when to leave on your Lock Screen.")
 
     @MainActor
     func perform() async throws -> some IntentResult {

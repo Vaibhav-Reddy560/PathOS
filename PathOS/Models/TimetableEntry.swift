@@ -33,7 +33,7 @@ final class TimetableException {
     var id: UUID = UUID()
     /// Midnight of the affected day.
     var dayStart: Date = Date()
-    var reason: String = "No classes"
+    var reason: String = "Day off"
     /// nil means the whole day is off; otherwise just this class.
     var entryID: UUID?
     /// Set when the class is moved rather than cancelled: its times on this one day.
@@ -45,7 +45,7 @@ final class TimetableException {
 
     init(
         dayStart: Date,
-        reason: String = "No classes",
+        reason: String = "Day off",
         entryID: UUID? = nil,
         startMinutesOverride: Int? = nil,
         endMinutesOverride: Int? = nil,

@@ -9,6 +9,10 @@ nonisolated struct AmbientAlert: Identifiable, Equatable, Sendable {
         case endGuidance
         case endJourney
         case endTrip
+        /// Stop following a whole way to somewhere.
+        case endWay
+        /// Your preferred cab, to there.
+        case bookCab(CompassTarget)
     }
 
     /// Only things the alert itself can do. A button that just opened a deck screen read as an
@@ -75,12 +79,45 @@ nonisolated struct AlertSnapshot: Sendable {
         var isLate: Bool
     }
 
+    /// The whole way you're making to somewhere, of which a metro ride may be one leg.
+    nonisolated struct Way: Sendable {
+        var destination: String
+        var headline: String
+        var detail: String
+        var symbol: String
+        var minutesBehind: Int
+        var minutesRemaining: Int
+        /// Where the leg you're on ends, so the island can point you at it.
+        var target: CompassTarget?
+    }
+
     nonisolated struct Event: Sendable {
         var id: String
         var title: String
         var start: Date
         var latitude: Double?
         var longitude: Double?
+    }
+
+    /// The next place you need to be, and whether to set off. See `LeaveOnTime`.
+    nonisolated struct Departure: Sendable {
+        var id: String
+        var title: String
+        var placeName: String
+        var start: Date
+        var travelMinutes: Int
+        /// By road; on foot otherwise.
+        var byRoad: Bool
+        var status: LeaveOnTime.Status
+        /// Getting closer since the last checks: in good time, there's nothing to say.
+        var isOnTheWay: Bool
+        var latitude: Double
+        var longitude: Double
+
+        /// "25 min by road to BMS College".
+        var travelText: String {
+            "\(travelMinutes) min \(byRoad ? "by road" : "on foot") to \(placeName)"
+        }
     }
 
     nonisolated struct Weather: Sendable {
@@ -97,6 +134,8 @@ nonisolated struct AlertSnapshot: Sendable {
     var journey: Journey?
     var trip: Trip? = nil
     var nextEvent: Event?
+    var departure: Departure? = nil
+    var way: Way? = nil
     var weather: Weather?
     var venueName: String
     var venueSymbol: String
@@ -155,7 +194,14 @@ nonisolated enum AmbientAlerts {
             ))
         }
 
-        if let event = snapshot.nextEvent {
+        let leaving = snapshot.departure.flatMap(departureAlert)
+        if let leaving {
+            alerts.append(leaving)
+        }
+
+        // When to leave for it says more than that it starts soon; the one alert does.
+        if let event = snapshot.nextEvent,
+           leaving == nil || !(snapshot.departure?.title == event.title && snapshot.departure?.start == event.start) {
             let untilStart = event.start.timeIntervalSince(snapshot.now)
             let minutes = Int((untilStart / 60).rounded(.up))
             if untilStart >= 0 && untilStart <= eventSoonWindow {
@@ -252,6 +298,25 @@ nonisolated enum AmbientAlerts {
         }
 
         // You: what you're doing right now.
+        if let way = snapshot.way, snapshot.journey == nil {
+            let behind = way.minutesBehind >= TripGuide.lateAfterMinutes
+            alerts.append(AmbientAlert(
+                id: "way",
+                role: behind ? .attention : .you,
+                priority: behind ? 9 : 19,
+                symbol: way.symbol,
+                compactText: way.headline,
+                metric: "\(way.minutesRemaining) min",
+                headline: way.headline,
+                detail: "\(way.detail). To \(way.destination).",
+                buttons: [
+                    way.target.map { AmbientAlert.Button(title: "Point me there", symbol: "location.north.line.fill", action: .pointTo($0)) },
+                    AmbientAlert.Button(title: "Stop", symbol: "xmark", action: .endWay),
+                ].compactMap { $0 },
+                isDismissible: false
+            ))
+        }
+
         if let guidance = snapshot.guidance {
             alerts.append(AmbientAlert(
                 id: "guidance",
@@ -295,6 +360,59 @@ nonisolated enum AmbientAlerts {
         return alerts
             .filter { !$0.isDismissible || !dismissed.contains($0.id) }
             .sorted { $0.priority < $1.priority }
+    }
+
+    /// Leave by, leave now, or running late; nothing once you're there, or on your way in good time.
+    static func departureAlert(_ departure: AlertSnapshot.Departure) -> AmbientAlert? {
+        let starts = departure.start.formatted(date: .omitted, time: .shortened)
+        let target = CompassTarget(id: "leave:\(departure.id)", name: departure.placeName,
+                                   latitude: departure.latitude, longitude: departure.longitude)
+        let ways = [
+            AmbientAlert.Button(title: "Point me there", symbol: "location.north.line.fill", action: .pointTo(target), isPrimary: true),
+            AmbientAlert.Button(title: "Book a cab", symbol: "car.fill", action: .bookCab(target)),
+        ]
+        switch departure.status {
+        case .there, .inGoodTime:
+            return nil
+        case .leaveSoon(let leaveBy):
+            guard !departure.isOnTheWay else { return nil }
+            let time = leaveBy.formatted(date: .omitted, time: .shortened)
+            return AmbientAlert(
+                id: "leave.soon.\(departure.id)",
+                role: .you,
+                priority: 18,
+                symbol: "figure.walk.departure",
+                compactText: "Leave by \(time)",
+                metric: "\(departure.travelMinutes) min",
+                headline: "Leave by \(time) for \(departure.title)",
+                detail: "\(departure.travelText). It starts at \(starts)."
+            )
+        case .leaveNow:
+            guard !departure.isOnTheWay else { return nil }
+            return AmbientAlert(
+                id: "leave.now.\(departure.id)",
+                role: .attention,
+                priority: 8,
+                symbol: "figure.walk.departure",
+                compactText: "Leave now for \(departure.title)",
+                metric: "\(departure.travelMinutes) min",
+                headline: "Leave now for \(departure.title)",
+                detail: "\(departure.travelText). It starts at \(starts).",
+                buttons: ways
+            )
+        case .late(_, let minutes):
+            return AmbientAlert(
+                id: "leave.late.\(departure.id)",
+                role: .attention,
+                priority: 7,
+                symbol: "clock.badge.exclamationmark",
+                compactText: "Running late",
+                metric: "+\(minutes) min",
+                headline: "You'll be about \(minutes) min late for \(departure.title)",
+                detail: "\(departure.travelText) from here, and it starts at \(starts).",
+                buttons: ways
+            )
+        }
     }
 
     /// Alerts worth interrupting for that weren't already announced. Anything still present

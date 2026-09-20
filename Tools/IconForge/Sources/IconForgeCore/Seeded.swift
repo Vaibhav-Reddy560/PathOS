@@ -67,6 +67,14 @@ enum Geometry {
         return result
     }
 
+    static func distance(from point: CGPoint, toSegment a: CGPoint, _ b: CGPoint) -> Double {
+        let dx = b.x - a.x, dy = b.y - a.y
+        let lengthSquared = dx * dx + dy * dy
+        let t = lengthSquared > 0 ? (((point.x - a.x) * dx + (point.y - a.y) * dy) / lengthSquared).clamped(to: 0...1) : 0
+        let x = a.x + t * dx - point.x, y = a.y + t * dy - point.y
+        return (x * x + y * y).squareRoot()
+    }
+
     static func tangent(_ polyline: [CGPoint], at index: Int) -> CGVector {
         let a = polyline[max(0, index - 1)], b = polyline[min(polyline.count - 1, index + 1)]
         let dx = b.x - a.x, dy = b.y - a.y

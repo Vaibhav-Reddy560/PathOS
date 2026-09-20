@@ -89,6 +89,33 @@ struct CityMapTests {
         #expect(plan.junctions.count > 10)
         #expect(plan.blocks.allSatisfy { $0.count == 4 })
     }
+
+    /// The fine map adds to the city without disturbing it: the standard map, which the app icon
+    /// is drawn from, has none of the extra detail, and its main roads are laid out the same.
+    @Test func theFineMapLeavesTheStandardOneAlone() {
+        let standard = CityMap.plan(size: 1024)
+        #expect(standard.buildings.isEmpty && standard.sideStreets.isEmpty && standard.river.isEmpty)
+        let fine = CityMap.plan(size: 1024, detail: .fine)
+        #expect(fine.streets.count == standard.streets.count)
+        #expect(fine.blocks.count == standard.blocks.count)
+        #expect(fingerprint(CityMap.plan(size: 1024, detail: .fine)) == fingerprint(fine))
+    }
+
+    /// Every block has its buildings and side streets, and nothing is built in the river.
+    @Test func theFineMapHasBuildingsButNoneInTheRiver() {
+        let plan = CityMap.plan(size: 1024, detail: .fine)
+        #expect(plan.buildings.count > 400)
+        #expect(plan.sideStreets.count > 40)
+        #expect(plan.river.count > 10)
+        for building in plan.buildings {
+            for corner in building {
+                let nearest = plan.river.indices.dropFirst().map {
+                    Geometry.distance(from: corner, toSegment: plan.river[$0 - 1], plan.river[$0])
+                }.min() ?? .infinity
+                #expect(nearest >= plan.riverWidth / 2)
+            }
+        }
+    }
 }
 
 struct RasterTests {

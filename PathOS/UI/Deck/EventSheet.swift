@@ -26,6 +26,7 @@ struct EventSheet: View {
     @State private var photoItem: PhotosPickerItem?
     @State private var isReading = false
     @State private var readNote: String?
+    @State private var isSearchingPlace = false
     @State private var isLocating = false
 
     static let presetTags = ["Class", "Work", "Friends", "Travel", "Food", "Health", "Errand"]
@@ -65,6 +66,12 @@ struct EventSheet: View {
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Save", action: save)
                         .disabled(title.trimmingCharacters(in: .whitespaces).isEmpty)
+                }
+            }
+            .sheet(isPresented: $isSearchingPlace) {
+                PlaceSearchSheet(title: "Where is it?", initialQuery: placeName) { place in
+                    placeName = place.name
+                    coordinate = place.coordinate
                 }
             }
             .task { load() }
@@ -200,6 +207,13 @@ struct EventSheet: View {
             Task { await useCurrentLocation() }
         } label: {
             OneLineButtonLabel(title: "I'm here", symbol: "location.fill")
+        }
+        .buttonStyle(SourceButtonStyle(isEnabled: true))
+
+        Button {
+            isSearchingPlace = true
+        } label: {
+            OneLineButtonLabel(title: "Search", symbol: "magnifyingglass")
         }
         .buttonStyle(SourceButtonStyle(isEnabled: true))
 

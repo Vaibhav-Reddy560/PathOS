@@ -10,6 +10,8 @@ nonisolated enum AppTab: String, Hashable, Sendable {
     case day
     case radar
     case vault
+    /// Places and addresses anywhere, and your own saved ones.
+    case search
 }
 
 /// Opens the event sheet, either empty or editing an existing event.
@@ -45,9 +47,15 @@ nonisolated struct CommuteInfo: Sendable {
     var destinationName: String?
     var destinationLatitude: Double?
     var destinationLongitude: Double?
-    var walkMinutes: Int?
+    var carMinutes: Int?
     var transitMinutes: Int?
+    var walkMinutes: Int?
     var updatedAt: Date
+
+    /// The ways worth showing: a car and a two-wheeler first, on foot only if it's a walk.
+    var options: [TravelTimes.Option] {
+        TravelTimes.options(car: carMinutes, transit: transitMinutes, walk: walkMinutes)
+    }
 
     var destination: CLLocationCoordinate2D? {
         guard let destinationLatitude, let destinationLongitude else { return nil }
@@ -106,11 +114,15 @@ final class AppState {
     let snap: SnapToActionService
     let mail: MailService
     let changes: ChangeService
+    let journeys: JourneyPlanner
 
     var selectedTab: AppTab = .now
     var deckStop: DeckStop = .collapsed
     /// The map signal whose details the deck is showing.
     var selectedSignalID: String?
+    /// Set while something is being pointed out on the map, so selecting it doesn't open the deck
+    /// over the map it's on.
+    @ObservationIgnored var isPointingOut = false
     var isSettingsPresented = false
     var isAddingNote = false
     var isTimetablePresented = false
@@ -118,6 +130,24 @@ final class AppState {
     /// Read and cleared by the journey planner when it opens.
     var journeyPreset: JourneyPreset?
     var isTripsPresented = false
+    /// Choosing Home or Work by moving the map under a pin.
+    var placePicking: PlaceKind?
+    /// Choosing Home or Work from Search's results.
+    var searchSettingPlace: PlaceKind?
+    /// A place found in Search, shown on the map.
+    var searchPlace: PlaceSummary?
+    var searchQuery = ""
+    var searchResults: [PlaceSummary] = []
+    /// A destination whose ways of getting there are being shown.
+    var waysRequest: WaysRequest?
+    /// The journey you're making, and how far along it you are.
+    var trip: ActiveTrip?
+    var tripStatus: TripGuide.Status?
+    /// The road route for the leg being followed, and where you are along it.
+    var tripNav: NavRoute?
+    var tripStep: StepGuide.Position?
+    /// Where the map is centred, once it stops moving.
+    @ObservationIgnored var mapCenter: CLLocationCoordinate2D?
     /// Presents the event sheet: nil id means a new event.
     var eventSheet: EventSheetRequest?
     var isScannerPresented = false
@@ -158,6 +188,8 @@ final class AppState {
     private(set) var pinnedCompassTarget: CompassTarget?
     /// Travel time to where you usually go next, and the nearest metro. See `refreshCommute`.
     private(set) var commute: CommuteInfo?
+    /// The next place you need to be today, and whether it's time to set off. See `refreshDeparture`.
+    private(set) var departure: AlertSnapshot.Departure?
     /// The context stays on the Lock Screen, kept up to date, until you unpin it; across launches too.
     private(set) var isContextPinned = UserDefaults.standard.bool(forKey: "pathos.contextPinned") {
         didSet { UserDefaults.standard.set(isContextPinned, forKey: "pathos.contextPinned") }
@@ -187,6 +219,14 @@ final class AppState {
         }
     }
 
+    /// Whether the turns are spoken while you're being led somewhere.
+    var speaksDirections: Bool = UserDefaults.standard.object(forKey: "pathos.speaksDirections") as? Bool ?? true {
+        didSet {
+            UserDefaults.standard.set(speaksDirections, forKey: "pathos.speaksDirections")
+            if !speaksDirections { speech.stop() }
+        }
+    }
+
     @ObservationIgnored private var assistantPlaces: [PlaceSummary] = []
     @ObservationIgnored private var loopTask: Task<Void, Never>?
     @ObservationIgnored private var compassTask: Task<Void, Never>?
@@ -196,10 +236,31 @@ final class AppState {
     @ObservationIgnored private var declinedLegIDs: Set<UUID> = []
     @ObservationIgnored private var lastGeofenceSyncLocation: CLLocation?
     @ObservationIgnored private var lastCommuteCheck: (location: CLLocation, at: Date)?
+    @ObservationIgnored private var departureETA: (id: String, from: CLLocation, at: Date, minutes: Int, byRoad: Bool)?
+    /// The leg of the trip last announced, and how many five-minute slips have been mentioned.
+    /// The leg the route on the map belongs to, so it's fetched once per leg.
+    @ObservationIgnored var navLegID: UUID?
+    /// Re-routing: one fetch at a time, not before the cooldown, and only once you've really left
+    /// the route.
+    @ObservationIgnored var isFetchingRoute = false
+    @ObservationIgnored var lastRouteFetch = Date.distantPast
+    @ObservationIgnored var offRouteSamples = 0
+    /// The once-a-second loop that follows the leg you're on.
+    @ObservationIgnored var navigationTask: Task<Void, Never>?
+    /// Turns already spoken on this trip, so each is said once.
+    @ObservationIgnored var spokenMoments: Set<NavigationVoice.Moment> = []
+    @ObservationIgnored var announcedTripLeg: Int?
+    @ObservationIgnored var announcedTripDelay = 0
+    /// The destination whose ways to get there have already been offered, so it's said once.
+    @ObservationIgnored var offeredWaysFor: String?
+    /// Where you were, for the next place, when you last moved a fair way: closer since means you're on your way.
+    @ObservationIgnored private var departureCheckpoint: (id: String, meters: Double, isOnTheWay: Bool)?
+    /// The leave-by the reminders are set for, so they're only rescheduled when it moves.
+    @ObservationIgnored private var scheduledLeaveBy: (id: String, at: Date)?
     /// A note just brought back by arriving at its spot, which the pinned context shows for a while.
     @ObservationIgnored private var surfacedMemory: (memory: LockScreenContext.Memory, at: Date)?
     @ObservationIgnored private var lastDistanceLocation: CLLocation?
-    @ObservationIgnored private var isForeground = false
+    @ObservationIgnored private(set) var isForeground = false
     /// Alerts already announced, kept across background relaunches so nothing repeats.
     @ObservationIgnored private var announcedAlertIDs: Set<String> {
         get { Set(UserDefaults.standard.stringArray(forKey: "pathos.announcedAlerts") ?? []) }
@@ -260,6 +321,7 @@ final class AppState {
         snap = SnapToActionService(ai: ai, context: modelContext)
         mail = MailService(context: modelContext, ai: ai, eventStore: eventStore, places: places, notifications: notifications)
         changes = ChangeService(ai: ai, timetable: timetable, eventStore: eventStore, trips: trips, places: places)
+        journeys = JourneyPlanner(places: places, transit: transit)
 
         haptics.isAdaptive = adaptiveSound
         notifications.onOpenURL = { [weak self] url in
@@ -267,7 +329,7 @@ final class AppState {
         }
         // Before anything waits: a move that relaunched PathOS is reported as soon as it's running.
         location.onSignificantChange = { [weak self] here in
-            Task { await self?.movedWhilePinned(to: here) }
+            Task { await self?.movedInBackground(to: here) }
         }
         Task { await bootstrap() }
     }
@@ -295,9 +357,9 @@ final class AppState {
         await geofences.start { [weak self] event in
             self?.handleGeofence(event)
         }
-        if isContextPinned {
-            location.setSignificantChangesActive(true)
-        }
+        // Cheap enough to leave on: wakes PathOS as you move, so leaving on time and the pinned
+        // context keep up with the phone in your pocket.
+        location.setSignificantChangesActive(isContextPinned || location.hasAlwaysAccess)
         await notifications.refreshStatus()
         await vault.syncGeofences(userLocation: location.location)
         scheduleBackgroundRefresh()
@@ -374,6 +436,8 @@ final class AppState {
                     recordDistance(to: here)
                     await transit.refreshNearby(location: here)
                     await context.refresh(location: here)
+                    await refreshDeparture()
+                    await refreshTrip()
                     if lastGeofenceSyncLocation.map({ here.distance(from: $0) > 1_000 }) ?? true {
                         lastGeofenceSyncLocation = here
                         await vault.syncGeofences(userLocation: here)
@@ -395,6 +459,8 @@ final class AppState {
         if let here {
             await context.refresh(location: here, force: true)
         }
+        await refreshDeparture()
+        await refreshTrip()
         await refreshPinnedContext()
         await routine.rescheduleReminders()
         eventStore.refreshReminders()
@@ -552,7 +618,13 @@ final class AppState {
         case "radar": showDeck(.radar)
         case "scan": beginScan()
         case "vault": showDeck(.vault)
+        case "search": showDeck(.search)
         case "settings": isSettingsPresented = true
+        case "ways":
+            if let departure {
+                showWays(to: departure.placeName, at: CLLocationCoordinate2D(latitude: departure.latitude, longitude: departure.longitude),
+                         id: "departure:\(departure.id)", arriveBy: departure.start)
+            }
         case "timetable": isTimetablePresented = true
         case "event": eventSheet = EventSheetRequest(editing: nil, text: value("text"))
         case "journey":
@@ -606,13 +678,30 @@ final class AppState {
         }
     }
 
-    /// Switches the deck to `tab` and lifts it out of the peek position so its content is visible.
+    /// Opens the whole-journey options for a place: what to take, in what order, and what it costs.
+    func showWays(to name: String, at coordinate: CLLocationCoordinate2D, id: String? = nil, arriveBy: Date? = nil) {
+        waysRequest = WaysRequest(
+            id: id ?? "place:\(name)",
+            name: name,
+            latitude: coordinate.latitude,
+            longitude: coordinate.longitude,
+            arriveBy: arriveBy
+        )
+    }
+
+    /// Shows a signal on the map: the deck gets out of the way and the map centres on it,
+    /// selected, so pulling the deck up opens its card.
+    func pointOut(_ signalID: String) {
+        isPointingOut = true
+        deckStop = .collapsed
+        selectedSignalID = signalID
+    }
+
+    /// Switches the deck to `tab` and opens it so its content is visible.
     func showDeck(_ tab: AppTab) {
         selectedTab = tab
         selectedSignalID = nil
-        if deckStop == .collapsed {
-            deckStop = .half
-        }
+        deckStop = .full
     }
 
     func activateAssistant(listen: Bool) {
@@ -683,6 +772,22 @@ final class AppState {
                 }
             },
             nextEvent: nextEvent,
+            departure: departure,
+            way: tripStatus.flatMap { status in
+                trip.map { trip in
+                    let leg = trip.option.legs[min(status.legIndex, trip.option.legs.count - 1)]
+                    return AlertSnapshot.Way(
+                        destination: trip.destinationName,
+                        headline: status.headline,
+                        detail: status.detail,
+                        symbol: status.symbol,
+                        minutesBehind: status.minutesBehind,
+                        minutesRemaining: status.minutesRemaining,
+                        target: CompassTarget(id: "way:\(leg.id)", name: leg.endName,
+                                              latitude: leg.endLatitude, longitude: leg.endLongitude)
+                    )
+                }
+            },
             weather: weather.snapshot.map {
                 AlertSnapshot.Weather(temperatureC: $0.temperatureC, summary: $0.summary, symbol: $0.symbol, rainChanceNext2h: $0.rainChanceNext2h)
             },
@@ -727,6 +832,10 @@ final class AppState {
             endJourney()
         case .endTrip:
             Task { await stopLegTracking(declined: true) }
+        case .endWay:
+            endTrip()
+        case .bookCab(let target):
+            CabLauncher.open(preferredCab, drop: target.coordinate, pickup: location.location?.coordinate)
         }
     }
 
@@ -737,6 +846,8 @@ final class AppState {
         location.startUpdates()
         refreshBackgroundSession()
         startTravelLoop()
+        // Getting to the first station is part of the journey, and the part you can be late for.
+        Task { await followAlong(journey) }
     }
 
     func endJourney() {
@@ -757,12 +868,12 @@ final class AppState {
 
     /// Location keeps flowing in the background while anything is being followed.
     private var needsBackgroundLocation: Bool {
-        pinnedCompassTarget != nil || transit.journey != nil || trackedLegID != nil
+        pinnedCompassTarget != nil || transit.journey != nil || trackedLegID != nil || trip != nil
     }
 
     /// Also stops location entirely when nothing needs it and PathOS isn't on screen, so a trip
     /// that ends in your pocket doesn't leave GPS running until you next open the app.
-    private func refreshBackgroundSession() {
+    func refreshBackgroundSession() {
         location.setBackgroundSessionActive(needsBackgroundLocation)
         if !isForeground && !needsBackgroundLocation {
             location.stopUpdates()
@@ -772,10 +883,12 @@ final class AppState {
     /// One loop for everything that moves with you. It keeps running with the app in the
     /// background, where the old foreground-only loop couldn't: that's what lets "get off next"
     /// and trip arrivals fire with the phone in your pocket.
-    private func startTravelLoop() {
+    func startTravelLoop() {
         guard travelTask == nil else { return }
         travelTask = Task {
-            while !Task.isCancelled, transit.journey != nil || trackedLegID != nil {
+            // A journey, a tracked leg, or a whole way being followed — a metro leg inside a trip
+            // used to fall outside this, so its stops never advanced.
+            while !Task.isCancelled, transit.journey != nil || trackedLegID != nil || trip != nil {
                 if transit.journey != nil {
                     transit.update(location: location.location)
                     await updateJourneyActivity()
@@ -943,6 +1056,42 @@ final class AppState {
         return true
     }
 
+    /// Home or Work at a place you chose, rather than where you're standing: found in Search, or
+    /// picked on the map.
+    func setPlace(_ kind: PlaceKind, name: String, at coordinate: CLLocationCoordinate2D) async {
+        vault.setPlace(kind, name: name, at: coordinate)
+        await vault.syncGeofences(userLocation: location.location)
+        if let here = location.location {
+            await context.refresh(location: here, force: true)
+        }
+        // Travel times were to the old place.
+        lastCommuteCheck = nil
+        timetable.refreshReminders()
+        haptics.success()
+        showToast("\(kind.label): \(name)", symbol: kind.symbol)
+    }
+
+    /// Moves the map to put a pin on Home or Work; the deck steps down out of the way.
+    func startPickingPlace(_ kind: PlaceKind) {
+        selectedSignalID = nil
+        searchSettingPlace = nil
+        deckStop = .collapsed
+        placePicking = kind
+    }
+
+    /// Sets the place being picked where the map's pin is, named after what's there if Apple Maps
+    /// knows a place right under it.
+    func finishPickingPlace() async {
+        guard let kind = placePicking, let center = mapCenter else {
+            placePicking = nil
+            return
+        }
+        placePicking = nil
+        let spot = CLLocation(latitude: center.latitude, longitude: center.longitude)
+        let nearest = await places.nearbyPOIs(around: spot).filter { $0.distanceMeters <= 60 }.min { $0.distanceMeters < $1.distanceMeters }
+        await setPlace(kind, name: nearest?.name ?? kind.label, at: center)
+    }
+
     // MARK: Compass
 
     func startCompass(to target: CompassTarget) {
@@ -1029,20 +1178,164 @@ final class AppState {
         case .work: vault.place(ofKind: .home)
         default: vault.place(ofKind: .work) ?? vault.place(ofKind: .home)
         }
-        var walk: Int?
+        var car: Int?
         var transit: Int?
+        var walk: Int?
         if let destination {
-            walk = await places.eta(to: destination.coordinate, from: here, transport: .walking)
+            let distance = here.distance(from: CLLocation(latitude: destination.latitude, longitude: destination.longitude))
+            car = await places.eta(to: destination.coordinate, from: here, transport: .automobile)
             transit = await places.eta(to: destination.coordinate, from: here, transport: .transit)
+            // Nobody walks across the city, so it isn't asked for unless it's close.
+            if distance < 3_000 || car == nil {
+                walk = await places.eta(to: destination.coordinate, from: here, transport: .walking)
+            }
         }
 
         commute = CommuteInfo(
             destinationName: destination?.name,
             destinationLatitude: destination?.latitude,
             destinationLongitude: destination?.longitude,
-            walkMinutes: walk,
+            carMinutes: car,
             transitMinutes: transit,
+            walkMinutes: walk,
             updatedAt: Date()
+        )
+    }
+
+    // MARK: Leaving on time
+
+    /// Works out the next place you need to be today and whether to set off: a session of your
+    /// weekly schedule, at Work, or an event with a place. Travel time is Apple Maps' from where
+    /// you are, asked again once you've moved or a few minutes have passed.
+    func refreshDeparture(now: Date = Date()) async {
+        guard let here = location.location,
+              let next = LeaveOnTime.next(in: destinations(on: now), now: now) else {
+            departure = nil
+            return
+        }
+        let destination = CLLocation(latitude: next.latitude, longitude: next.longitude)
+        let distance = here.distance(from: destination)
+
+        var minutes = 0
+        var byRoad = distance > LeaveOnTime.walkingDistance
+        if distance > LeaveOnTime.arrivalRadius {
+            if let eta = departureETA, eta.id == next.id, here.distance(from: eta.from) < 250, now.timeIntervalSince(eta.at) < 5 * 60 {
+                minutes = eta.minutes
+                byRoad = eta.byRoad
+            } else {
+                minutes = await places.eta(to: destination.coordinate, from: here, transport: byRoad ? .automobile : .walking)
+                    ?? LeaveOnTime.roughTravelMinutes(distance: distance)
+                departureETA = (next.id, here, now, minutes, byRoad)
+            }
+        }
+
+        // On your way: a fair bit closer than when last checked, until you head away again.
+        var checkpoint: (id: String, meters: Double, isOnTheWay: Bool) =
+            departureCheckpoint?.id == next.id ? departureCheckpoint! : (next.id, distance, false)
+        if distance < checkpoint.meters - 150 {
+            checkpoint = (next.id, distance, true)
+        } else if distance > checkpoint.meters + 150 {
+            checkpoint = (next.id, distance, false)
+        }
+        departureCheckpoint = checkpoint
+
+        let status = LeaveOnTime.status(start: next.start, travel: TimeInterval(minutes * 60), distance: distance, now: now)
+        departure = AlertSnapshot.Departure(
+            id: next.id, title: next.title, placeName: next.placeName, start: next.start,
+            travelMinutes: minutes, byRoad: byRoad, status: status, isOnTheWay: checkpoint.isOnTheWay,
+            latitude: next.latitude, longitude: next.longitude
+        )
+        scheduleLeaveReminders(for: departure!, now: now)
+        await offerWays(to: next, travelMinutes: minutes, status: status, from: here, now: now)
+    }
+
+    /// How long you have in hand beyond the travel time before something starts.
+    static let waysMarginMinutes = 15
+
+    /// Close to the time you'd have to set off, the ways of getting there are worked out ahead of
+    /// being asked for, and said once. Getting around then has them ready.
+    private func offerWays(to next: LeaveOnTime.Destination, travelMinutes: Int, status: LeaveOnTime.Status,
+                           from here: CLLocation, now: Date) async {
+        let spare = Int(next.start.timeIntervalSince(now) / 60) - travelMinutes
+        let key = "departure:\(next.id)"
+        guard status != .there, spare <= Self.waysMarginMinutes, next.start > now.addingTimeInterval(-LeaveOnTime.lateGrace) else {
+            if offeredWaysFor == next.id, spare > Self.waysMarginMinutes { offeredWaysFor = nil }
+            return
+        }
+        let options = await journeys.options(key: key, to: next.coordinate, named: next.placeName, from: here, now: now)
+        guard offeredWaysFor != next.id, let quickest = options.first(where: \.isAvailableNow) else { return }
+        offeredWaysFor = next.id
+        guard !isForeground else { return }
+        await notifications.schedule(
+            id: "pathos.ways.\(next.id)",
+            at: now.addingTimeInterval(1),
+            title: "Ways to \(next.placeName) are ready",
+            body: "\(quickest.headline) · about \(quickest.minutes) min · \(quickest.fareText). \(next.title) starts at \(next.start.formatted(date: .omitted, time: .shortened)).",
+            category: NotificationService.Category.tripLeg,
+            link: URL(string: "pathos://ways"),
+            timeSensitive: spare <= 0
+        )
+    }
+
+    /// Today's sessions and events that happen somewhere.
+    private func destinations(on day: Date) -> [LeaveOnTime.Destination] {
+        guard let interval = Calendar.current.dateInterval(of: .day, for: day) else { return [] }
+        let sessions = timetable.sessions(on: day).compactMap { session -> LeaveOnTime.Destination? in
+            guard let latitude = session.latitude, let longitude = session.longitude else { return nil }
+            return .init(id: "class:\(session.id)", title: session.subject, placeName: session.placeName ?? "Work",
+                         start: session.start, end: session.end, latitude: latitude, longitude: longitude)
+        }
+        let events = eventStore.events(on: day).filter { !$0.isAllDay }.compactMap { event -> LeaveOnTime.Destination? in
+            guard let latitude = event.latitude, let longitude = event.longitude else { return nil }
+            return .init(id: "event:\(event.id.uuidString)", title: event.title, placeName: event.placeName ?? event.title,
+                         start: event.start, end: event.end, latitude: latitude, longitude: longitude)
+        }
+        let mirrored = Set(eventStore.all().compactMap(\.calendarEventID))
+        let calendar = CalendarEventSource.items(from: interval.start, to: interval.end, excluding: mirrored)
+            .filter { !$0.isAllDay }
+            .compactMap { item -> LeaveOnTime.Destination? in
+                guard let latitude = item.latitude, let longitude = item.longitude else { return nil }
+                let place = item.location?.split(separator: "\n").first.map(String.init) ?? item.title
+                return .init(id: "calendar:\(item.id)", title: item.title, placeName: place,
+                             start: item.start, end: item.end, latitude: latitude, longitude: longitude)
+            }
+        return sessions + events + calendar
+    }
+
+    /// Notifications ten minutes before you need to leave and when it's time, so they come with
+    /// PathOS closed. Cleared once you're there or it's already time.
+    private func scheduleLeaveReminders(for departure: AlertSnapshot.Departure, now: Date) {
+        let prefix = "pathos.leave.\(departure.id)"
+        let leaveBy: Date
+        switch departure.status {
+        case .inGoodTime(let at), .leaveSoon(let at):
+            leaveBy = at
+        case .there, .leaveNow, .late:
+            if scheduledLeaveBy?.id == departure.id {
+                scheduledLeaveBy = nil
+                Task { await notifications.removePending(withPrefix: prefix) }
+            }
+            return
+        }
+        if let scheduled = scheduledLeaveBy, scheduled.id == departure.id, abs(scheduled.at.timeIntervalSince(leaveBy)) < 60 {
+            return
+        }
+        scheduledLeaveBy = (departure.id, leaveBy)
+        let starts = departure.start.formatted(date: .omitted, time: .shortened)
+        let soon = leaveBy.addingTimeInterval(-10 * 60)
+        if soon > now {
+            notifications.schedule(
+                id: prefix + ".soon", at: soon,
+                title: "Leave in 10 min for \(departure.title)",
+                body: "\(departure.travelText). It starts at \(starts).",
+                category: NotificationService.Category.event, link: URL(string: "pathos://day"), timeSensitive: true
+            )
+        }
+        notifications.schedule(
+            id: prefix + ".now", at: leaveBy,
+            title: "Time to leave for \(departure.title)",
+            body: "\(departure.travelText). It starts at \(starts).",
+            category: NotificationService.Category.event, link: URL(string: "pathos://day"), timeSensitive: true
         )
     }
 
@@ -1060,7 +1353,7 @@ final class AppState {
         let shown = await refreshPinnedContext()
         if !shown {
             isContextPinned = false
-            location.setSignificantChangesActive(false)
+            location.setSignificantChangesActive(location.hasAlwaysAccess)
         }
         return shown
     }
@@ -1068,7 +1361,7 @@ final class AppState {
     func unpinContext() async {
         isContextPinned = false
         surfacedMemory = nil
-        location.setSignificantChangesActive(false)
+        location.setSignificantChangesActive(location.hasAlwaysAccess)
         // Directions stay until they're done; only the context comes off.
         if liveActivities.currentMode == .venue {
             await liveActivities.end()
@@ -1114,12 +1407,16 @@ final class AppState {
         await refreshPinnedContext()
     }
 
-    /// A few hundred metres moved with PathOS in the background: the place, the weather and the
-    /// context catch up. Open, the foreground loop already does.
-    private func movedWhilePinned(to here: CLLocation) async {
-        guard isContextPinned, !isForeground else { return }
+    /// A few hundred metres moved with PathOS in the background: the place, the weather, when to
+    /// leave and the pinned context catch up, and anything newly urgent, such as running late,
+    /// becomes a notification. Open, the foreground loop already does all this.
+    private func movedInBackground(to here: CLLocation) async {
+        guard !isForeground else { return }
         await context.refresh(location: here)
+        await refreshDeparture()
+        await refreshTrip()
         await refreshPinnedContext()
+        notifyNewAlerts()
     }
 
     private func lockScreenInputs(now: Date) -> LockScreenContext.Inputs {
@@ -1129,8 +1426,8 @@ final class AppState {
         var commuteLine: LockScreenContext.Commute?
         if context.venue.kind == .home, let usual = routine.todaysDeparture(now: now),
            let commute, let name = commute.destinationName,
-           let minutes = commute.transitMinutes ?? commute.walkMinutes {
-            commuteLine = .init(destination: name, minutes: minutes, byTransit: commute.transitMinutes != nil, usualDeparture: usual)
+           let headline = TravelTimes.headline(car: commute.carMinutes, transit: commute.transitMinutes, walk: commute.walkMinutes) {
+            commuteLine = .init(destination: name, minutes: headline.minutes, mode: headline.mode, usualDeparture: usual)
         }
         return LockScreenContext.Inputs(
             venueName: context.venue.name ?? context.venue.kind.label,
@@ -1140,6 +1437,7 @@ final class AppState {
             },
             exitAdvice: context.exitAdvice,
             agenda: agenda(on: now),
+            departure: departure,
             commute: commuteLine,
             memory: surfacedMemory?.memory,
             now: now
@@ -1150,8 +1448,8 @@ final class AppState {
     private func agenda(on day: Date) -> [LockScreenContext.Entry] {
         guard let interval = Calendar.current.dateInterval(of: .day, for: day) else { return [] }
         let classes = timetable.sessions(on: day).map {
-            LockScreenContext.Entry(id: "class:\($0.id)", title: $0.subject, place: $0.room,
-                                    start: $0.start, end: $0.end, symbol: "graduationcap.fill", role: .you)
+            LockScreenContext.Entry(id: "class:\($0.id)", title: $0.subject, place: $0.whereText,
+                                    start: $0.start, end: $0.end, symbol: "calendar.day.timeline.left", role: .you)
         }
         let own = eventStore.events(on: day).filter { !$0.isAllDay }.map {
             LockScreenContext.Entry(id: "event:\($0.id.uuidString)", title: $0.title, place: $0.placeName,

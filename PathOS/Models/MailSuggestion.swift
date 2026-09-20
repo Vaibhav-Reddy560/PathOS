@@ -27,11 +27,14 @@ final class MailSuggestion {
     var eventID: UUID?
     /// The Gmail address it arrived at, when PathOS reads more than one. Nil from before that.
     var account: String?
+    /// Gmail's conversation, which is what its app opens. Nil from before it was kept.
+    var threadID: String?
     var createdAt: Date = Date()
 
     init(message: MailMessage, proposal: MailProposal, account: String? = nil) {
         self.account = account
         messageID = message.id
+        threadID = message.threadID
         senderName = message.senderName
         senderAddress = message.senderAddress
         subject = message.subject

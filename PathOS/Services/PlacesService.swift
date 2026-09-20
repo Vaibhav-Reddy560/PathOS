@@ -13,6 +13,8 @@ nonisolated struct PlaceSummary: Identifiable, Hashable, Codable, Sendable {
     var distanceMeters: Double
     var phone: String?
     var url: URL?
+    /// Street and area, for a search result.
+    var address: String? = nil
 
     var coordinate: CLLocationCoordinate2D {
         CLLocationCoordinate2D(latitude: latitude, longitude: longitude)
@@ -97,6 +99,35 @@ final class PlacesService {
         return Self.summarize(response.mapItems, from: location).filter { $0.distanceMeters <= radius * 1.5 }
     }
 
+    /// Anything Apple Maps knows by that name or address, in its order of relevance: places and
+    /// addresses, looked for around you first but not only there.
+    func find(_ query: String, near location: CLLocation?) async throws -> [PlaceSummary] {
+        let request = MKLocalSearch.Request()
+        request.naturalLanguageQuery = query
+        request.resultTypes = [.pointOfInterest, .address]
+        if let location {
+            request.region = MKCoordinateRegion(center: location.coordinate, latitudinalMeters: 60_000, longitudinalMeters: 60_000)
+        }
+        let response = try await MKLocalSearch(request: request).start()
+        return response.mapItems.map { item in
+            let coordinate = item.location.coordinate
+            let description = Self.describe(item.pointOfInterestCategory)
+            return PlaceSummary(
+                id: item.identifier?.rawValue ?? "\(item.name ?? "place")@\(coordinate.latitude),\(coordinate.longitude)",
+                name: item.name ?? item.address?.shortAddress ?? "Unnamed place",
+                categoryName: item.pointOfInterestCategory == nil ? "Address" : description.name,
+                group: description.group,
+                symbol: item.pointOfInterestCategory == nil ? "mappin.and.ellipse" : description.symbol,
+                latitude: coordinate.latitude,
+                longitude: coordinate.longitude,
+                distanceMeters: location.map { $0.distance(from: item.location) } ?? 0,
+                phone: item.phoneNumber,
+                url: item.url,
+                address: item.address?.shortAddress
+            )
+        }
+    }
+
     /// Very close POIs, used to work out what kind of venue you're standing in.
     func nearbyPOIs(around location: CLLocation) async -> [NearbyPOI] {
         let request = MKLocalPointsOfInterestRequest(center: location.coordinate, radius: 150)
@@ -112,12 +143,47 @@ final class PlacesService {
 
     /// Travel time in minutes, or nil where Apple Maps has no route (transit coverage varies in India).
     func eta(to destination: CLLocationCoordinate2D, from origin: CLLocation, transport: MKDirectionsTransportType) async -> Int? {
+        await hop(to: destination, from: origin, transport: transport)?.minutes
+    }
+
+    /// How long a hop takes and how far it runs by that mode. The distance is the route's, not a
+    /// straight line, which is what a fare is worked out from.
+    func hop(to destination: CLLocationCoordinate2D, from origin: CLLocation,
+             transport: MKDirectionsTransportType) async -> (minutes: Int, distanceMeters: Double)? {
         let request = MKDirections.Request()
         request.source = MKMapItem(location: origin, address: nil)
         request.destination = MKMapItem(location: CLLocation(latitude: destination.latitude, longitude: destination.longitude), address: nil)
         request.transportType = transport
         guard let response = try? await MKDirections(request: request).calculateETA() else { return nil }
-        return Int((response.expectedTravelTime / 60).rounded(.up))
+        return (Int((response.expectedTravelTime / 60).rounded(.up)), response.distance)
+    }
+
+    /// A route with its turns, for following a leg on the map. Apple Maps has no two-wheeler
+    /// mode, so a scooter or a bike taxi follows the car's route, which is the same road.
+    func directions(to destination: CLLocationCoordinate2D, from origin: CLLocation,
+                    byRoad: Bool) async -> NavRoute? {
+        let request = MKDirections.Request()
+        request.source = MKMapItem(location: origin, address: nil)
+        request.destination = MKMapItem(location: CLLocation(latitude: destination.latitude, longitude: destination.longitude), address: nil)
+        request.transportType = byRoad ? .automobile : .walking
+        guard let route = try? await MKDirections(request: request).calculate().routes.first else { return nil }
+        return NavRoute(
+            coordinates: Self.coordinates(of: route.polyline),
+            steps: route.steps.compactMap { step in
+                let shape = Self.coordinates(of: step.polyline)
+                guard shape.count > 1 else { return nil }
+                return StepGuide.Step(instruction: step.instructions, coordinates: shape, distanceMeters: step.distance)
+            },
+            minutes: max(1, Int((route.expectedTravelTime / 60).rounded())),
+            distanceMeters: route.distance,
+            byRoad: byRoad
+        )
+    }
+
+    static func coordinates(of polyline: MKPolyline) -> [CLLocationCoordinate2D] {
+        var coordinates = [CLLocationCoordinate2D](repeating: kCLLocationCoordinate2DInvalid, count: polyline.pointCount)
+        polyline.getCoordinates(&coordinates, range: NSRange(location: 0, length: polyline.pointCount))
+        return coordinates
     }
 
     /// Walking route for the green guidance line, or nil where Apple Maps has no route.
@@ -181,7 +247,23 @@ final class PlacesService {
         case .publicTransport: return ("Transit", .transit, "tram.fill")
         case .airport: return ("Airport", .transit, "airplane")
         case .store: return ("Store", .shopping, "bag.fill")
+        case .university: return ("College", .other, "building.columns")
+        case .school: return ("School", .other, "book.fill")
+        case .library: return ("Library", .other, "books.vertical.fill")
+        case .hospital: return ("Hospital", .other, "cross.case.fill")
+        case .hotel: return ("Hotel", .other, "bed.double.fill")
+        case .fitnessCenter: return ("Gym", .other, "figure.run")
         default: return ("Place", .other, "mappin")
         }
     }
+}
+
+/// A route to follow on the map: its shape, its turns, and how long it should take.
+nonisolated struct NavRoute: Sendable {
+    var coordinates: [CLLocationCoordinate2D]
+    var steps: [StepGuide.Step]
+    var minutes: Int
+    var distanceMeters: Double
+    /// By road, as against on foot: the map leans in closer and tilts for a road leg.
+    var byRoad: Bool
 }

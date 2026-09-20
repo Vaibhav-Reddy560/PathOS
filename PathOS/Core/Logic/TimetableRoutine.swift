@@ -39,6 +39,27 @@ nonisolated struct ClassSession: Identifiable, Hashable, Sendable {
     var end: Date
     /// Moved or relocated for this day only.
     var isMoved = false
+    /// Where the weekly schedule happens: your Work place, which for a student is college.
+    var placeName: String? = nil
+    var latitude: Double? = nil
+    var longitude: Double? = nil
+
+    /// "LH-3 · BMS College": the room, and the place it's in.
+    var whereText: String? {
+        let parts = [room, placeName].compactMap { $0 }.filter { !$0.isEmpty }
+        return parts.isEmpty ? nil : parts.joined(separator: " · ")
+    }
+
+    /// Sets each session at `place`, which is where you go for your weekly schedule.
+    static func at(_ sessions: [ClassSession], name: String?, latitude: Double?, longitude: Double?) -> [ClassSession] {
+        sessions.map { session in
+            var session = session
+            session.placeName = name
+            session.latitude = latitude
+            session.longitude = longitude
+            return session
+        }
+    }
 
     var notificationID: String { "pathos.class.\(id)" }
 }

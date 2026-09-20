@@ -35,7 +35,7 @@ struct TimetableSheet: View {
             }
             .scrollContentBackground(.hidden)
             .background(Color.deepSurface)
-            .navigationTitle(draft.isEmpty ? "Timetable" : "Check the classes")
+            .navigationTitle(draft.isEmpty ? "Weekly schedule" : "Check the sessions")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
@@ -45,7 +45,7 @@ struct TimetableSheet: View {
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     if draft.isEmpty {
-                        Button("Add class") { editing = TimetableEntry(subject: "", weekday: 2, startMinutes: 9 * 60, endMinutes: 10 * 60) }
+                        Button("Add session") { editing = TimetableEntry(subject: "", weekday: 2, startMinutes: 9 * 60, endMinutes: 10 * 60) }
                     } else {
                         Button("Save \(draft.count)") { saveDraft() }
                     }
@@ -93,7 +93,7 @@ struct TimetableSheet: View {
                 .foregroundStyle(.ice)
                 .overlay(alignment: .topLeading) {
                     if sourceText.isEmpty {
-                        Text("Paste your timetable, or pick a photo of it…")
+                        Text("Paste your schedule, or pick a photo of it…")
                             .font(.body)
                             .foregroundStyle(.mist)
                             .padding(.top, 8)
@@ -123,9 +123,9 @@ struct TimetableSheet: View {
                     .foregroundStyle(.mist)
             }
         } header: {
-            InstrumentLabel(saved.isEmpty ? "Import your timetable" : "Replace your timetable")
+            InstrumentLabel(saved.isEmpty ? "Import your weekly schedule" : "Replace your weekly schedule")
         } footer: {
-            Text("Reading happens on your iPhone. Your classes then show in Day, with a reminder \(TimetableService.reminderMinutesBefore) minutes before each one.")
+            Text("Reading happens on your iPhone. Each session then shows in Day, at your Work place, with a reminder \(TimetableService.reminderMinutesBefore) minutes before each one.")
         }
     }
 
@@ -229,7 +229,7 @@ struct TimetableSheet: View {
 
     private func saveDraft() {
         state.timetable.replaceAll(with: draft)
-        state.showToast("Timetable saved · \(draft.count) classes")
+        state.showToast("Weekly schedule saved · \(draft.count) sessions")
         state.haptics.success()
         draft = []
         dismiss()
@@ -260,7 +260,7 @@ private struct ClassRow: View {
             TimeSpan(start: TimetableRoutine.timeText(minutes: entry.startMinutes),
                      end: TimetableRoutine.timeText(minutes: entry.endMinutes))
             VStack(alignment: .leading, spacing: 2) {
-                Text(entry.subject.isEmpty ? "Untitled class" : entry.subject)
+                Text(entry.subject.isEmpty ? "Untitled session" : entry.subject)
                     .font(.headline)
                     .foregroundStyle(.ice)
                     .lineLimit(1)
@@ -297,7 +297,7 @@ private struct ClassEditor: View {
         NavigationStack {
             Form {
                 Section {
-                    TextField("Subject", text: $subject)
+                    TextField("Name", text: $subject)
                     Picker("Day", selection: $weekday) {
                         ForEach(TimetableSheet.weekdayOrderForPicker, id: \.self) { weekday in
                             Text(TimetableSheet.weekdayName(weekday)).tag(weekday)
@@ -306,19 +306,19 @@ private struct ClassEditor: View {
                     DatePicker("Starts", selection: $startTime, displayedComponents: .hourAndMinute)
                     DatePicker("Ends", selection: $endTime, displayedComponents: .hourAndMinute)
                 } header: {
-                    InstrumentLabel("Class")
+                    InstrumentLabel("Session")
                 }
 
                 Section {
-                    TextField("Room or block", text: $room)
-                    TextField("Teacher", text: $teacher)
+                    TextField("Room or area", text: $room)
+                    TextField("With (teacher, lead…)", text: $teacher)
                 } header: {
                     InstrumentLabel("Details")
                 }
             }
             .scrollContentBackground(.hidden)
             .background(Color.deepSurface)
-            .navigationTitle(entry.subject.isEmpty ? "New class" : "Edit class")
+            .navigationTitle(entry.subject.isEmpty ? "New session" : "Edit session")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {

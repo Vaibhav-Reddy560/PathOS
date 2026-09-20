@@ -38,6 +38,7 @@ if let cool = argument("ground-cool").flatMap(Double.init) { settings.groundCool
 if let shade = argument("mark-shade").flatMap(Double.init) { settings.markShade = shade }
 if let bevel = argument("glass-bevel").flatMap(Double.init) { settings.glassBevel = bevel }
 if let style = argument("route-style").flatMap(RouteStyle.init(rawValue:)) { settings.routeStyle = style }
+if let detail = argument("map-detail").flatMap(MapDetail.init(rawValue:)) { settings.mapDetail = detail }
 if let seed = argument("seed").flatMap({ UInt64($0) }) { settings.seed = seed }
 
 do {

@@ -103,4 +103,14 @@ struct TimetableRoutineTests {
         #expect(TimetableService.weekday(from: .monday) == 2)
         #expect(TimetableService.weekday(from: .saturday) == 7)
     }
+
+    /// Every session is at your Work place, and says so beside its room.
+    @Test func sessionsAreAtWork() {
+        let session = ClassSession(id: "1", slotID: UUID(), subject: "DBMS", room: "LH-3", teacher: nil,
+                                   start: Date(), end: Date().addingTimeInterval(3_300))
+        let placed = ClassSession.at([session], name: "BMS College", latitude: 12.94, longitude: 77.56)
+        #expect(placed[0].whereText == "LH-3 · BMS College")
+        #expect(placed[0].latitude == 12.94)
+        #expect(ClassSession.at([session], name: nil, latitude: nil, longitude: nil)[0].whereText == "LH-3")
+    }
 }

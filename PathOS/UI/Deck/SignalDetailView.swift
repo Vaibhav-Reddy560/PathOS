@@ -176,6 +176,16 @@ struct SignalDetailView: View {
             }
             .pathPrimaryAction()
 
+            Button {
+                state.showWays(to: signal.title,
+                               at: CLLocationCoordinate2D(latitude: signal.latitude, longitude: signal.longitude),
+                               id: "signal:\(signal.id)", arriveBy: signal.start)
+            } label: {
+                Label("Ways to get there", systemImage: "arrow.triangle.turn.up.right.diamond.fill")
+                    .frame(maxWidth: .infinity, minHeight: 32)
+            }
+            .pathSecondaryAction()
+
             if let legID {
                 let isFollowing = state.trackedLegID == legID
                 Button {

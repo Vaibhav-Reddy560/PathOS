@@ -39,7 +39,8 @@ struct IslandView: View {
                 }
                 .shadow(color: .black.opacity(0.45), radius: 18, y: 8)
         }
-        .padding(.horizontal, 12)
+        // Open, it spans exactly the deck's width, so the two line up edge to edge.
+        .padding(.horizontal, DeckLayout.sideMargin)
         .dynamicTypeSize(...DynamicTypeSize.accessibility2)
         .animation(PathMotion.resolve(PathMotion.island, reduceMotion: reduceMotion), value: isExpanded)
         .animation(PathMotion.resolve(PathMotion.island, reduceMotion: reduceMotion), value: state.isAssistantActive)

@@ -29,10 +29,8 @@ struct DeckLayoutTests {
         let heights = DeckStop.allCases.map { DeckLayout.height(of: $0, collapsed: collapsed, screen: screen, topSafeArea: top) }
         #expect(heights == heights.sorted())
         #expect(heights[0] == collapsed)
-        // Half open, the top is halfway up the screen.
-        #expect(abs(screen - DeckLayout.bottomMargin - heights[1] - screen / 2) < 0.5)
         // Full, it stops clear of the island.
-        #expect(abs(screen - DeckLayout.bottomMargin - heights[2] - (top + DeckLayout.fullTopClearance)) < 0.5)
+        #expect(abs(screen - DeckLayout.bottomMargin - heights[1] - (top + DeckLayout.fullTopClearance)) < 0.5)
     }
 
     @Test func theKeyboardShortensTheDeckButNeverBelowCollapsed() {
@@ -40,23 +38,30 @@ struct DeckLayoutTests {
         let open = DeckLayout.height(of: .full, collapsed: collapsed, screen: 874, topSafeArea: 62)
         let typing = DeckLayout.height(of: .full, collapsed: collapsed, screen: 874, topSafeArea: 62, keyboard: 336)
         #expect(open - typing == 336)
-        #expect(DeckLayout.height(of: .half, collapsed: collapsed, screen: 874, topSafeArea: 62, keyboard: 700) == collapsed)
+        #expect(DeckLayout.height(of: .full, collapsed: collapsed, screen: 874, topSafeArea: 62, keyboard: 800) == collapsed)
     }
 
-    /// A slow release settles on the nearest stop; a flick goes on to the next one its way, and
-    /// never falls back against it.
-    @Test func dragsSettleWhereAFlickWouldCarryThem() {
-        let stops: [DeckStop: CGFloat] = [.collapsed: 126, .half: 421, .full: 736]
-        #expect(DeckLayout.settle(height: 400, velocity: 0, stops: stops) == .half)
-        #expect(DeckLayout.settle(height: 250, velocity: 0, stops: stops) == .collapsed)
-        #expect(DeckLayout.settle(height: 300, velocity: 0, stops: stops) == .half)
-        // A quick flick up from just above collapsed opens it, however little it moved.
-        #expect(DeckLayout.settle(height: 140, velocity: 900, stops: stops) == .half)
-        // A hard flick carries past half to full.
-        #expect(DeckLayout.settle(height: 450, velocity: 2_000, stops: stops) == .full)
+    /// Two stops and nothing between: wherever a drag is let go, the deck ends up closed or
+    /// open. A flick goes on its way, and never falls back against it.
+    @Test func dragsSettleOpenOrClosed() {
+        #expect(DeckStop.allCases == [.collapsed, .full])
+        let stops: [DeckStop: CGFloat] = [.collapsed: 126, .full: 736]
+        // Let go slowly, it goes to whichever is nearer, even from halfway.
+        #expect(DeckLayout.settle(height: 400, velocity: 0, stops: stops) == .collapsed)
+        #expect(DeckLayout.settle(height: 450, velocity: 0, stops: stops) == .full)
+        // A quick flick up from just above collapsed opens it all the way, however little it moved.
+        #expect(DeckLayout.settle(height: 140, velocity: 900, stops: stops) == .full)
         // Flicked down from near full, it doesn't bounce back up.
-        #expect(DeckLayout.settle(height: 720, velocity: -700, stops: stops) == .half)
-        #expect(DeckLayout.settle(height: 400, velocity: -1_500, stops: stops) == .collapsed)
+        #expect(DeckLayout.settle(height: 720, velocity: -700, stops: stops) == .collapsed)
+    }
+
+    /// Glass for the first half of the way up, solid at full, darkening only in between.
+    @Test func theDeckDarkensOnlyNearFull() {
+        #expect(DeckLayout.depth(deckHeight: 126, collapsedHeight: 126, fullHeight: 736) == 0)
+        #expect(DeckLayout.depth(deckHeight: 431, collapsedHeight: 126, fullHeight: 736) == 0)
+        #expect(abs(DeckLayout.depth(deckHeight: 583.5, collapsedHeight: 126, fullHeight: 736) - 0.5) < 0.001)
+        #expect(DeckLayout.depth(deckHeight: 736, collapsedHeight: 126, fullHeight: 736) == 1)
+        #expect(DeckLayout.depth(deckHeight: 760, collapsedHeight: 126, fullHeight: 736) == 1)
     }
 
     @Test func pastItsEndsTheDeckGivesALittle() {

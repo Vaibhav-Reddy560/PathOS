@@ -113,4 +113,63 @@ struct AmbientAlertTests {
         #expect(alerts.map(\.id) == ["idle"])
         #expect(AmbientAlerts.prioritized(snapshot(weather: sunny)).last?.id == "idle")
     }
+
+    // MARK: Leaving on time
+
+    private func departure(_ status: LeaveOnTime.Status, onTheWay: Bool = false) -> AlertSnapshot.Departure {
+        .init(id: "class:1", title: "Physics", placeName: "BMS College", start: now.addingTimeInterval(3_600),
+              travelMinutes: 25, byRoad: true, status: status, isOnTheWay: onTheWay, latitude: 12.94, longitude: 77.56)
+    }
+
+    @Test func leavingSoonIsAQuietGreenNote() {
+        let alert = AmbientAlerts.departureAlert(departure(.leaveSoon(leaveBy: now.addingTimeInterval(1_500))))
+        #expect(alert?.role == .you)
+        #expect(alert?.detail.hasPrefix("25 min by road to BMS College") == true)
+    }
+
+    @Test func timeToGoAndRunningLateAskForAttention() {
+        let go = AmbientAlerts.departureAlert(departure(.leaveNow(leaveBy: now)))
+        #expect(go?.role == .attention)
+        #expect(go?.buttons.map(\.title) == ["Point me there", "Book a cab"])
+
+        let late = AmbientAlerts.departureAlert(departure(.late(arrival: now.addingTimeInterval(4_320), minutes: 12)))
+        #expect(late?.metric == "+12 min")
+        #expect(late?.headline == "You'll be about 12 min late for Physics")
+    }
+
+    /// Getting closer in good time needs no reminder; running late does, even on the way.
+    @Test func onTheWayItOnlySpeaksUpIfYoureLate() {
+        #expect(AmbientAlerts.departureAlert(departure(.leaveNow(leaveBy: now), onTheWay: true)) == nil)
+        #expect(AmbientAlerts.departureAlert(departure(.late(arrival: now, minutes: 5), onTheWay: true)) != nil)
+        #expect(AmbientAlerts.departureAlert(departure(.there)) == nil)
+    }
+
+    /// The way you're making leads the island: quietly while it's going to plan, and for
+    /// attention once you've fallen behind it.
+    @Test func thePlanYoureFollowingLeadsUntilYouBoard() {
+        var snapshot = snapshot()
+        snapshot.way = AlertSnapshot.Way(
+            destination: "BMS College",
+            headline: "Take an auto to Jayadeva Hospital",
+            detail: "2.4 km · about 30 min to go",
+            symbol: "car.rear.fill",
+            minutesBehind: 0,
+            minutesRemaining: 30,
+            target: CompassTarget(id: "way", name: "Jayadeva Hospital", latitude: 12.9167, longitude: 77.6004)
+        )
+        let calm = AmbientAlerts.prioritized(snapshot)
+        #expect(calm.first?.id == "way")
+        #expect(calm.first?.role == .you)
+
+        snapshot.way?.minutesBehind = 12
+        let late = AmbientAlerts.prioritized(snapshot)
+        #expect(late.first?.id == "way")
+        #expect(late.first?.role == .attention)
+        #expect(late.first?.buttons.contains { $0.action == .endWay } == true)
+
+        // On the train, the ride's own alert says where to get off, so the way stands aside.
+        snapshot.journey = AlertSnapshot.Journey(destination: "MG Road", lineName: "Purple Line",
+                                                 stopsRemaining: 4, minutesRemaining: 9, isArrivingNext: false)
+        #expect(!AmbientAlerts.prioritized(snapshot).contains { $0.id == "way" })
+    }
 }

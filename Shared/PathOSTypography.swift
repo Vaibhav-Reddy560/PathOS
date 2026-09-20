@@ -20,6 +20,15 @@ extension Font {
     static let pathStripUnit = Font.system(.footnote, weight: .semibold)
 }
 
+nonisolated extension String {
+    /// A range written so it can never break across lines: "10:30–11:15", "₹90–130". Text wraps
+    /// happily after an en dash, which splits a range down the middle and leaves the second half
+    /// stranded on the next line, reading as two separate numbers.
+    static func range(_ from: String, _ to: String, separator: String = "–") -> String {
+        "\(from)\u{2060}\(separator)\u{2060}\(to)"
+    }
+}
+
 /// Small caption used for section headers, units and map labels.
 struct InstrumentLabel: View {
     let text: String

@@ -275,10 +275,9 @@ nonisolated enum MailParsing {
         return ([window] + exclusions).joined(separator: " ")
     }
 
-    /// Opens the message in Gmail on the web. Naming the account keeps it from opening in
-    /// whichever Google account the browser happens to have signed in first.
-    static func webURL(messageID: String, account: String?) -> URL? {
-        let user = account?.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? "0"
-        return URL(string: "https://mail.google.com/mail/u/\(user)/#all/\(messageID)")
+    /// The conversation in Gmail's iPhone app. Google doesn't document this link; the account is
+    /// the one at that place (from 1) in the app's own list of accounts.
+    static func gmailAppURL(threadID: String, accountPosition: Int) -> URL? {
+        URL(string: "googlegmail:///cv=\(threadID)/accountId=\(accountPosition)&create-new-tab")
     }
 }

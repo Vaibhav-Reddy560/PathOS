@@ -55,6 +55,18 @@ nonisolated enum GeoMath {
     }
 
     /// The point `meters` due north of `coordinate`.
+    /// A point `metres` away on a bearing, for looking ahead of where someone is.
+    static func coordinate(_ coordinate: CLLocationCoordinate2D, metres: Double, bearing: Double) -> CLLocationCoordinate2D {
+        let radians = bearing * .pi / 180
+        let north = metres * cos(radians), east = metres * sin(radians)
+        let latitude = coordinate.latitude + north / 111_320
+        let scale = cos(coordinate.latitude * .pi / 180)
+        return CLLocationCoordinate2D(
+            latitude: latitude,
+            longitude: coordinate.longitude + (scale > 0.000_001 ? east / (111_320 * scale) : 0)
+        )
+    }
+
     static func coordinate(_ coordinate: CLLocationCoordinate2D, offsetNorthBy meters: Double) -> CLLocationCoordinate2D {
         CLLocationCoordinate2D(latitude: coordinate.latitude + toDegrees(meters / earthRadiusMeters), longitude: coordinate.longitude)
     }

@@ -31,7 +31,7 @@ struct TripSheet: View {
                                 Text(trip.name)
                                     .font(.headline)
                                     .foregroundStyle(.ice)
-                                Text("\(trip.startDate.formatted(date: .abbreviated, time: .omitted)) – \(trip.endDate.formatted(date: .abbreviated, time: .omitted)) · \(trip.dayCount) days")
+                                Text(String.range(trip.startDate.formatted(date: .abbreviated, time: .omitted), trip.endDate.formatted(date: .abbreviated, time: .omitted), separator: " – ") + " · \(trip.dayCount) days")
                                     .font(.footnote)
                                     .foregroundStyle(.mist)
                                 if !trip.legs.isEmpty {
@@ -108,7 +108,7 @@ private struct LegRow: View {
                     .font(.subheadline.weight(.semibold))
                     .foregroundStyle(.ice)
                     .lineLimit(1)
-                Text("\(leg.departure.formatted(date: .abbreviated, time: .shortened))\(leg.arrival.map { " – \($0.formatted(date: .omitted, time: .shortened))" } ?? "")")
+                Text(leg.arrival.map { String.range(leg.departure.formatted(date: .abbreviated, time: .shortened), $0.formatted(date: .omitted, time: .shortened), separator: " – ") } ?? leg.departure.formatted(date: .abbreviated, time: .shortened))
                     .font(.footnote)
                     .foregroundStyle(.mist)
             }

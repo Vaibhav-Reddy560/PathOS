@@ -35,6 +35,9 @@ struct DeckPresentations: ViewModifier {
                 .ignoresSafeArea()
             }
             .sheet(isPresented: $state.isAddingNote) { AddNoteSheet() }
+            .sheet(item: $state.waysRequest) { request in
+                WaysToGetThereView(request: request)
+            }
             .sheet(item: $state.eventSheet) { request in
                 EventSheet(request: request)
             }

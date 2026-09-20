@@ -25,6 +25,7 @@ public struct IconRenderer {
         /// How far in from the outline the glass rolls off, at 1024.
         public var glassBevel = 7.0
         public var routeStyle: RouteStyle = .dashed
+        public var mapDetail: MapDetail = .standard
         public var seed = CityMap.defaultSeed
         public init() {}
     }
@@ -128,7 +129,7 @@ public struct IconRenderer {
         field(ctx, color: palette.ion, alpha: 0.05, center: CGPoint(x: 0.70 * s, y: 0.24 * s), radius: 0.70 * s)
 
         // 3 — the city
-        let plan = CityMap.plan(size: s, seed: settings.seed)
+        let plan = CityMap.plan(size: s, seed: settings.seed, detail: settings.mapDetail)
         var ink = CityMap.Ink()
         ink.intensity = settings.mapIntensity
         ink.style = settings.routeStyle
@@ -168,7 +169,12 @@ public struct IconRenderer {
         field(ctx, color: palette.ion, alpha: 0.06, center: CGPoint(x: 0.30 * s, y: 0.72 * s), radius: 0.34 * s)
         ctx.restoreGState()
 
-        // 5 — depth: the edges soften and darken, so the centre reads first
+        // 5 — depth: the edges soften and darken, so the centre reads first. A fine map is there
+        // to be read, so it stays sharp to the edge and only darkens a little.
+        guard settings.mapDetail == .standard else {
+            vignette(ctx, size: s, strength: 0.22)
+            return
+        }
         let mapSoftened = Raster.blurred(Raster.image(ctx), radius: 4 * k)
         Raster.clipped(ctx, to: Raster.radialMask(size: size, center: CGPoint(x: s / 2, y: s / 2),
                                                   radius: 0.74 * s, stops: [(0, 0), (0.76, 0), (1, 1)])) { inner in

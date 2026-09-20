@@ -22,7 +22,7 @@ struct PathOSLiveActivityWidget: Widget {
                 }
                 DynamicIslandExpandedRegion(.center) {
                     VStack(spacing: 2) {
-                        InstrumentLabel(state.caption(at: .now), role: state.tint)
+                        InstrumentLabel(state.caption(at: .now), role: state.captionRole)
                         Text(state.title)
                             .font(.headline)
                             .foregroundStyle(.ice)
@@ -70,7 +70,7 @@ private struct LockScreenActivityView: View {
                 ModeGlyph(state: state, size: 46)
                     .background(state.tint.color.opacity(0.14), in: .circle)
                 VStack(alignment: .leading, spacing: 3) {
-                    InstrumentLabel(state.caption(at: .now), role: state.tint)
+                    InstrumentLabel(state.caption(at: .now), role: state.captionRole)
                     Text(state.title)
                         .font(.headline)
                         .foregroundStyle(.ice)
@@ -260,25 +260,24 @@ private struct CabLinksRow: View {
 }
 
 extension PathOSActivityAttributes.ContentState {
-    /// The small label over the title: what a timed item is doing, else the mode.
-    func caption(at now: Date) -> String {
-        switch timing(at: now) {
-        case .startsIn: "Starting soon"
-        case .endsIn: "On now"
-        case .over: "Just finished"
-        case nil: mode.caption
-        }
-    }
+    /// The label over the title. Every one of these cards is PathOS's, so every one carries the
+    /// app's name rather than a word for the mode: what it's about is the line under it, and
+    /// whether something is starting or under way is the countdown beside it.
+    func caption(at now: Date) -> String { "PathOS" }
+
+    /// The name is always in Ion, the app's own teal, whatever colour the news under it is.
+    var captionRole: SignalRole { .world }
 }
 
 extension PathOSActivityAttributes.Mode {
+    /// A word for the mode, for accessibility rather than for the card's label.
     var caption: String {
         switch self {
         case .exitCheck: "Exit check"
         case .commute: "Commute"
         case .compass: "Pointer"
         case .spatialNote: "Spatial memory"
-        case .venue: "Context"
+        case .venue: "PathOS"
         case .journey: "Journey"
         case .trip: "Trip"
         }

@@ -2,6 +2,7 @@
 import CoreLocation
 import Foundation
 import SwiftData
+import UIKit
 
 extension AppState {
     /// Launch with `-PathOSDemoData` to seed places, memories and an upcoming event around
@@ -61,6 +62,27 @@ extension AppState {
         try? modelContainer.mainContext.save()
     }
 
+    private func seedDemoMail() {
+        let accounts = ["vaibhav.reddy560@gmail.com", "1bm22cs001@bmsce.ac.in"]
+        mail.seedDemoAccounts(accounts)
+        let context = modelContainer.mainContext
+        guard ((try? context.fetch(FetchDescriptor<MailSuggestion>())) ?? []).isEmpty else { return }
+        let samples: [(account: String, sender: String, address: String, kind: MailKind, title: String, summary: String, start: Date?)] = [
+            (accounts[0], "Tanu Goel", "tanu@econvista.org", .event, "Econvista 2026", "Attend Econvista 2026 to explore AI and India's economic future.", Date().addingTimeInterval(86_400)),
+            (accounts[0], "Pentel", "rewards@pentel.com", .update, "Creator Collective Rewards", "Program to earn points by engaging in Creator Collective activities.", nil),
+            (accounts[1], "Dean Academics", "dean@bmsce.ac.in", .task, "Submit the internship form", "Upload the signed form on the portal.", Date().addingTimeInterval(3 * 86_400)),
+            (accounts[1], "CSE Department", "hod@cse.bmsce.ac.in", .event, "Guest lecture: compilers", "Seminar hall 2, all third years.", nil),
+        ]
+        for sample in samples {
+            let message = MailMessage(id: UUID().uuidString, threadID: UUID().uuidString, subject: sample.title, senderName: sample.sender,
+                                      senderAddress: sample.address, receivedAt: Date().addingTimeInterval(-7_200), snippet: sample.summary,
+                                      body: sample.summary, labels: [])
+            let proposal = MailProposal(kind: sample.kind, title: sample.title, summary: sample.summary, start: sample.start, usedAI: false)
+            context.insert(MailSuggestion(message: message, proposal: proposal, account: sample.account))
+        }
+        try? context.save()
+    }
+
     /// `-PathOSDeepLink pathos://radar` and `-PathOSDeckDetent large` open a screen at launch,
     /// and `-PathOSDemoReadouts YES` fills the peek strip,
     /// avoiding the simulator's "Open in PathOS?" prompt that `simctl openurl` triggers.
@@ -91,13 +113,26 @@ extension AppState {
                 while true {
                     try? await Task.sleep(for: .seconds(3))
                     guard isLaunchComplete else { continue }
-                    deckStop = deckStop == .collapsed ? .half : .collapsed
+                    deckStop = deckStop == .collapsed ? .full : .collapsed
                 }
             }
         }
+        // `-PathOSDemoMail YES` fills Day → Mail from two accounts, for checking its layout in the
+        // simulator, which can't sign in to Google.
+        if arguments.bool(forKey: "PathOSDemoMail") {
+            seedDemoMail()
+        }
+        // `-PathOSAppIcon map|route` switches the Home Screen icon, so a trial one can be put on a
+        // phone from here rather than tapped through Settings.
+        if let icon = arguments.string(forKey: "PathOSAppIcon") {
+            Task {
+                // iOS refuses the change until the app is properly foregrounded.
+                try? await Task.sleep(for: .seconds(1))
+                try? await UIApplication.shared.setAlternateIconName(icon == "map" ? "AppIconMap" : nil)
+            }
+        }
         switch arguments.string(forKey: "PathOSDeckDetent") {
-        case "medium": deckStop = .half
-        case "large": deckStop = .full
+        case "medium", "large": deckStop = .full
         default: break
         }
     }

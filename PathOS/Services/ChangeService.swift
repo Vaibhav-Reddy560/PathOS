@@ -45,7 +45,7 @@ final class ChangeService {
     func apply(_ change: ProposedChange, near location: CLLocation?) async -> String {
         switch change {
         case let .moveClass(slotID, subject, room, from, to, everyWeek):
-            guard let entry = timetable.entry(id: slotID) else { return "That class is no longer in your timetable." }
+            guard let entry = timetable.entry(id: slotID) else { return "That session is no longer on your weekly schedule." }
             let calendar = Calendar.current
             let start = Self.minutes(of: to.start)
             let end = Self.minutes(of: to.end)
@@ -64,21 +64,21 @@ final class ChangeService {
             return "\(subject) moved to \(Self.day(to.start)) at \(Self.time(to.start))."
 
         case let .cancelClass(slotID, subject, at, everyWeek):
-            guard let entry = timetable.entry(id: slotID) else { return "That class is no longer in your timetable." }
+            guard let entry = timetable.entry(id: slotID) else { return "That session is no longer on your weekly schedule." }
             if everyWeek {
                 timetable.update(entry, isActive: false)
-                return "\(subject) is off your timetable. Turn it back on from the Timetable sheet."
+                return "\(subject) is off your weekly schedule. Turn it back on from Weekly schedule."
             }
             timetable.cancelOnce(entryID: slotID, on: at.start)
             return "\(subject) cancelled for \(Self.day(at.start))."
 
         case let .dayOff(day):
             timetable.setDayOff(day, isOff: true)
-            return "No classes on \(Self.day(day)). Your events stay."
+            return "\(Self.day(day)) is off your weekly schedule. Your events stay."
 
         case let .classesOn(day):
             timetable.setDayOff(day, isOff: false)
-            return "Classes are back on for \(Self.day(day))."
+            return "Your weekly schedule is back on for \(Self.day(day))."
 
         case let .moveEvent(id, title, _, to):
             guard let event = eventStore.all().first(where: { $0.id == id }) else { return "That event no longer exists." }

@@ -28,7 +28,7 @@ nonisolated enum LockScreenContext {
     nonisolated struct Commute: Sendable {
         var destination: String
         var minutes: Int
-        var byTransit: Bool
+        var mode: TravelTimes.Mode
         /// Minutes after midnight.
         var usualDeparture: Int
     }
@@ -45,6 +45,8 @@ nonisolated enum LockScreenContext {
         var weather: AlertSnapshot.Weather?
         var exitAdvice: ExitAdvice?
         var agenda: [Entry]
+        /// When to set off for the next place you need to be.
+        var departure: AlertSnapshot.Departure? = nil
         var commute: Commute? = nil
         var memory: Memory? = nil
         var now: Date
@@ -127,6 +129,10 @@ nonisolated enum LockScreenContext {
             )
         }
 
+        // When to leave comes first: it's the one note that can't wait.
+        if let leave = leaveLine(inputs) {
+            notes.append(leave)
+        }
         if let umbrella, state.title != "Take an umbrella" {
             notes.append(.init(symbol: "umbrella.fill", text: umbrella.note, role: .attention))
         }
@@ -186,6 +192,26 @@ nonisolated enum LockScreenContext {
         return (advice.detail, note)
     }
 
+    /// "Leave by 8:35 · 25 min by road to BMS College", or how late you'll be. Quiet once you're
+    /// there, and while you're on your way in good time.
+    private static func leaveLine(_ inputs: Inputs) -> PathOSActivityAttributes.Note? {
+        guard let departure = inputs.departure else { return nil }
+        switch departure.status {
+        case .there, .inGoodTime:
+            return nil
+        case .leaveSoon(let leaveBy), .leaveNow(let leaveBy):
+            guard !departure.isOnTheWay else { return nil }
+            let isNow: Bool = if case .leaveNow = departure.status { true } else { false }
+            return .init(
+                symbol: "figure.walk.departure",
+                text: (isNow ? "Leave now" : "Leave by \(leaveBy.formatted(date: .omitted, time: .shortened))") + " · \(departure.travelText)",
+                role: isNow ? .attention : .you
+            )
+        case .late(_, let minutes):
+            return .init(symbol: "clock.badge.exclamationmark", text: "About \(minutes) min late · \(departure.travelText)", role: .attention)
+        }
+    }
+
     /// The travel time, around when you usually leave.
     private static func commuteLine(_ inputs: Inputs) -> PathOSActivityAttributes.Note? {
         guard let commute = inputs.commute else { return nil }
@@ -193,8 +219,8 @@ nonisolated enum LockScreenContext {
         let minutes = (parts.hour ?? 0) * 60 + (parts.minute ?? 0)
         guard (commute.usualDeparture - commuteLeadMinutes)...(commute.usualDeparture + commuteTrailMinutes) ~= minutes else { return nil }
         return .init(
-            symbol: commute.byTransit ? "tram.fill" : "figure.walk",
-            text: "\(commute.destination): \(commute.minutes) min \(commute.byTransit ? "by transit" : "walk")",
+            symbol: commute.mode.symbol,
+            text: "\(commute.destination): \(commute.minutes) min \(commute.mode.phrase)",
             role: .you
         )
     }

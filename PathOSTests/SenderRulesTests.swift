@@ -30,4 +30,10 @@ struct SenderRulesTests {
         #expect(arranged.others == ["friend@gmail.com"])
         #expect(arranged.mutedCount == 2)
     }
+
+    /// The account chips: a Gmail address by its name, a college or work one by its organisation.
+    @Test func accountsAreNamedSoYouCanTellThemApart() {
+        #expect(MailInbox.shortName("vaibhav.reddy560@gmail.com") == "vaibhav.reddy560")
+        #expect(MailInbox.shortName("1bm22cs001@bmsce.ac.in") == "bmsce.ac.in")
+    }
 }

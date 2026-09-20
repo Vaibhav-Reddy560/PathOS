@@ -9,11 +9,18 @@ final class LocationManager: NSObject {
     private(set) var headingDegrees: Double?
     /// Degrees of uncertainty; negative means the compass needs calibrating.
     private(set) var headingAccuracy: Double = -1
+    /// The direction you're actually travelling, from GPS rather than the compass. In a vehicle
+    /// this is what to turn a map by: the compass reads whichever way the phone happens to face.
+    private(set) var courseDegrees: Double?
 
     @ObservationIgnored private let manager = CLLocationManager()
     @ObservationIgnored private var updatesTask: Task<Void, Never>?
     @ObservationIgnored private var backgroundSession: CLBackgroundActivitySession?
     @ObservationIgnored private var headingClients = 0
+    /// The course, averaged over the last few fixes and held through a stop.
+    @ObservationIgnored private var course = TravelCourse.Reading(degrees: nil, at: .distantPast)
+    /// True while a way is being followed by road, which asks CoreLocation for its best.
+    @ObservationIgnored private var isNavigating = false
     /// Called when a move of a few hundred metres wakes PathOS; see `setSignificantChangesActive`.
     @ObservationIgnored var onSignificantChange: ((CLLocation) -> Void)?
 
@@ -38,12 +45,24 @@ final class LocationManager: NSObject {
 
     func startUpdates() {
         guard updatesTask == nil else { return }
+        let configuration: CLLocationUpdate.LiveConfiguration = isNavigating ? .automotiveNavigation : .otherNavigation
         updatesTask = Task { [weak self] in
             do {
-                for try await update in CLLocationUpdate.liveUpdates(.otherNavigation) {
+                for try await update in CLLocationUpdate.liveUpdates(configuration) {
                     guard let self else { return }
                     if let location = update.location {
                         self.location = location
+                        // Where you're going, not where the phone is pointing. Read here rather
+                        // than in the significant-change delegate, which this stream outruns: its
+                        // freshness guard always lost, so the course was never set while driving.
+                        self.course = TravelCourse.update(
+                            self.course,
+                            course: location.course,
+                            accuracy: location.courseAccuracy,
+                            speed: location.speed,
+                            at: location.timestamp
+                        )
+                        self.courseDegrees = self.course.degrees
                     }
                 }
             } catch {
@@ -55,6 +74,17 @@ final class LocationManager: NSObject {
     func stopUpdates() {
         updatesTask?.cancel()
         updatesTask = nil
+    }
+
+    /// Following a road leg asks CoreLocation for navigation-grade fixes, which arrive about once
+    /// a second and carry a usable course. It's restarted only when the answer changes, since a
+    /// restart costs a fix.
+    func setNavigating(_ navigating: Bool) {
+        guard navigating != isNavigating else { return }
+        isNavigating = navigating
+        guard updatesTask != nil else { return }
+        stopUpdates()
+        startUpdates()
     }
 
     /// Keeps live updates flowing in the background during commute/compass sessions.
@@ -141,6 +171,9 @@ extension LocationManager: CLLocationManagerDelegate {
         MainActor.assumeIsolated {
             if self.location.map({ latest.timestamp > $0.timestamp }) ?? true {
                 self.location = latest
+                // The course is read from the live stream, which is fresher than anything that
+                // reaches here; a wake from a few hundred metres away says nothing about which
+                // way you're pointing now.
             }
             self.onSignificantChange?(latest)
         }

@@ -14,6 +14,17 @@ struct ControlRail: View {
 
             GlassEffectContainer(spacing: 10) {
                 VStack(spacing: 10) {
+                    // Only while a way is being followed, where spoken turns are the thing you
+                    // most want to silence without stopping the journey.
+                    if state.trip != nil {
+                        RailButton(
+                            symbol: state.speaksDirections ? "speaker.wave.2.fill" : "speaker.slash.fill",
+                            role: state.speaksDirections ? .you : nil,
+                            label: state.speaksDirections ? "Mute directions" : "Speak directions"
+                        ) {
+                            state.speaksDirections.toggle()
+                        }
+                    }
                     // The scanner is presented from the deck, which steps aside while guiding.
                     if state.compassTarget == nil {
                         RailButton(symbol: "camera.viewfinder", role: .you, label: "Scan") {

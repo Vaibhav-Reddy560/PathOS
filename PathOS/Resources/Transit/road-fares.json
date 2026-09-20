@@ -1,0 +1,58 @@
+{
+  "modes": [
+    {
+      "id": "auto",
+      "name": "Auto",
+      "base": 30,
+      "baseKm": 2.0,
+      "perKm": 15,
+      "minimum": 30,
+      "nightMultiplier": 1.5,
+      "nightFrom": "22:00",
+      "nightTo": "05:00",
+      "spread": 0.1,
+      "note": "Metered and set by the city, so the meter should read close to this. App bookings add a small convenience fee."
+    },
+    {
+      "id": "bikeTaxi",
+      "name": "Bike taxi",
+      "base": 25,
+      "baseKm": 2.0,
+      "perKm": 7,
+      "minimum": 25,
+      "nightMultiplier": 1.25,
+      "nightFrom": "22:00",
+      "nightTo": "05:00",
+      "spread": 0.25,
+      "note": "App pricing, which changes with demand. Bike taxis have been stopped and restarted repeatedly in Karnataka, so one may not be bookable at all."
+    },
+    {
+      "id": "cab",
+      "name": "Cab",
+      "base": 60,
+      "baseKm": 3.0,
+      "perKm": 16,
+      "minimum": 80,
+      "nightMultiplier": 1.25,
+      "nightFrom": "22:00",
+      "nightTo": "05:00",
+      "spread": 0.4,
+      "note": "App pricing for the cheapest class of car. It rises steeply when it's busy or raining, so treat the higher figure as the likely one at those times."
+    }
+  ],
+  "sources": [
+    {
+      "what": "Auto fare: ₹30 for the first 2 km, ₹15 per km after, one and a half times between 10 p.m. and 5 a.m.",
+      "url": "https://www.deccanherald.com/india/karnataka/bengaluru/auto-fare-hike-comes-into-effect-in-bengaluru-1063137.html",
+      "licence": "News report of the Bengaluru transport department's revision; not an official source",
+      "retrieved": "2026-09-20"
+    },
+    {
+      "what": "Bike taxi and cab rates",
+      "url": "",
+      "licence": "PathOS estimate from typical app fares in Bengaluru; the operators publish no fare table",
+      "retrieved": "2026-09-20"
+    }
+  ],
+  "generated": "2026-09-20"
+}

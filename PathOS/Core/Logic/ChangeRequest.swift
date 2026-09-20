@@ -177,14 +177,14 @@ nonisolated enum ChangePlanner {
         case .move, .cancel, .rename:
             guard let id = reading.itemID?.trimmingCharacters(in: .whitespaces).lowercased(),
                   let target = candidates.first(where: { $0.id == id }) else {
-                return .needs("I couldn't find that in your schedule. Try naming the class or event.")
+                return .needs("I couldn't find that in your schedule. Try naming the session or event.")
             }
             switch reading.action {
             case .cancel:
                 return .proposal(cancel(target, everyWeek: reading.scope == .everyWeek))
             case .rename:
                 let title = reading.title?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-                guard target.kind == .event else { return .needs("Only events can be renamed this way. Classes are renamed in your timetable.") }
+                guard target.kind == .event else { return .needs("Only events can be renamed this way. Sessions are renamed in Weekly schedule.") }
                 guard !title.isEmpty, title != target.title else { return .needs("What should it be called?") }
                 return .proposal(.renameEvent(id: target.targetID, from: target.title, to: title))
             default:

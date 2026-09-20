@@ -12,6 +12,7 @@ struct DayDeck: View {
     @Query private var timetableEntries: [TimetableEntry]
     @Query private var timetableExceptions: [TimetableException]
     @Query private var trips: [Trip]
+    @Query private var savedPlaces: [SavedPlace]
     @Query(filter: #Predicate<MailSuggestion> { $0.statusRaw == "pending" }) private var pendingMail: [MailSuggestion]
 
     @State private var day = Calendar.current.startOfDay(for: Date())
@@ -66,21 +67,21 @@ struct DayDeck: View {
 
     // MARK: Views
 
-    /// What to add comes first, under the date, then what's next and the schedule; how the day
-    /// added up is last. Mail has its own tab, so it never pushes the schedule down.
+    /// What's next and the schedule come first, then the ways to add to it; how the day added up
+    /// is last. Mail has its own tab, so it never pushes the schedule down.
     @ViewBuilder
     private var dayView: some View {
         dayPicker
-        if !isPast {
-            quickActions
-        }
         if let trip = tripForDay {
             tripBanner(trip)
         }
         if isToday, let next = nextItem {
             nextUp(next)
         }
-        schedule(title: isPast ? "What happened" : "Schedule")
+        schedule(title: isPast ? "What happened" : "Plan")
+        if !isPast {
+            quickActions
+        }
         if !timetableEntries.isEmpty, !isPast {
             classesToggle
         }
@@ -244,14 +245,14 @@ struct DayDeck: View {
         VStack(alignment: .leading, spacing: 10) {
             DeckSectionHeader(title: title, trailing: items.isEmpty ? nil : "\(items.count)")
             if isDayOff {
-                EmptyState(symbol: "figure.walk.motion", title: "No classes today", message: "You marked this day off. Events still show here.", role: .you)
+                EmptyState(symbol: "figure.walk.motion", title: "Day off", message: "You took this day off your weekly schedule. Events still show here.", role: .you)
             } else if items.isEmpty {
                 EmptyState(
                     symbol: "calendar",
                     title: isPast ? "Nothing recorded" : "Nothing scheduled",
                     message: isPast
                         ? "No events were saved for this day."
-                        : "Add an event, paste a message, or import your timetable."
+                        : "Add an event, paste a message, or set up your weekly schedule."
                 )
             }
             if !items.isEmpty {
@@ -312,10 +313,10 @@ struct DayDeck: View {
         Button {
             state.isTimetablePresented = true
         } label: {
-            QuickActionLabel(title: "Timetable", symbol: "graduationcap")
+            QuickActionLabel(title: "Schedule", symbol: "calendar.day.timeline.left")
         }
         .pathSecondaryAction()
-        .accessibilityLabel(timetableEntries.isEmpty ? "Add timetable" : "Timetable")
+        .accessibilityLabel(timetableEntries.isEmpty ? "Set up your weekly schedule" : "Weekly schedule")
     }
 
     private var tripButton: some View {
@@ -332,7 +333,7 @@ struct DayDeck: View {
         Button {
             state.timetable.setDayOff(day, isOff: !isDayOff)
         } label: {
-            OneLineButtonLabel(title: isDayOff ? "Classes are on this day" : "No classes this day",
+            OneLineButtonLabel(title: isDayOff ? "Undo day off" : "Take \(isToday ? "today" : "this day") off",
                                symbol: isDayOff ? "arrow.uturn.backward" : "xmark.circle")
         }
         .pathSecondaryAction()
@@ -349,11 +350,16 @@ struct DayDeck: View {
         DayPlan.events(allEvents.map(EventStore.plannedEvent), on: day).compactMap { event(for: $0.id) }
     }
 
+    /// The day's sessions, at your Work place.
     private func classSessions(on day: Date) -> [ClassSession] {
-        TimetableRoutine.sessions(
-            slots: timetableEntries.map(TimetableService.slot),
-            skips: timetableExceptions.map(TimetableService.skip),
-            on: day
+        let work = savedPlaces.first { $0.kind == .work }
+        return ClassSession.at(
+            TimetableRoutine.sessions(
+                slots: timetableEntries.map(TimetableService.slot),
+                skips: timetableExceptions.map(TimetableService.skip),
+                on: day
+            ),
+            name: work?.name, latitude: work?.latitude, longitude: work?.longitude
         )
     }
 
@@ -491,7 +497,7 @@ enum DayItem: Identifiable {
     var placeName: String? {
         switch self {
         case .event(let event): event.placeName
-        case .classSession(let session): session.room
+        case .classSession(let session): session.whereText
         case .leg(let leg): "from \(leg.origin)"
         case .calendar(let item): item.location?.split(separator: "\n").first.map(String.init)
         }
@@ -500,7 +506,12 @@ enum DayItem: Identifiable {
     var coordinate: CLLocationCoordinate2D? {
         switch self {
         case .event(let event): event.coordinate
-        case .classSession: nil
+        case .classSession(let session):
+            if let latitude = session.latitude, let longitude = session.longitude {
+                CLLocationCoordinate2D(latitude: latitude, longitude: longitude)
+            } else {
+                nil
+            }
         case .leg(let leg): leg.destinationCoordinate
         case .calendar(let item):
             if let latitude = item.latitude, let longitude = item.longitude {
@@ -523,7 +534,7 @@ enum DayItem: Identifiable {
     var symbol: String {
         switch self {
         case .event: "calendar"
-        case .classSession: "graduationcap.fill"
+        case .classSession: "calendar.day.timeline.left"
         case .leg(let leg): leg.mode.symbol
         case .calendar: isOnline ? "video.fill" : "calendar"
         }
@@ -549,7 +560,7 @@ enum DayItem: Identifiable {
     var timeRange: String {
         if isAllDay { return "All day" }
         if isMoment { return "Due \(start.formatted(date: .omitted, time: .shortened))" }
-        return "\(start.formatted(date: .omitted, time: .shortened))–\(end.formatted(date: .omitted, time: .shortened))"
+        return .range(start.formatted(date: .omitted, time: .shortened), end.formatted(date: .omitted, time: .shortened))
     }
 
     func isUnderway(now: Date) -> Bool { start <= now && end > now }
@@ -637,7 +648,7 @@ private struct DayItemRow: View {
                 }
             }
             if case .classSession(let session) = item {
-                Button("Skip this class today", systemImage: "xmark.circle") {
+                Button("Skip this session today", systemImage: "xmark.circle") {
                     let context = state.modelContainer.mainContext
                     context.insert(TimetableException(dayStart: Calendar.current.startOfDay(for: session.start), reason: "Cancelled", entryID: session.slotID))
                     try? context.save()

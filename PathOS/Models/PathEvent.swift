@@ -16,7 +16,7 @@ nonisolated enum EventOrigin: String, Codable, CaseIterable, Sendable {
         case .manual: "Added by you"
         case .captured: "From text you shared"
         case .scan: "From a scan"
-        case .timetable: "From your timetable"
+        case .timetable: "From your weekly schedule"
         case .mail: "From your Gmail"
         case .assistant: "Asked of PathOS"
         }
@@ -27,7 +27,7 @@ nonisolated enum EventOrigin: String, Codable, CaseIterable, Sendable {
         case .manual: "calendar"
         case .captured: "text.viewfinder"
         case .scan: "camera.viewfinder"
-        case .timetable: "graduationcap"
+        case .timetable: "calendar.day.timeline.left"
         case .mail: "envelope"
         case .assistant: "apple.intelligence"
         }

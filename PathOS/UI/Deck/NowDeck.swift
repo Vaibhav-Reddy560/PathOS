@@ -1,3 +1,4 @@
+import CoreLocation
 import SwiftData
 import SwiftUI
 
@@ -16,6 +17,9 @@ struct NowDeck: View {
                     permissionTile
                 }
                 contextTile
+                if let trip = state.trip, let status = state.tripStatus {
+                    FollowingTripCard(trip: trip, status: status)
+                }
                 if let journey = state.transit.journey, let progress = state.transit.progress {
                     ActiveJourneyCard(journey: journey, progress: progress)
                 }
@@ -127,7 +131,7 @@ struct NowDeck: View {
         .buttonBorderShape(.circle)
         .disabled(isTogglingPin)
         .accessibilityLabel(isPinned ? "Unpin from Lock Screen" : "Pin to Lock Screen")
-        .accessibilityHint(isPinned ? "Takes PathOS off the Lock Screen" : "Keeps rain warnings, your next class or event, and directions on the Lock Screen")
+        .accessibilityHint(isPinned ? "Takes PathOS off the Lock Screen" : "Keeps rain warnings, what's next on your schedule, and directions on the Lock Screen")
 
         if isPinned {
             button.pathPrimaryAction()
@@ -214,6 +218,11 @@ struct NowDeck: View {
                 title: "Getting around",
                 trailing: state.routine.todaysDeparture().map { "You usually leave \(RoutineLearner.format(minutes: $0))" }
             )
+            // Only until you pick one: from then on, the card at the top of Now is the journey
+            // itself, and a list of ways you didn't take is noise.
+            if let departure = state.departure, isWorthRouting(departure), state.trip == nil {
+                waysToNextCard(departure)
+            }
             ContentTile {
                 VStack(alignment: .leading, spacing: 14) {
                     travelTimes
@@ -254,6 +263,50 @@ struct NowDeck: View {
         }
     }
 
+    /// Something with a place, close enough that how to get there is the question.
+    private func isWorthRouting(_ departure: AlertSnapshot.Departure) -> Bool {
+        guard departure.status != .there else { return false }
+        let spare = Int(departure.start.timeIntervalSinceNow / 60) - departure.travelMinutes
+        return spare <= AppState.waysMarginMinutes
+    }
+
+    /// The quickest whole way to whatever is next, ready before it's asked for.
+    private func waysToNextCard(_ departure: AlertSnapshot.Departure) -> some View {
+        let key = "departure:\(departure.id)"
+        let quickest = state.journeys.plan(for: key)?.options.first { $0.isAvailableNow }
+        return ContentTile {
+            VStack(alignment: .leading, spacing: 12) {
+                HStack(spacing: 12) {
+                    SignalGlyph(symbol: quickest?.kind.symbol ?? "arrow.triangle.turn.up.right.diamond.fill", role: .you, size: 40)
+                    VStack(alignment: .leading, spacing: 2) {
+                        InstrumentLabel("Getting to \(departure.title)")
+                        Text(quickest?.headline ?? "Working out the ways there…")
+                            .font(.headline)
+                            .foregroundStyle(.ice)
+                            .lineLimit(2)
+                        if let quickest {
+                            Text("about \(quickest.minutes) min · \(quickest.fareText) · starts \(departure.start.formatted(date: .omitted, time: .shortened))")
+                                .font(.subheadline)
+                                .foregroundStyle(.mist)
+                        }
+                    }
+                }
+                Button {
+                    state.showWays(to: departure.placeName,
+                                   at: CLLocationCoordinate2D(latitude: departure.latitude, longitude: departure.longitude),
+                                   id: key, arriveBy: departure.start)
+                } label: {
+                    Label(quickest == nil ? "See the ways there" : "See all \(state.journeys.plan(for: key)?.options.count ?? 1) ways",
+                          systemImage: "list.bullet")
+                        .font(.subheadline.weight(.semibold))
+                        .lineLimit(1)
+                        .frame(maxWidth: .infinity, minHeight: 34)
+                }
+                .pathPrimaryAction()
+            }
+        }
+    }
+
     @ViewBuilder
     private var travelTimes: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -262,11 +315,29 @@ struct NowDeck: View {
                     Text("To \(name)")
                         .font(.headline)
                         .foregroundStyle(.ice)
-                    if let transit = commute.transitMinutes {
-                        CommuteLine(symbol: "tram.fill", value: "\(transit)", unit: "min", text: "by transit")
+                    ForEach(commute.options, id: \.mode) { option in
+                        CommuteLine(
+                            symbol: option.mode.symbol,
+                            value: option.isEstimate ? "~\(option.minutes)" : "\(option.minutes)",
+                            unit: "min",
+                            text: option.mode.phrase
+                        )
                     }
-                    if let walk = commute.walkMinutes {
-                        CommuteLine(symbol: "figure.walk", value: "\(walk)", unit: "min", text: "walk")
+                    if commute.options.contains(where: \.isEstimate) {
+                        Text("Apple Maps doesn't route two-wheelers, so that time is estimated from the car's.")
+                            .font(.caption)
+                            .foregroundStyle(.mist)
+                    }
+                    if let destination = commute.destination {
+                        Button {
+                            state.showWays(to: name, at: destination, id: "commute:\(name)")
+                        } label: {
+                            Label("Ways to get there", systemImage: "arrow.triangle.turn.up.right.diamond.fill")
+                                .font(.subheadline.weight(.semibold))
+                                .lineLimit(1)
+                                .frame(maxWidth: .infinity, minHeight: 34)
+                        }
+                        .pathSecondaryAction()
                     }
                 }
             } else if !hasHomeAndWork {
@@ -300,26 +371,27 @@ struct NowDeck: View {
             DeckSectionHeader(title: "Teach PathOS your places")
             ContentTile {
                 VStack(alignment: .leading, spacing: 14) {
-                    Text("Stand at home or work and tap below. Exit checks and commute learning use these.")
+                    Text("Set Home and Work by searching for them, on the map, or where you're standing. Exit checks, travel times and reminders to leave on time use them.")
                         .font(.subheadline)
                         .foregroundStyle(.mist)
-                    HStack(spacing: 10) {
-                        ForEach([PlaceKind.home, .work]) { kind in
-                            let isSet = savedPlaces.contains { $0.kind == kind }
-                            Button {
-                                Task {
-                                    let saved = await state.setPlaceHere(kind)
-                                    if saved {
-                                        state.showToast("\(kind.label) saved")
-                                    } else {
-                                        state.showToast("Couldn't get your location", role: .attention, symbol: "location.slash.fill")
-                                    }
-                                }
-                            } label: {
-                                Label(isSet ? "\(kind.label) set" : "I'm at \(kind.label)", systemImage: isSet ? "checkmark" : kind.symbol)
-                                    .frame(maxWidth: .infinity, minHeight: 32)
+                    ForEach([PlaceKind.home, .work]) { kind in
+                        let place = savedPlaces.first { $0.kind == kind }
+                        HStack(spacing: 12) {
+                            SignalGlyph(symbol: kind.symbol, role: place == nil ? nil : .you, size: 36)
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(kind.label)
+                                    .font(.headline)
+                                    .foregroundStyle(.ice)
+                                Text(place.map { $0.name == kind.label ? "Set" : $0.name } ?? "Not set")
+                                    .font(.footnote)
+                                    .foregroundStyle(.mist)
+                                    .lineLimit(1)
                             }
-                            .pathSecondaryAction()
+                            Spacer(minLength: 0)
+                            PlaceSetMenu(kind: kind, isSet: place != nil) {
+                                state.searchSettingPlace = kind
+                                state.showDeck(.search)
+                            }
                         }
                     }
                 }
