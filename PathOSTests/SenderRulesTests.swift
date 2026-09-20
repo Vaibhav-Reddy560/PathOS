@@ -31,9 +31,11 @@ struct SenderRulesTests {
         #expect(arranged.mutedCount == 2)
     }
 
-    /// The account chips: a Gmail address by its name, a college or work one by its organisation.
-    @Test func accountsAreNamedSoYouCanTellThemApart() {
-        #expect(MailInbox.shortName("vaibhav.reddy560@gmail.com") == "vaibhav.reddy560")
-        #expect(MailInbox.shortName("1bm22cs001@bmsce.ac.in") == "bmsce.ac.in")
+    /// "Everyone at gmail.com" would be everyone, so only a workplace or college domain can be a
+    /// rule of its own. The accounts themselves are always shown as whole addresses.
+    @Test func onlyOrganisationsCanBeADomainRule() {
+        #expect(MailInbox.isPublicDomain("@gmail.com"))
+        #expect(MailInbox.isPublicDomain("@icloud.com"))
+        #expect(!MailInbox.isPublicDomain("@bmsce.ac.in"))
     }
 }

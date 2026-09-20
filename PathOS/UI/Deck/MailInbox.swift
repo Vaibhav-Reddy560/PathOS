@@ -65,7 +65,7 @@ struct MailInbox: View {
                     chip(title: "All", count: visibleCount(pending), isSelected: shownAccount == nil) { shownAccount = nil }
                     ForEach(state.mail.accounts) { account in
                         chip(
-                            title: Self.shortName(account.email),
+                            title: account.email,
                             count: visibleCount(waiting(for: account.email)),
                             isSelected: shownAccount == account.email
                         ) { shownAccount = account.email }
@@ -107,7 +107,7 @@ struct MailInbox: View {
             // Each account's state in a line, since there's no header per account here.
             VStack(alignment: .leading, spacing: 2) {
                 ForEach(mail.accounts) { account in
-                    Text("\(Self.shortName(account.email)): \(status(of: account))")
+                    Text("\(account.email): \(status(of: account))")
                         .font(.caption)
                         .foregroundStyle(mail.accountErrors[account.email] == nil ? .mist : .amber)
                         .lineLimit(2)
@@ -216,14 +216,6 @@ struct MailInbox: View {
             }
             .pathSecondaryAction()
         }
-    }
-
-    /// "vaibhav.reddy560" for a Gmail address; the organisation, "bmsce.ac.in", for a college or
-    /// work one, which says more than a roll number.
-    static func shortName(_ email: String) -> String {
-        let parts = email.split(separator: "@")
-        guard parts.count == 2 else { return email }
-        return isPublicDomain("@" + parts[1]) ? String(parts[0]) : String(parts[1])
     }
 
     /// Addresses anyone can have, where "everyone at" would mean the whole world.
@@ -339,10 +331,13 @@ private struct MailSuggestionCard: View {
                                 .lineLimit(1)
                         }
                         if showsAccount, let account = state.mail.account(of: suggestion) {
-                            Label("To \(MailInbox.shortName(account))", systemImage: "arrow.down.to.line")
+                            // The whole address: which of your inboxes it came to is the point,
+                            // and half an address doesn't say that.
+                            Label("To \(account)", systemImage: "arrow.down.to.line")
                                 .font(.caption.weight(.semibold))
                                 .foregroundStyle(.ion)
-                                .lineLimit(1)
+                                .lineLimit(2)
+                                .fixedSize(horizontal: false, vertical: true)
                         }
                     }
                     Spacer(minLength: 0)
