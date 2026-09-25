@@ -90,7 +90,7 @@ nonisolated enum CalendarEvents {
 ///
 /// Off until you turn it on in Settings, because it needs full calendar access.
 final class CalendarEventSource: EventSource {
-    static let enabledKey = "pathos.calendarEvents"
+    nonisolated static let enabledKey = "pathos.calendarEvents"
 
     private let store: EventStore
     private let geocoder: PlaceGeocoder
@@ -101,7 +101,7 @@ final class CalendarEventSource: EventSource {
         self.geocoder = geocoder
     }
 
-    static var isEnabled: Bool {
+    nonisolated static var isEnabled: Bool {
         UserDefaults.standard.bool(forKey: enabledKey) && EKEventStore.authorizationStatus(for: .event) == .fullAccess
     }
 
@@ -124,7 +124,7 @@ final class CalendarEventSource: EventSource {
         return result
     }
 
-    static func item(from event: EKEvent) -> CalendarItem {
+    nonisolated static func item(from event: EKEvent) -> CalendarItem {
         CalendarItem(
             id: event.eventIdentifier ?? UUID().uuidString,
             title: event.title ?? "Event",
@@ -138,12 +138,13 @@ final class CalendarEventSource: EventSource {
         )
     }
 
-    private static let reader = EKEventStore()
+    /// Only ever read from, which EventKit allows from any thread.
+    nonisolated(unsafe) private static let reader = EKEventStore()
 
     /// Your Apple Calendar's events between two dates, less the ones PathOS put there itself, for
     /// Day. Online meetings belong here rather than on the map. Empty until calendars are turned
     /// on in Settings.
-    static func items(from start: Date, to end: Date, excluding mirrored: Set<String>) -> [CalendarItem] {
+    nonisolated static func items(from start: Date, to end: Date, excluding mirrored: Set<String>) -> [CalendarItem] {
         guard isEnabled, start < end else { return [] }
         let predicate = reader.predicateForEvents(withStart: start, end: end, calendars: nil)
         return reader.events(matching: predicate)

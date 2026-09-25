@@ -43,7 +43,9 @@ struct LockScreenContextTests {
         let physics = lesson("Physics", at(11, 15), at(12, 10), room: "LH-3")
         let shown = content(now: at(10, 40), agenda: [physics])
         #expect(shown.state.title == "Physics")
-        #expect(shown.state.subtitle.hasSuffix("\nLH-3"))
+        // One line: the time and the room, never wrapped.
+        #expect(shown.state.subtitle.hasSuffix(" · LH-3"))
+        #expect(!shown.state.subtitle.contains("\n"))
         #expect(shown.state.startDate == physics.start)
         #expect(shown.state.endDate == physics.end)
         #expect(shown.state.tint == .attention)
@@ -140,15 +142,14 @@ struct LockScreenContextTests {
         #expect(shown.state.notes == nil)
     }
 
-    /// Three at most: the context has a card to itself now, but a Lock Screen card is still
-    /// small, and a fourth line would be the one that gets clipped.
-    @Test func neverMoreThanThreeNotes() {
+    /// Two at most: a third line was the one cut off at the bottom of the card.
+    @Test func neverMoreThanTwoNotes() {
         let physics = lesson("Physics", at(9, 15), at(10))
         let maths = lesson("Maths", at(10, 15), at(11))
         let commute = LockScreenContext.Commute(destination: "Work", minutes: 35, mode: .car, usualDeparture: 9 * 60)
         let shown = content(now: at(9), agenda: [physics, maths], weather: wet, advice: rain, commute: commute,
                             memory: .init(title: "Locker 12", body: ""))
-        #expect(shown.state.notes?.count == 3)
+        #expect(shown.state.notes?.count == 2)
     }
 
     @Test func aDeadlineCountsDownToWhenItsDue() {
@@ -168,7 +169,38 @@ struct LockScreenContextTests {
             venueName: "Home", venueSymbol: "house.fill", weather: dry, exitAdvice: nil,
             agenda: [physics], departure: leave, now: at(8, 31), calendar: calendar
         ))
-        #expect(shown.state.notes?.first?.text == "Leave now · 25 min by road to BMS College")
+        // Physics is the card's title, so the line doesn't say it, or the building, again.
+        #expect(shown.state.notes?.first?.text == "Leave now · 25 min by road")
         #expect(shown.state.notes?.first?.role == .attention)
+    }
+
+    /// "Leave by 8:30" turns into "Leave now" at 8:30 on the Lock Screen by itself, and the card is
+    /// redrawn then, so it's right whenever it's looked at.
+    @Test func leaveByBecomesLeaveNowOnItsOwn() {
+        let maths = lesson("Maths", at(10), at(11))
+        let leave = AlertSnapshot.Departure(id: "Physics", title: "Physics", placeName: "BMS College", start: at(9), travelMinutes: 25,
+                                            byRoad: true, status: .leaveSoon(leaveBy: at(8, 30)), isOnTheWay: false, latitude: 12.94, longitude: 77.56)
+        let shown = LockScreenContext.content(for: .init(
+            venueName: "Home", venueSymbol: "house.fill", weather: dry, exitAdvice: nil,
+            agenda: [maths], departure: leave, now: at(8), calendar: calendar
+        ))
+        let note = shown.state.notes?.first
+        let eightThirty = at(8, 30).formatted(date: .omitted, time: .shortened)
+        #expect(note?.text(at: at(8, 10)) == "Leave by \(eightThirty) for Physics · 25 min by road")
+        #expect(note?.text(at: at(8, 31)) == "Leave now for Physics · 25 min by road")
+        #expect(shown.staleDate == at(8, 30))
+    }
+
+    /// "Next: Maths at 10:15" goes once Maths has started, instead of announcing it late.
+    @Test func whatsNextGoesOnceItStarts() {
+        let maths = lesson("Maths", at(10, 15), at(11))
+        let note = content(now: at(9), agenda: [maths]).state.notes?.first
+        #expect(note?.text(at: at(10)) != nil)
+        #expect(note?.text(at: at(10, 20)) == nil)
+    }
+
+    @Test func aSharedMeridiemIsSaidOnce() {
+        #expect(LockScreenContext.compactRange("12:10\u{202F}PM", "2:00\u{202F}PM") == String.range("12:10", "2:00\u{202F}PM"))
+        #expect(LockScreenContext.compactRange("11:15\u{202F}AM", "12:10\u{202F}PM") == String.range("11:15\u{202F}AM", "12:10\u{202F}PM"))
     }
 }

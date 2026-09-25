@@ -4,10 +4,14 @@ import SwiftUI
 
 /// Mail waiting for a decision: events and deadlines to add, and updates worth knowing.
 ///
-/// Sorted by the account it arrived at, so it's always clear which of your addresses it was sent
-/// to, and within each, priority senders first; muted senders don't show. Nothing from Gmail
-/// reaches your Day without passing through here.
+/// Only what came in on the day being looked at, as the rest of Day is: one day's mail, not a
+/// pile of everything. Sorted by the account it arrived at, so it's always clear which of your
+/// addresses it was sent to, and within each, priority senders first; muted senders don't show.
+/// Nothing from Gmail reaches your Day without passing through here.
 struct MailInbox: View {
+    /// The day whose mail this is.
+    let day: Date
+
     @Environment(AppState.self) private var state
     @Environment(\.webAuthenticationSession) private var webAuthenticationSession
     @Query(
@@ -53,16 +57,31 @@ struct MailInbox: View {
 
     // MARK: Accounts
 
-    /// Waiting mail for an account, less muted senders.
+    /// What came in on the day: from its midnight to the next.
+    private var dayMail: [MailSuggestion] {
+        let start = Calendar.current.startOfDay(for: day)
+        let end = Calendar.current.date(byAdding: .day, value: 1, to: start) ?? start.addingTimeInterval(86_400)
+        return pending.filter { $0.receivedAt >= start && $0.receivedAt < end }
+    }
+
+    /// The day's waiting mail for an account.
     private func waiting(for email: String) -> [MailSuggestion] {
-        pending.filter { state.mail.account(of: $0) == email }
+        dayMail.filter { state.mail.account(of: $0) == email }
+    }
+
+    /// "today", "yesterday", or "on Tuesday 22 September".
+    private var dayName: String {
+        let calendar = Calendar.current
+        if calendar.isDateInToday(day) { return "today" }
+        if calendar.isDateInYesterday(day) { return "yesterday" }
+        return "on " + day.formatted(.dateTime.weekday(.wide).day().month(.wide))
     }
 
     private var accountPicker: some View {
         ScrollView(.horizontal) {
             GlassEffectContainer(spacing: 6) {
                 HStack(spacing: 6) {
-                    chip(title: "All", count: visibleCount(pending), isSelected: shownAccount == nil) { shownAccount = nil }
+                    chip(title: "All", count: visibleCount(dayMail), isSelected: shownAccount == nil) { shownAccount = nil }
                     ForEach(state.mail.accounts) { account in
                         chip(
                             title: account.email,
@@ -101,7 +120,7 @@ struct MailInbox: View {
     @ViewBuilder
     private var allAccounts: some View {
         let mail = state.mail
-        let arranged = SenderRules.arrange(pending, address: \.senderAddress, priority: mail.prioritySenders, muted: mail.mutedSenders)
+        let arranged = SenderRules.arrange(dayMail, address: \.senderAddress, priority: mail.prioritySenders, muted: mail.mutedSenders)
 
         VStack(alignment: .leading, spacing: 10) {
             // Each account's state in a line, since there's no header per account here.
@@ -116,13 +135,16 @@ struct MailInbox: View {
             .padding(.horizontal, 4)
 
             if arranged.priority.isEmpty && arranged.others.isEmpty {
-                Text("Nothing waiting from any account.")
+                Text("Nothing came in \(dayName) that needs you.")
                     .font(.subheadline)
                     .foregroundStyle(.mist)
                     .padding(.horizontal, 4)
             }
-            ForEach(arranged.priority) { MailSuggestionCard(suggestion: $0, showsAccount: true) }
-            ForEach(arranged.others) { MailSuggestionCard(suggestion: $0, showsAccount: true) }
+            // Drawn as they scroll into view, not all at once.
+            LazyVStack(alignment: .leading, spacing: 10) {
+                ForEach(arranged.priority) { MailSuggestionCard(suggestion: $0, showsAccount: true) }
+                ForEach(arranged.others) { MailSuggestionCard(suggestion: $0, showsAccount: true) }
+            }
         }
     }
 
@@ -156,13 +178,15 @@ struct MailInbox: View {
             .accessibilityElement(children: .combine)
 
             if arranged.priority.isEmpty && arranged.others.isEmpty && mail.reading[account.email] == nil && account.isSignedIn {
-                Text("Nothing waiting from this account.")
+                Text("Nothing came in \(dayName) that needs you.")
                     .font(.subheadline)
                     .foregroundStyle(.mist)
                     .padding(.horizontal, 4)
             }
-            ForEach(arranged.priority) { MailSuggestionCard(suggestion: $0) }
-            ForEach(arranged.others) { MailSuggestionCard(suggestion: $0) }
+            LazyVStack(alignment: .leading, spacing: 10) {
+                ForEach(arranged.priority) { MailSuggestionCard(suggestion: $0) }
+                ForEach(arranged.others) { MailSuggestionCard(suggestion: $0) }
+            }
 
             if arranged.mutedCount > 0 {
                 Button {

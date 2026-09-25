@@ -75,12 +75,13 @@ struct InstrumentStrip: View {
         if state.trip != nil, let status = state.tripStatus, !status.hasArrived {
             var items = [Readout(id: "remaining", value: "\(status.minutesRemaining)", unit: "min",
                                  role: status.isBehind ? .attention : .you)]
-            if let position = state.tripStep {
+            // Distance left on the road you're following, measured along it from where you are.
+            if let metres = state.tripMatch?.remaining ?? state.tripStep?.metresRemaining {
                 items.append(Readout(id: "distance",
-                                     value: GeoMath.formatDistance(position.metresRemaining)
+                                     value: GeoMath.formatDistance(metres)
                                         .replacingOccurrences(of: " km", with: "")
                                         .replacingOccurrences(of: " m", with: ""),
-                                     unit: position.metresRemaining >= 1_000 ? "km" : "m",
+                                     unit: metres >= 1_000 ? "km left" : "m left",
                                      role: .world))
             }
             if status.isBehind {

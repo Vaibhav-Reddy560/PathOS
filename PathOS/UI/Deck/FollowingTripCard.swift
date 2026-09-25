@@ -32,6 +32,7 @@ struct FollowingTripCard: View {
                 legs
 
                 HStack(spacing: 8) {
+                    if !state.isAt(currentLeg.endCoordinate, within: TripGuide.radius(for: currentLeg)) {
                     Button {
                         state.perform(.pointTo(CompassTarget(
                             id: "trip:\(trip.option.id)",
@@ -46,6 +47,9 @@ struct FollowingTripCard: View {
                             .frame(maxWidth: .infinity, minHeight: 34)
                     }
                     .pathPrimaryAction()
+                    } else {
+                        Spacer(minLength: 0)
+                    }
 
                     Button("Stop", systemImage: "xmark") {
                         state.endTrip()

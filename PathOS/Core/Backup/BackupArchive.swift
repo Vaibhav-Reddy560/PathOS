@@ -92,6 +92,8 @@ nonisolated struct BackupArchive: Codable, Equatable {
         var endMinutes: Int
         var room: String?
         var teacher: String?
+        /// Added after the first backups, which simply don't have it.
+        var notes: String? = nil
         var isActive: Bool
         var createdAt: Date
     }

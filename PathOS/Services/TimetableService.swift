@@ -179,6 +179,12 @@ final class TimetableService {
         refreshReminders()
     }
 
+    /// After a session was edited in place.
+    func saveChanges() {
+        save()
+        refreshReminders()
+    }
+
     func delete(_ entry: TimetableEntry) {
         context.delete(entry)
         save()
@@ -227,6 +233,47 @@ final class TimetableService {
         for exception in exceptions() where exception.entryID == entryID && Calendar.current.isDate(exception.dayStart, inSameDayAs: day) {
             context.delete(exception)
         }
+    }
+
+    // MARK: Electives
+
+    /// Groups of sessions at the same time that you haven't chosen between yet.
+    func openClashes() -> [[String]] {
+        let settled = settledClashKeys
+        return TimetableClashes.groups(in: entries().map(Self.slot)).filter { !settled.contains(TimetableClashes.key($0)) }
+    }
+
+    /// "Wed, Thu and Fri at 1:05 PM".
+    func clashWhen(_ group: [String]) -> String {
+        TimetableClashes.when(group, in: entries().map(Self.slot))
+    }
+
+    /// You take `kept`: the others in its group leave your week, every day they were on.
+    func keep(_ kept: String, of group: [String]) {
+        let remove = Set(TimetableClashes.toRemove(keeping: kept, of: group, from: entries().map(Self.slot)))
+        for entry in entries() where remove.contains(entry.id) {
+            context.delete(entry)
+        }
+        settledClashKeys.insert(TimetableClashes.key(group))
+        save()
+        refreshReminders()
+    }
+
+    /// They really are all yours, so stop asking.
+    func keepAll(_ group: [String]) {
+        settledClashKeys.insert(TimetableClashes.key(group))
+    }
+
+    /// One line per answered group, as a plain string so views can watch it with `AppStorage`.
+    static let settledClashesKey = "pathos.settledClashKeys"
+
+    static func settledClashKeys(from stored: String) -> Set<String> {
+        Set(stored.split(separator: "\n").map(String.init))
+    }
+
+    private var settledClashKeys: Set<String> {
+        get { Self.settledClashKeys(from: UserDefaults.standard.string(forKey: Self.settledClashesKey) ?? "") }
+        set { UserDefaults.standard.set(newValue.sorted().joined(separator: "\n"), forKey: Self.settledClashesKey) }
     }
 
     func setDayOff(_ day: Date, isOff: Bool, reason: String = "Day off") {
@@ -298,7 +345,7 @@ final class TimetableEventSource: EventSource {
                     start: session.start,
                     latitude: session.latitude,
                     longitude: session.longitude,
-                    source: .scanned,
+                    source: .own,
                     symbol: "calendar.day.timeline.left"
                 )
             }

@@ -17,6 +17,21 @@ nonisolated struct ActiveTrip: Sendable {
     }
 }
 
+/// What live traffic is doing to the leg you're on.
+nonisolated struct TripTraffic: Equatable, Sendable {
+    /// Minutes more than the plan allowed for this leg; negative when it's clearer than expected.
+    var delayMinutes: Int
+    /// "Heavy traffic · +7 min", "Faster route · saves 4 min", or nil when there's nothing to say.
+    var note: String?
+    /// When it was worked out.
+    var at: Date
+
+    var isSlow: Bool { delayMinutes >= TripTraffic.worthSaying }
+
+    /// Less than this either way is ordinary.
+    static let worthSaying = 4
+}
+
 extension AppState {
 
     // MARK: Making a journey
@@ -29,6 +44,8 @@ extension AppState {
         announcedTripLeg = nil
         announcedTripDelay = 0
         spokenMoments = []
+        // Set off: any "time to leave" still waiting would only arrive on the way.
+        Task { await notifications.removePending(withPrefix: "pathos.leave.") }
         location.startUpdates()
         location.beginHeadingUpdates()
         refreshBackgroundSession()
@@ -101,7 +118,11 @@ extension AppState {
         tripStatus = nil
         tripNav = nil
         tripStep = nil
+        tripMatch = nil
+        tripTraffic = nil
+        isRerouting = false
         navLegID = nil
+        lastTripActivityStep = nil
         navigationTask?.cancel()
         navigationTask = nil
         offRouteSamples = 0
@@ -129,83 +150,193 @@ extension AppState {
 
     /// Where you are along the leg you're on, worked out afresh from your latest position.
     ///
-    /// Cheap on purpose: arithmetic over the route you already have, no network, so it can run on
-    /// every fix. The turn on the map used to be recomputed on the twenty-second loop, which at
-    /// city speeds meant "In 50 m, turn right" still on screen a street after the turn.
+    /// Cheap on purpose: arithmetic over the route you already have, no network, so it runs on
+    /// every fix — once a second on screen, every few seconds in your pocket. Everything that has
+    /// to happen *when* something changes happens here too, the moment it's seen: reaching the
+    /// end of a leg, arriving, leaving the route. Those used to wait for a twenty-second loop, or
+    /// in your pocket for a wake that came minutes later.
     func updateNavigationPosition(now: Date = Date()) {
         guard let trip, let here = location.location else { return }
-        let status = TripGuide.status(for: trip.option, startedAt: trip.startedAt, now: now,
-                                      location: here.coordinate)
-        tripStatus = status
-        guard let status, !status.hasArrived else { return }
-
+        guard var status = TripGuide.status(for: trip.option, startedAt: trip.startedAt, now: now,
+                                            location: here.coordinate) else { return }
         let leg = trip.option.legs[min(status.legIndex, trip.option.legs.count - 1)]
-        // A ride is followed by its stations, not by turns.
-        guard leg.mode != .metro, leg.mode != .bus else {
+        let isRoad = leg.mode != .metro && leg.mode != .bus
+
+        // Where you are on the route, and what's left of it at the traffic's pace.
+        if isRoad, !status.hasArrived, let nav = tripNav, navLegID == leg.id {
+            let match = RouteProgress.match(nav.coordinates, at: here.coordinate, after: tripMatch)
+            tripMatch = match
+            tripStep = StepGuide.position(in: nav.steps, at: here.coordinate, near: tripStep?.stepIndex)
+            if let match {
+                status = liveAdjusted(status, trip: trip, now: now)
+                // A wrong turn, or heading the wrong way down the route: seen within a couple of
+                // fixes, not after a minute.
+                let isOff = match.offset > RouteProgress.offRouteMetres(accuracy: here.horizontalAccuracy)
+                    || RouteProgress.isHeadingAway(course: location.courseDegrees, speed: here.speed, along: nav.coordinates, at: match)
+                offRouteSamples = isOff ? offRouteSamples + 1 : 0
+            }
+        } else if !isRoad {
             tripStep = nil
+            tripMatch = nil
+        }
+
+        let previous = tripStatus
+        tripStatus = status
+
+        // A leg finished, or the whole way: handled now, not on the next slow pass.
+        let justArrived = status.hasArrived && previous?.hasArrived != true
+        if justArrived || (!status.hasArrived && previous.map({ $0.legIndex != status.legIndex }) == true) {
+            Task { await refreshTrip(now: now) }
             return
         }
-        let position = tripNav.flatMap { StepGuide.position(in: $0.steps, at: here.coordinate) }
-        tripStep = position
+        guard isRoad, !status.hasArrived else { return }
 
-        // Noticing a wrong turn is part of following, so it's counted here on every fix rather
-        // than on the slow loop, where three samples would have meant a minute of wrong turns.
-        if tripNav == nil {
-            offRouteSamples = 0
-        } else {
-            offRouteSamples = position?.isOffRoute == true ? offRouteSamples + 1 : 0
+        if tripNav == nil || navLegID != leg.id || offRouteSamples >= Self.offRouteSamplesBeforeReroute {
+            if offRouteSamples >= Self.offRouteSamplesBeforeReroute { isRerouting = true }
+            if !isFetchingRoute, now.timeIntervalSince(lastRouteFetch) >= Self.rerouteCooldown || navLegID != leg.id {
+                Task { await refreshRoute(force: true) }
+            }
+        } else if now.timeIntervalSince(lastTrafficCheck) >= Self.trafficCheckInterval, !isFetchingRoute, leg.mode != .walk {
+            lastTrafficCheck = now
+            Task { await checkTraffic(for: leg) }
         }
-        if offRouteSamples >= Self.offRouteSamplesBeforeReroute || tripNav == nil,
-           now.timeIntervalSince(lastRouteFetch) >= Self.rerouteCooldown, !isFetchingRoute {
-            Task { await refreshRoute(force: true) }
-        }
+
         speakNextTurn(status: status, leg: leg)
+
+        // The Lock Screen, kept as current as the map: at once when the turn changes, and every
+        // few seconds otherwise.
+        let stepChanged = tripStep?.stepIndex != lastTripActivityStep
+        if stepChanged || now.timeIntervalSince(lastTripActivityUpdate) >= (isForeground ? 5 : 10) {
+            lastTripActivityUpdate = now
+            lastTripActivityStep = tripStep?.stepIndex
+            Task { await updateTripActivity() }
+        }
     }
 
-    /// The road route for the leg you're on, with its turns. One fetch per leg, and a fresh one
-    /// only once you've really left the route — a wrong turn, not a wobble in the fix.
+    /// The road route for the leg you're on, with its turns: fetched for each new leg, and again
+    /// as soon as you've left it.
     func refreshRoute(force: Bool = false, now: Date = Date()) async {
         guard let trip, let status = tripStatus, let here = location.location else {
             tripNav = nil
             tripStep = nil
+            tripMatch = nil
             return
         }
         let leg = trip.option.legs[min(status.legIndex, trip.option.legs.count - 1)]
         guard leg.mode != .metro, leg.mode != .bus else {
             tripNav = nil
             tripStep = nil
+            tripMatch = nil
             navLegID = nil
             offRouteSamples = 0
+            isRerouting = false
             return
         }
 
-        // A new leg is always routed; anything else waits for the fast loop to have seen you off
-        // the road for several fixes running, and for the cooldown to have passed.
         let isNewLeg = navLegID != leg.id || tripNav == nil
         if !isNewLeg, !force { return }
         guard !isFetchingRoute, isNewLeg || now.timeIntervalSince(lastRouteFetch) >= Self.rerouteCooldown else { return }
 
         isFetchingRoute = true
         defer { isFetchingRoute = false }
-        navLegID = leg.id
         lastRouteFetch = now
+        let found = await places.directions(to: leg.endCoordinate, from: here, byRoad: leg.mode != .walk)
+        // Still on the same leg of the same way when it comes back.
+        guard self.trip?.option.id == trip.option.id, tripStatus?.legIndex == status.legIndex else { return }
+        if let found {
+            tripNav = found
+            navLegID = leg.id
+            tripMatch = RouteProgress.match(found.coordinates, at: here.coordinate)
+            tripStep = StepGuide.position(in: found.steps, at: here.coordinate)
+            if isRerouting, !isNewLeg {
+                // The next turn is a different one now.
+                spokenMoments = spokenMoments.filter { if case .handover = $0 { true } else { false } }
+            }
+        }
         offRouteSamples = 0
-        tripNav = await places.directions(to: leg.endCoordinate, from: here, byRoad: leg.mode != .walk)
-        tripStep = tripNav.flatMap { StepGuide.position(in: $0.steps, at: here.coordinate) }
+        isRerouting = false
+        lastTrafficCheck = now
     }
 
-    /// Long enough that a wrong turn is re-routed once, not once a second.
-    static let rerouteCooldown: TimeInterval = 10
-    static let offRouteSamplesBeforeReroute = 3
+    /// Asks Apple Maps again, every minute or so, how long the rest of the leg takes in the
+    /// traffic now, and whether another way is quicker. A clearly quicker way is taken, and said,
+    /// as navigation apps do; otherwise the times on screen follow the traffic.
+    private func checkTraffic(for leg: DoorToDoor.Leg, now: Date = Date()) async {
+        guard let trip, let nav = tripNav, let match = tripMatch, let here = location.location else { return }
+        isFetchingRoute = true
+        let routes = await places.routes(to: leg.endCoordinate, from: here, byRoad: true)
+        isFetchingRoute = false
+        guard self.trip?.option.id == trip.option.id, navLegID == leg.id, let fastest = routes.first else { return }
+
+        let current = nav.secondsRemaining(from: match)
+        // The route you're on, as it's timed now: the one of those offered that is the same road,
+        // judged by its name and length.
+        let same = routes.first { route in
+            route.name == nav.name && abs(route.distanceMeters - match.remaining) < max(300, match.remaining * 0.15)
+        }
+        let yours = same?.seconds ?? current
+        let saving = yours - fastest.seconds
+
+        if same?.name != fastest.name, saving >= max(180, yours * 0.1) {
+            // Quicker by enough to be worth a different road.
+            tripNav = fastest
+            tripMatch = RouteProgress.match(fastest.coordinates, at: here.coordinate)
+            tripStep = StepGuide.position(in: fastest.steps, at: here.coordinate)
+            let minutes = Int((saving / 60).rounded())
+            tripTraffic = TripTraffic(delayMinutes: tripTraffic?.delayMinutes ?? 0,
+                                      note: "Faster route · saves \(minutes) min", at: now)
+            if speaksDirections {
+                say("Found a faster route\(fastest.name.isEmpty ? "" : " via \(fastest.name)"). It saves \(minutes) minutes.")
+            }
+            await updateTripActivity()
+            return
+        }
+        if let same {
+            // Keep the route, but time the rest of it by the traffic now.
+            var updated = nav
+            updated.seconds = same.seconds / max(0.05, 1 - match.fraction)
+            updated.fetchedAt = now
+            tripNav = updated
+        }
+        // Against what the plan allowed for this leg: the part already done, and the rest now.
+        let elapsedOnLeg = max(0, now.timeIntervalSince(trip.startedAt) / 60
+                               - (TripGuide.schedule(trip.option)[safe: (tripStatus?.legIndex ?? 0) - 1] ?? 0))
+        let delay = Int((elapsedOnLeg + yours / 60 - Double(leg.minutes)).rounded())
+        let wasSlow = tripTraffic?.isSlow == true
+        tripTraffic = TripTraffic(
+            delayMinutes: delay,
+            note: delay >= TripTraffic.worthSaying ? "Heavy traffic · +\(delay) min"
+                : delay <= -TripTraffic.worthSaying ? "Clear roads · \(-delay) min quicker" : nil,
+            at: now
+        )
+        if tripTraffic?.isSlow == true, !wasSlow, speaksDirections {
+            say("Heavy traffic ahead. About \(delay) minutes longer than planned.")
+        }
+    }
+
+    /// The plan's status, timed instead by what's left of the route you're on in today's traffic,
+    /// once there's a route and a place on it to measure from.
+    func liveAdjusted(_ status: TripGuide.Status, trip: ActiveTrip, now: Date) -> TripGuide.Status {
+        guard !status.hasArrived, let nav = tripNav, let match = tripMatch,
+              navLegID == trip.option.legs[safe: status.legIndex]?.id else { return status }
+        return TripGuide.adjusting(status, in: trip.option, startedAt: trip.startedAt, now: now,
+                                   legMinutesLeft: nav.secondsRemaining(from: match) / 60)
+    }
+
+    /// Two fixes off the route, a second apart, and it re-routes: a wrong turn, not a wobble.
+    static let rerouteCooldown: TimeInterval = 6
+    static let offRouteSamplesBeforeReroute = 2
+    /// How often the traffic on the route is asked about.
+    static let trafficCheckInterval: TimeInterval = 60
 
     /// Where you've got to, what to do next, and whether the plan is slipping. Called on the
     /// foreground loop and on every background wake, so it keeps working in your pocket.
     func refreshTrip(now: Date = Date()) async {
         guard let trip else { return }
-        let status = TripGuide.status(for: trip.option, startedAt: trip.startedAt, now: now,
-                                      location: location.location?.coordinate)
+        guard let planned = TripGuide.status(for: trip.option, startedAt: trip.startedAt, now: now,
+                                             location: location.location?.coordinate) else { return }
+        let status = liveAdjusted(planned, trip: trip, now: now)
         tripStatus = status
-        guard let status else { return }
 
         if status.hasArrived {
             await announceTrip(title: "You've arrived", body: "\(trip.destinationName) · \(Int(now.timeIntervalSince(trip.startedAt) / 60)) min door to door", id: "arrived")
@@ -291,7 +422,7 @@ extension AppState {
         )
         guard let announcement else { return }
         spokenMoments.insert(announcement.moment)
-        speech.speak(announcement.text)
+        say(announcement.text)
     }
 
     /// "You should be at Jayadeva Hospital by now. Next: ride to BTM Layout." Where the journey
@@ -326,21 +457,47 @@ extension AppState {
 
     /// The leg you're on, on the Lock Screen. The metro's own stop-by-stop activity takes over
     /// while you're on the train.
+    ///
+    /// Said once each: the instruction as the title, the turn coming up or the leg's detail under
+    /// it, the next leg as the one note, and when you'll arrive, which the Lock Screen counts down
+    /// to by itself so it's right whenever you look.
     func updateTripActivity() async {
         guard let trip, let status = tripStatus, transit.journey == nil else { return }
+        let leg = trip.option.legs[min(status.legIndex, trip.option.legs.count - 1)]
+        let turn: String? = if isRerouting {
+            "Finding a new route…"
+        } else if let position = tripStep, let step = tripNav?.steps[safe: position.stepIndex] {
+            StepGuide.sentence(for: step, metresToStep: position.metresToStep)
+        } else {
+            nil
+        }
+        var notes: [PathOSActivityAttributes.Note] = []
+        if let note = tripTraffic?.note {
+            notes.append(.init(symbol: tripTraffic?.isSlow == true ? "car.rear.and.tire.marks" : "arrow.triangle.branch",
+                               text: note, role: tripTraffic?.isSlow == true ? .attention : .you))
+        } else if status.isBehind {
+            notes.append(.init(symbol: "clock.badge.exclamationmark", text: "\(status.minutesBehind) min behind plan", role: .attention))
+        } else if let next = trip.option.legs[safe: status.legIndex + 1] {
+            notes.append(.init(symbol: next.mode.symbol, text: "Then \(TripGuide.instruction(for: next).prefix(1).lowercased() + TripGuide.instruction(for: next).dropFirst())", role: .you))
+        } else if !status.headline.contains(trip.destinationName) {
+            notes.append(.init(symbol: "flag.checkered", text: trip.destinationName, role: .you))
+        }
+        let arrival = Date().addingTimeInterval(TimeInterval(status.minutesRemaining * 60))
         await liveActivities.showIfChanged(
             .init(
                 mode: .journey,
                 title: status.headline,
-                subtitle: status.detail,
+                subtitle: turn ?? leg.detail ?? "About \(status.minutesRemaining) min to go",
                 symbol: status.symbol,
                 etaMinutes: status.minutesRemaining,
                 deepLink: URL(string: "pathos://dashboard"),
-                notes: [.init(symbol: "flag.checkered", text: "To \(trip.destinationName)", role: .you)],
-                role: status.isBehind ? .attention : .you
+                notes: notes,
+                role: status.isBehind || tripTraffic?.isSlow == true ? .attention : .you,
+                // A minute's precision: redrawn when the time left moves, not every second.
+                arrivalDate: Date(timeIntervalSinceReferenceDate: (arrival.timeIntervalSinceReferenceDate / 60).rounded() * 60)
             ),
             lane: .journey,
-            staleAfter: 1_800,
+            staleAfter: 600,
             relevance: status.isBehind ? 96 : 94
         )
     }

@@ -98,6 +98,26 @@ nonisolated enum TripGuide {
         )
     }
 
+    /// The same status, timed by what's actually left of the leg you're on — Apple Maps' time for
+    /// the rest of the route, in the traffic now — instead of by the plan's clock. Behind is then
+    /// how much later than planned you'll arrive, which traffic can make true before you've
+    /// missed a single leg.
+    static func adjusting(_ status: Status, in option: DoorToDoor.Option, startedAt: Date, now: Date,
+                          legMinutesLeft: Double) -> Status {
+        guard !status.hasArrived, option.legs.indices.contains(status.legIndex) else { return status }
+        let plan = schedule(option)
+        let afterThisLeg = plan.last! - plan[status.legIndex]
+        let remaining = Int((afterThisLeg + max(0, legMinutesLeft)).rounded())
+        let plannedArrival = startedAt.addingTimeInterval(plan.last! * 60)
+        let projected = now.addingTimeInterval(Double(remaining) * 60)
+        let behind = max(0, Int((projected.timeIntervalSince(plannedArrival) / 60).rounded()))
+        var adjusted = status
+        adjusted.minutesRemaining = remaining
+        adjusted.minutesBehind = behind
+        adjusted.detail = detail(leg: option.legs[status.legIndex], behind: behind, remaining: remaining)
+        return adjusted
+    }
+
     /// What to do on this leg, as an instruction rather than a label.
     static func instruction(for leg: DoorToDoor.Leg) -> String {
         switch leg.mode {

@@ -95,27 +95,53 @@ final class VoiceInput {
     }
 }
 
-/// Speaks answers aloud, ducking any playing audio.
+/// Speaks answers and directions aloud.
+///
+/// Music or a video playing in another app pauses while it speaks and carries on as soon as it's
+/// done, the way a navigation app's voice does. It used to duck the music instead and never hand
+/// the audio back, which left the music quiet, or stopped, until PathOS happened to let go.
 @Observable
-final class SpeechOutput {
+final class SpeechOutput: NSObject {
     private(set) var isSpeaking = false
     @ObservationIgnored private let synthesizer = AVSpeechSynthesizer()
 
+    override init() {
+        super.init()
+        synthesizer.delegate = self
+    }
+
     func speak(_ text: String) {
-        // Spoken over whatever is playing, and while the screen is off: with `.duckOthers` the
-        // music drops for a moment instead of stopping, and `.playback` keeps it going in the
-        // background, which is where directions are actually needed.
-        try? AVAudioSession.sharedInstance().setCategory(.playback, mode: .spokenAudio,
-                                                         options: [.duckOthers, .interruptSpokenAudioAndMixWithOthers])
-        try? AVAudioSession.sharedInstance().setActive(true)
+        let session = AVAudioSession.sharedInstance()
+        // Not mixable, so what's playing pauses rather than talking over the directions;
+        // `.playback` keeps it working with the screen off, which is when directions matter.
+        try? session.setCategory(.playback, mode: .voicePrompt, options: [])
+        try? session.setActive(true)
         let utterance = AVSpeechUtterance(string: text)
         utterance.voice = AVSpeechSynthesisVoice(language: "en-IN") ?? AVSpeechSynthesisVoice(language: "en-US")
         synthesizer.stopSpeaking(at: .immediate)
+        isSpeaking = true
         synthesizer.speak(utterance)
     }
 
     func stop() {
         synthesizer.stopSpeaking(at: .immediate)
+    }
+
+    /// Finished: the audio goes back, and whatever was playing picks up where it paused.
+    fileprivate func handBack() {
+        guard !synthesizer.isSpeaking, isSpeaking else { return }
+        isSpeaking = false
+        try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+    }
+}
+
+extension SpeechOutput: AVSpeechSynthesizerDelegate {
+    nonisolated func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didFinish utterance: AVSpeechUtterance) {
+        Task { @MainActor in self.handBack() }
+    }
+
+    nonisolated func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didCancel utterance: AVSpeechUtterance) {
+        Task { @MainActor in self.handBack() }
     }
 }
 

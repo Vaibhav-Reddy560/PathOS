@@ -53,6 +53,10 @@ struct NavigationBanner: View {
 
     /// On the road it's the turn; on the train it's the ride.
     private var headline: String {
+        // Off the route: said at once, while the new one is fetched.
+        if state.isRerouting, !isRide {
+            return "Finding a new route…"
+        }
         if let step = currentStep, let position = state.tripStep, !isRide {
             return StepGuide.sentence(for: step, metresToStep: position.metresToStep)
         }
@@ -80,6 +84,7 @@ struct NavigationBanner: View {
 
     /// The turn itself, drawn from Apple Maps' wording for it.
     private var symbol: String {
+        if state.isRerouting, !isRide { return "arrow.triangle.2.circlepath" }
         guard !isRide, let step = currentStep else { return currentLeg.mode.symbol }
         return StepGuide.symbol(for: step.instruction)
     }

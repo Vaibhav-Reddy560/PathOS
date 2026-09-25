@@ -25,6 +25,9 @@ struct WorldMapView: View {
     var body: some View {
         @Bindable var state = state
         let here = state.location.location?.coordinate
+        let routeAhead: [CLLocationCoordinate2D] = state.tripNav.map { nav in
+            state.tripMatch.map { RouteProgress.ahead(of: nav.coordinates, from: $0) } ?? nav.coordinates
+        } ?? []
 
         Map(position: $camera, selection: $state.selectedSignalID, scope: scope) {
             if Self.veilOpacity > 0, let here {
@@ -53,11 +56,12 @@ struct WorldMapView: View {
                 }
             }
 
-            if let nav = state.tripNav, nav.coordinates.count > 1 {
-                MapPolyline(coordinates: nav.coordinates)
+            // Only what's ahead of you: the line starts where you are.
+            if routeAhead.count > 1 {
+                MapPolyline(coordinates: routeAhead)
                     .stroke(Color.void.opacity(0.9), style: StrokeStyle(lineWidth: 18, lineCap: .round, lineJoin: .round))
                     .mapOverlayLevel(level: .aboveRoads)
-                MapPolyline(coordinates: nav.coordinates)
+                MapPolyline(coordinates: routeAhead)
                     .stroke(Color.aurora, style: StrokeStyle(lineWidth: 11, lineCap: .round, lineJoin: .round))
                     .mapOverlayLevel(level: .aboveRoads)
             }
@@ -115,7 +119,8 @@ struct WorldMapView: View {
             }
             .annotationSubtitles(.hidden)
         }
-        .mapStyle(.standard(elevation: .realistic, emphasis: .muted, pointsOfInterest: .excludingAll, showsTraffic: false))
+        // Traffic while you're on your way, as Maps shows it; otherwise the map stays quiet.
+        .mapStyle(.standard(elevation: .realistic, emphasis: .muted, pointsOfInterest: .excludingAll, showsTraffic: state.trip != nil))
         .mapControls {}
         .safeAreaPadding(.bottom, bottomInset)
         .onMapCameraChange(frequency: .onEnd) { context in

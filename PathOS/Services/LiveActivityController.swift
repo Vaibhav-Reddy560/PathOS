@@ -21,13 +21,32 @@ final class LiveActivityController {
     @ObservationIgnored private var lastThrottledUpdate: [ActivityLane: Date] = [:]
 
     init() {
-        // Cards PathOS started before it was last closed are still on the Lock Screen.
-        for running in Activity<PathOSActivityAttributes>.activities where running.activityState == .active {
-            let lane = running.attributes.lane
-            activities[lane] = running
-            lastStates[lane] = running.content.state
-            modes[lane] = running.content.state.mode
+        // Cards PathOS started before it was last closed are still on the Lock Screen — stale
+        // ones too, which iOS keeps showing with whatever they last said. One per lane is taken
+        // back; any other is a leftover (from an older build, or started beside a stale one
+        // that was never picked up again) and is ended, or it sits there saying something that
+        // stopped being true hours ago: two "DAV lab" cards, one frozen at "Leave by 11:36".
+        let shown = Activity<PathOSActivityAttributes>.activities
+            .filter { $0.activityState == .active || $0.activityState == .stale }
+        var extras: [String] = []
+        for lane in ActivityLane.allCases {
+            let inLane = shown.filter { $0.attributes.lane == lane }
+            // The newest is the one being kept up to date.
+            guard let keep = inLane.max(by: { Self.startedAt($0) < Self.startedAt($1) }) else { continue }
+            activities[lane] = keep
+            lastStates[lane] = keep.content.state
+            modes[lane] = keep.content.state.mode
+            extras += inLane.filter { $0.id != keep.id }.map(\.id)
         }
+        if !extras.isEmpty {
+            Task { for id in extras { await Self.end(id: id) } }
+        }
+    }
+
+    /// When a card was started, to tell the one in use from leftovers. ActivityKit doesn't say, so
+    /// the content's stale date stands in: the newest card was updated last.
+    private static func startedAt(_ activity: Activity<PathOSActivityAttributes>) -> Date {
+        activity.content.staleDate ?? .distantPast
     }
 
     /// iOS ends a Live Activity after this long.
@@ -35,8 +54,11 @@ final class LiveActivityController {
 
     var areActivitiesEnabled: Bool { ActivityAuthorizationInfo().areActivitiesEnabled }
 
+    /// On the Lock Screen: stale counts, since an update brings it back rather than a new card
+    /// being started beside it.
     func isRunning(_ lane: ActivityLane) -> Bool {
-        activities[lane]?.activityState == .active
+        let state = activities[lane]?.activityState
+        return state == .active || state == .stale
     }
 
     func mode(of lane: ActivityLane) -> Mode? { modes[lane] }
@@ -79,7 +101,7 @@ final class LiveActivityController {
     func show(_ state: ContentState, lane: ActivityLane, staleDate: Date, relevance: Double = 50) async -> Bool {
         let content = ActivityContent(state: state, staleDate: staleDate, relevanceScore: relevance)
 
-        if let activity = activities[lane], activity.activityState == .active {
+        if let activity = activities[lane], activity.activityState == .active || activity.activityState == .stale {
             await Self.update(id: activity.id, to: content)
             remember(state, lane: lane)
             return true
@@ -134,7 +156,7 @@ final class LiveActivityController {
     /// Starts a card afresh while PathOS is open, once it has run long enough that iOS would end it.
     func renewIfOld(after age: TimeInterval = 4 * 3_600) async {
         for lane in ActivityLane.allCases {
-            guard let activity = activities[lane], activity.activityState == .active,
+            guard let activity = activities[lane], isRunning(lane),
                   let state = lastStates[lane], let startedAt = startedAt(lane),
                   Date().timeIntervalSince(startedAt) > age else { continue }
             let content = activity.content
@@ -148,7 +170,7 @@ final class LiveActivityController {
     /// For fast-changing data like the compass: skips updates that are too soon or too small,
     /// staying well inside ActivityKit's update budget.
     func updateThrottled(_ state: ContentState, lane: ActivityLane, minInterval: TimeInterval = 3, minBearingChange: Double = 10) async {
-        guard let activity = activities[lane], activity.activityState == .active else { return }
+        guard let activity = activities[lane], isRunning(lane) else { return }
         let now = Date()
         guard now.timeIntervalSince(lastThrottledUpdate[lane] ?? .distantPast) >= minInterval else { return }
 

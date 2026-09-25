@@ -28,6 +28,18 @@ struct LeaveOnTimeTests {
         #expect(status == .late(arrival: nine.addingTimeInterval(minutes(12)), minutes: 12))
     }
 
+    /// Half an hour late and still at home: reminding again won't help, so it asks once whether
+    /// you're still going. Already on your way, it doesn't ask.
+    @Test func farTooLateAndNotMovingItAsks() {
+        let status = LeaveOnTime.status(start: nine, travel: minutes(25), distance: 9_000, now: nine.addingTimeInterval(minutes(8)))
+        #expect(status == .late(arrival: nine.addingTimeInterval(minutes(33)), minutes: 33))
+        #expect(LeaveOnTime.asksToDrop(status, isOnTheWay: false))
+        #expect(!LeaveOnTime.asksToDrop(status, isOnTheWay: true))
+
+        let slightly = LeaveOnTime.status(start: nine, travel: minutes(25), distance: 9_000, now: nine.addingTimeInterval(-minutes(13)))
+        #expect(!LeaveOnTime.asksToDrop(slightly, isOnTheWay: false))
+    }
+
     @Test func onceYoureThereItsQuiet() {
         #expect(LeaveOnTime.status(start: nine, travel: 0, distance: 120, now: nine.addingTimeInterval(-minutes(10))) == .there)
     }

@@ -45,11 +45,24 @@ nonisolated enum StepGuide {
     /// Closer than this to the turn and it's happening now rather than coming up.
     static let atTheTurn = 40.0
 
-    static func position(in steps: [Step], at location: CLLocationCoordinate2D) -> Position? {
+    /// Which step you're on. Given the step you were on, it looks onward from there first, so a
+    /// road that passes an earlier turn again can't send the instruction backwards.
+    static func position(in steps: [Step], at location: CLLocationCoordinate2D, near previous: Int? = nil) -> Position? {
         guard !steps.isEmpty else { return nil }
+        if let previous, previous < steps.count {
+            let from = max(0, previous - 1)
+            if let onward = position(in: steps, at: location, among: from..<steps.count),
+               onward.offRouteMetres <= RouteProgress.offRouteMetres(accuracy: 0) * 2 {
+                return onward
+            }
+        }
+        return position(in: steps, at: location, among: steps.indices)
+    }
 
+    private static func position(in steps: [Step], at location: CLLocationCoordinate2D, among indices: Range<Int>) -> Position? {
         var best: (index: Int, offset: Double, toEnd: Double)?
-        for (index, step) in steps.enumerated() {
+        for index in indices {
+            let step = steps[index]
             guard step.coordinates.count > 1 else { continue }
             var walked = 0.0
             var bestForStep: (offset: Double, toEnd: Double)?

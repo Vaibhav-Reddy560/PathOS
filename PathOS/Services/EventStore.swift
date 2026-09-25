@@ -176,7 +176,7 @@ final class PathOSEventSource: EventSource {
                     distanceMeters: event.coordinate.map {
                         location.distance(from: CLLocation(latitude: $0.latitude, longitude: $0.longitude))
                     },
-                    source: .scanned,
+                    source: .own,
                     symbol: "calendar"
                 )
             }

@@ -23,6 +23,8 @@ final class LocationManager: NSObject {
     @ObservationIgnored private var isNavigating = false
     /// Called when a move of a few hundred metres wakes PathOS; see `setSignificantChangesActive`.
     @ObservationIgnored var onSignificantChange: ((CLLocation) -> Void)?
+    /// Called with every fix, from either source: what the day's distance is counted from.
+    @ObservationIgnored var onFix: ((CLLocation) -> Void)?
 
     override init() {
         super.init()
@@ -52,6 +54,7 @@ final class LocationManager: NSObject {
                     guard let self else { return }
                     if let location = update.location {
                         self.location = location
+                        self.onFix?(location)
                         // Where you're going, not where the phone is pointing. Read here rather
                         // than in the significant-change delegate, which this stream outruns: its
                         // freshness guard always lost, so the course was never set while driving.
@@ -171,6 +174,7 @@ extension LocationManager: CLLocationManagerDelegate {
         MainActor.assumeIsolated {
             if self.location.map({ latest.timestamp > $0.timestamp }) ?? true {
                 self.location = latest
+                self.onFix?(latest)
                 // The course is read from the live stream, which is fresher than anything that
                 // reaches here; a wake from a few hundred metres away says nothing about which
                 // way you're pointing now.

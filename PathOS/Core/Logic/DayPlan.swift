@@ -72,9 +72,34 @@ nonisolated enum DayDistance {
     static let minimumStepMeters = 15.0
     /// Above this, the fix jumped (a tunnel, a lost signal, a simulator teleport).
     static let maximumStepMeters = 2_000.0
+    /// A fix vaguer than this says little about where you went.
+    static let worstAccuracy = 65.0
+    /// Faster than this between two fixes is a jump, not travel: 200 km/h.
+    static let fastestTravel = 55.0
 
     static func step(fromDistance meters: Double) -> Double {
         (minimumStepMeters...maximumStepMeters).contains(meters) ? meters : 0
+    }
+
+    nonisolated enum Step: Equatable {
+        /// Too close or too vague to count: keep measuring from the last point that counted.
+        case ignore
+        /// Real movement: add it, and measure on from here.
+        case count(Double)
+        /// A jump no one travels: measure on from here, adding nothing.
+        case skip
+    }
+
+    /// What one fix adds, measured from the last one that counted — not from the one before it,
+    /// which dropped every step of a slow walk as wobble: ten metres at a time, never fifteen.
+    /// Gaps are fine: a ride with PathOS closed counts on its return, at any believable speed,
+    /// where the old two-kilometre cap threw the whole ride away.
+    static func step(distance: Double, seconds: TimeInterval, accuracy: Double) -> Step {
+        guard accuracy >= 0, accuracy <= worstAccuracy else { return .ignore }
+        guard distance >= max(minimumStepMeters, accuracy) else { return .ignore }
+        if seconds > 0, distance / seconds > fastestTravel { return .skip }
+        if seconds <= 0, distance > maximumStepMeters { return .skip }
+        return .count(distance)
     }
 
     /// "3.4 km" / "620 m", for the day summary.

@@ -9,6 +9,8 @@ struct TimetableSheet: View {
     @Environment(\.dismiss) private var dismiss
     @Query(sort: [SortDescriptor(\TimetableEntry.weekday), SortDescriptor(\TimetableEntry.startMinutes)])
     private var saved: [TimetableEntry]
+    /// Answered elective questions; watched so an answer takes its question away at once.
+    @AppStorage(TimetableService.settledClashesKey) private var settledClashes = ""
 
     @State private var sourceText = ""
     @State private var photoItem: PhotosPickerItem?
@@ -17,6 +19,7 @@ struct TimetableSheet: View {
     @State private var editing: TimetableEntry?
     /// Elective groups you've answered in this import.
     @State private var settledElectives: Set<[String]> = []
+    @State private var isConfirmingClashes = false
 
     private static let weekdayOrder = [2, 3, 4, 5, 6, 7, 1]
 
@@ -47,7 +50,10 @@ struct TimetableSheet: View {
                     if draft.isEmpty {
                         Button("Add session") { editing = TimetableEntry(subject: "", weekday: 2, startMinutes: 9 * 60, endMinutes: 10 * 60) }
                     } else {
-                        Button("Save \(draft.count)") { saveDraft() }
+                        Button("Save \(draft.count)") {
+                            // Unanswered electives would all fill the week: ask before saving them.
+                            if openElectives.isEmpty { saveDraft() } else { isConfirmingClashes = true }
+                        }
                     }
                 }
             }
@@ -66,8 +72,23 @@ struct TimetableSheet: View {
                 }
             }
             #endif
+            .confirmationDialog("Some sessions are at the same time", isPresented: $isConfirmingClashes, titleVisibility: .visible) {
+                Button("Choose my electives first") {}
+                Button("Save them all") { saveDraft() }
+            } message: {
+                Text(openElectives.map { ListFormatter.localizedString(byJoining: $0) }.joined(separator: "; ")
+                     + ". If you take only one of each, choose it at the top, and the others won't fill your week or remind you.")
+            }
             .sheet(item: $editing) { entry in
-                ClassEditor(entry: entry) { saveEdited(entry) }
+                SessionEditor(entry: entry) { edited, copies in
+                    saveEdited(edited, copies: copies)
+                } onDelete: {
+                    if draft.contains(where: { $0.id == entry.id }) {
+                        draft.removeAll { $0.id == entry.id }
+                    } else {
+                        state.timetable.delete(entry)
+                    }
+                }
             }
             .onChange(of: photoItem) { _, item in
                 guard let item else { return }
@@ -129,7 +150,25 @@ struct TimetableSheet: View {
         }
     }
 
+    @ViewBuilder
     private var savedSections: some View {
+        // Electives saved as printed: asked here as well as in Day, until answered.
+        ForEach(savedClashes, id: \.self) { group in
+            Section {
+                ElectiveQuestion(
+                    group: group,
+                    when: TimetableClashes.when(group, in: saved.map(TimetableService.slot)),
+                    choose: { kept in
+                        state.timetable.keep(kept, of: group)
+                        state.showToast("\(kept) kept · the others are off your week")
+                    },
+                    keepAll: { state.timetable.keepAll(group) }
+                )
+                .padding(.vertical, 4)
+            } header: {
+                InstrumentLabel("Electives")
+            }
+        }
         ForEach(Self.weekdayOrder, id: \.self) { weekday in
             let classes = saved.filter { $0.weekday == weekday }
             if !classes.isEmpty {
@@ -194,10 +233,25 @@ struct TimetableSheet: View {
         }
     }
 
+    /// What the reader saw as electives, and anything else in the draft taught at the same time:
+    /// however the schedule was read, a slot with several subjects in it is asked about.
     private var openElectives: [[String]] {
-        state.timetable.electives.filter { group in
-            !settledElectives.contains(group) && group.allSatisfy { subject in draft.contains { $0.subject == subject } }
+        let read = state.timetable.electives.filter { group in
+            group.allSatisfy { subject in draft.contains { $0.subject == subject } }
         }
+        let clashing = TimetableClashes.groups(in: draft.map(TimetableService.slot))
+        var groups: [[String]] = []
+        for group in read + clashing where !groups.contains(where: { Set($0).isSuperset(of: group) }) {
+            groups.removeAll { Set(group).isSuperset(of: $0) }
+            groups.append(group)
+        }
+        return groups.filter { !settledElectives.contains($0) }
+    }
+
+    private var savedClashes: [[String]] {
+        let settled = TimetableService.settledClashKeys(from: settledClashes)
+        return TimetableClashes.groups(in: saved.map(TimetableService.slot))
+            .filter { !settled.contains(TimetableClashes.key($0)) }
     }
 
     private var draftSections: some View {
@@ -235,14 +289,20 @@ struct TimetableSheet: View {
         dismiss()
     }
 
-    private func saveEdited(_ entry: TimetableEntry) {
+    private func saveEdited(_ entry: TimetableEntry, copies: [TimetableEntry]) {
         if draft.contains(where: { $0.id == entry.id }) {
             // A draft class may have moved day or time; keep the list in order.
+            draft += copies
             draft.sort { ($0.weekday, $0.startMinutes) < ($1.weekday, $1.startMinutes) }
-        } else if entry.modelContext == nil {
+            return
+        }
+        if entry.modelContext == nil {
             state.timetable.add(entry)
         } else {
-            state.timetable.refreshReminders()
+            state.timetable.saveChanges()
+        }
+        for copy in copies {
+            state.timetable.add(copy)
         }
     }
 
@@ -276,86 +336,6 @@ private struct ClassRow: View {
         }
         .padding(.vertical, 2)
         .accessibilityElement(children: .combine)
-    }
-}
-
-/// Add or fix one class.
-private struct ClassEditor: View {
-    let entry: TimetableEntry
-    let onSave: () -> Void
-
-    @Environment(\.dismiss) private var dismiss
-    // A copy of the class, applied only on Save, so Cancel leaves it as it was.
-    @State private var subject = ""
-    @State private var weekday = 2
-    @State private var room = ""
-    @State private var teacher = ""
-    @State private var startTime = Date()
-    @State private var endTime = Date()
-
-    var body: some View {
-        NavigationStack {
-            Form {
-                Section {
-                    TextField("Name", text: $subject)
-                    Picker("Day", selection: $weekday) {
-                        ForEach(TimetableSheet.weekdayOrderForPicker, id: \.self) { weekday in
-                            Text(TimetableSheet.weekdayName(weekday)).tag(weekday)
-                        }
-                    }
-                    DatePicker("Starts", selection: $startTime, displayedComponents: .hourAndMinute)
-                    DatePicker("Ends", selection: $endTime, displayedComponents: .hourAndMinute)
-                } header: {
-                    InstrumentLabel("Session")
-                }
-
-                Section {
-                    TextField("Room or area", text: $room)
-                    TextField("With (teacher, lead…)", text: $teacher)
-                } header: {
-                    InstrumentLabel("Details")
-                }
-            }
-            .scrollContentBackground(.hidden)
-            .background(Color.deepSurface)
-            .navigationTitle(entry.subject.isEmpty ? "New session" : "Edit session")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") { dismiss() }
-                }
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Save") {
-                        entry.subject = subject.trimmingCharacters(in: .whitespaces)
-                        entry.weekday = weekday
-                        entry.room = room.trimmingCharacters(in: .whitespaces).nilIfEmpty
-                        entry.teacher = teacher.trimmingCharacters(in: .whitespaces).nilIfEmpty
-                        entry.startMinutes = minutes(from: startTime)
-                        entry.endMinutes = max(minutes(from: endTime), minutes(from: startTime) + 5)
-                        onSave()
-                        dismiss()
-                    }
-                    .disabled(subject.trimmingCharacters(in: .whitespaces).isEmpty)
-                }
-            }
-            .task {
-                subject = entry.subject
-                weekday = entry.weekday
-                room = entry.room ?? ""
-                teacher = entry.teacher ?? ""
-                startTime = date(fromMinutes: entry.startMinutes)
-                endTime = date(fromMinutes: entry.endMinutes)
-            }
-        }
-    }
-
-    private func minutes(from date: Date) -> Int {
-        let parts = Calendar.current.dateComponents([.hour, .minute], from: date)
-        return (parts.hour ?? 0) * 60 + (parts.minute ?? 0)
-    }
-
-    private func date(fromMinutes minutes: Int) -> Date {
-        Calendar.current.startOfDay(for: Date()).addingTimeInterval(Double(minutes) * 60)
     }
 }
 

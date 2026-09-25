@@ -11,6 +11,8 @@ import SwiftUI
 struct NavigationMapView: UIViewRepresentable {
     /// The leg's route, drawn as the line to follow.
     var route: [CLLocationCoordinate2D]
+    /// How much of it is behind you, 0 to 1. That part isn't drawn: the line starts at you.
+    var travelled: Double = 0
     /// False once the map has been moved by hand; set back by Recentre.
     @Binding var isFollowing: Bool
 
@@ -20,7 +22,8 @@ struct NavigationMapView: UIViewRepresentable {
         map.showsUserLocation = true
         map.showsCompass = false
         map.showsScale = false
-        map.showsTraffic = false
+        // Apple's live traffic on the roads, as in Maps: what the times on screen are based on.
+        map.showsTraffic = true
         map.isPitchEnabled = true
         map.overrideUserInterfaceStyle = .dark
 
@@ -49,12 +52,20 @@ struct NavigationMapView: UIViewRepresentable {
 
         // Coordinates aren't comparable; the count and the ends say whether it's a new route.
         let fingerprint = Self.fingerprint(of: route)
+        context.coordinator.travelled = travelled
         if context.coordinator.routeFingerprint != fingerprint {
             context.coordinator.routeFingerprint = fingerprint
             map.removeOverlays(map.overlays)
+            context.coordinator.routeRenderer = nil
             if route.count > 1 {
                 map.addOverlay(MKPolyline(coordinates: route, count: route.count), level: .aboveRoads)
             }
+        } else if let renderer = context.coordinator.routeRenderer,
+                  abs(Double(renderer.strokeStart) - travelled) > 0.0005 {
+            // What's behind you is rubbed out as you go, as in Maps, rather than the whole line
+            // staying until the next route is fetched.
+            renderer.strokeStart = CGFloat(min(0.999, travelled))
+            renderer.setNeedsDisplay()
         }
         // Recentre. Before the first fix there's nothing to follow, so it waits.
         if isFollowing, context.coordinator.hasStartedFollowing, map.userTrackingMode == .none {
@@ -86,6 +97,9 @@ struct NavigationMapView: UIViewRepresentable {
     final class Coordinator: NSObject, MKMapViewDelegate {
         var isFollowing: Binding<Bool>
         var routeFingerprint = ""
+        /// The line's renderer, kept so the part behind you can be rubbed out without redrawing it.
+        weak var routeRenderer: MKPolylineRenderer?
+        var travelled = 0.0
         var hasStartedFollowing = false
         var isSettingUp = false
 
@@ -130,6 +144,8 @@ struct NavigationMapView: UIViewRepresentable {
             renderer.lineWidth = 9
             renderer.lineCap = .round
             renderer.lineJoin = .round
+            renderer.strokeStart = CGFloat(min(0.999, travelled))
+            routeRenderer = renderer
             return renderer
         }
     }

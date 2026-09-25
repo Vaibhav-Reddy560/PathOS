@@ -117,6 +117,15 @@ extension AppState {
                 }
             }
         }
+        // `-PathOSDemoElectives YES` adds three electives in one slot today, as a printed
+        // timetable lists them, to check that Day asks which one you take.
+        if arguments.bool(forKey: "PathOSDemoElectives"), !timetable.entries().contains(where: { $0.subject == "KDD" }) {
+            let today = Calendar.current.component(.weekday, from: Date())
+            for subject in ["KDD", "IOT", "ITSMF"] {
+                timetable.add(TimetableEntry(subject: subject, weekday: today, startMinutes: 13 * 60 + 5, endMinutes: 14 * 60,
+                                             room: "MEL-CR-50\(subject.count)"))
+            }
+        }
         // `-PathOSDemoMail YES` fills Day → Mail from two accounts, for checking its layout in the
         // simulator, which can't sign in to Google.
         if arguments.bool(forKey: "PathOSDemoMail") {

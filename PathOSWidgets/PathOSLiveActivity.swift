@@ -36,8 +36,8 @@ struct PathOSLiveActivityWidget: Widget {
                             .foregroundStyle(.mist)
                             .lineLimit(2)
                             .multilineTextAlignment(.center)
-                        if let note = state.notes?.first {
-                            NoteLine(note: note)
+                        if let (note, text) = state.shownNotes(at: .now).first {
+                            NoteLine(note: note, text: text)
                         }
                         if state.mode == .commute {
                             CabLinksRow()
@@ -65,20 +65,24 @@ private struct LockScreenActivityView: View {
         // countdown to the start becomes the time left without PathOS having to run.
         let timing = state.timing(at: .now)
 
-        VStack(alignment: .leading, spacing: 10) {
-            HStack(spacing: 14) {
-                ModeGlyph(state: state, size: 46)
+        // A Lock Screen card is at most 160 points tall; past that iOS cuts it off mid-line. So
+        // every line is one line, and there are two notes at most — one under a journey, whose
+        // title may need two.
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 12) {
+                ModeGlyph(state: state, size: 42)
                     .background(state.tint.color.opacity(0.14), in: .circle)
-                VStack(alignment: .leading, spacing: 3) {
+                VStack(alignment: .leading, spacing: 2) {
                     InstrumentLabel(state.caption(at: .now), role: state.captionRole)
                     Text(state.title)
                         .font(.headline)
                         .foregroundStyle(.ice)
-                        .lineLimit(1)
+                        .lineLimit(state.isJourney ? 2 : 1)
                     Text(state.subtitle)
                         .font(.subheadline)
                         .foregroundStyle(.mist)
-                        .lineLimit(2)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.85)
                 }
                 Spacer(minLength: 0)
                 TrailingMetric(state: state)
@@ -91,10 +95,11 @@ private struct LockScreenActivityView: View {
                 }
                 .tint(state.tint.color)
             }
-            if let notes = state.notes, !notes.isEmpty {
-                VStack(alignment: .leading, spacing: 5) {
-                    ForEach(notes, id: \.self) { note in
-                        NoteLine(note: note)
+            let notes = state.shownNotes(at: .now).prefix(state.isJourney ? 1 : 2)
+            if !notes.isEmpty {
+                VStack(alignment: .leading, spacing: 4) {
+                    ForEach(Array(notes), id: \.0) { note, text in
+                        NoteLine(note: note, text: text)
                     }
                 }
             }
@@ -102,13 +107,16 @@ private struct LockScreenActivityView: View {
                 CabLinksRow()
             }
         }
-        .padding(16)
+        .padding(.horizontal, 16)
+        .padding(.vertical, 14)
     }
 }
 
 /// A short line under the main one: "Take an umbrella · 70% rain in 2 h".
 private struct NoteLine: View {
     let note: PathOSActivityAttributes.Note
+    /// What it says now: some lines change or go at a set time.
+    let text: String
 
     var body: some View {
         HStack(spacing: 8) {
@@ -116,12 +124,13 @@ private struct NoteLine: View {
                 .font(.caption.weight(.semibold))
                 .foregroundStyle(note.role.color)
                 .frame(width: 18)
-            Text(note.text)
+            // One line, shrinking a little before it would be cut: two lines each made the card
+            // taller than iOS allows, and the last line was the one clipped.
+            Text(text)
                 .font(.footnote)
                 .foregroundStyle(.ice)
-                // Two lines: a line cut in half is the half you needed.
-                .lineLimit(2)
-                .fixedSize(horizontal: false, vertical: true)
+                .lineLimit(1)
+                .minimumScaleFactor(0.8)
         }
     }
 }
@@ -163,7 +172,10 @@ private struct TrailingMetric: View {
     let state: PathOSActivityAttributes.ContentState
 
     var body: some View {
-        if let timing = state.timing(at: .now) {
+        if let arrival = state.arrivalDate {
+            // Counted down by the Lock Screen itself, so it's right whenever you look.
+            timed(to: arrival, label: "arrive \(arrival.formatted(date: .omitted, time: .shortened))")
+        } else if let timing = state.timing(at: .now) {
             switch timing {
             case .startsIn(let start):
                 timed(to: start, label: "to start")
@@ -230,6 +242,10 @@ private struct CompactMetric: View {
                         .foregroundStyle(state.tint.color)
                 }
             }
+        case .journey where state.arrivalDate != nil:
+            Countdown(to: state.arrivalDate ?? .now, font: .caption.weight(.semibold))
+                .foregroundStyle(.ice)
+                .frame(maxWidth: 44)
         case .journey:
             Text(state.etaMinutes.map { "\($0)m" } ?? "Metro")
                 .font(.caption.weight(.semibold).monospacedDigit())
@@ -262,6 +278,14 @@ private struct CabLinksRow: View {
 }
 
 extension PathOSActivityAttributes.ContentState {
+    /// Getting somewhere: a way, a ride or a trip leg.
+    var isJourney: Bool { mode == .journey || mode == .trip }
+
+    /// The notes as they read at `now`, less any whose moment has passed.
+    func shownNotes(at now: Date) -> [(PathOSActivityAttributes.Note, String)] {
+        (notes ?? []).compactMap { note in note.text(at: now).map { (note, $0) } }
+    }
+
     /// The label over the title. Every one of these cards is PathOS's, so every one carries the
     /// app's name rather than a word for the mode: what it's about is the line under it, and
     /// whether something is starting or under way is the countdown beside it.

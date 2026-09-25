@@ -197,7 +197,9 @@ struct NowDeck: View {
                     label: "Sound",
                     value: state.sound.levelDB.map { "\(Int($0.rounded()))" } ?? "—",
                     unit: "dB",
-                    detail: state.sound.scene.label
+                    // Standing aside so what's playing on the speaker isn't interrupted.
+                    detail: state.sound.isPausedForOtherAudio && !state.sound.isRunning
+                        ? "Off while audio plays on the speaker" : state.sound.scene.label
                 )
             }
             if let snapshot {
@@ -227,7 +229,9 @@ struct NowDeck: View {
                 VStack(alignment: .leading, spacing: 14) {
                     travelTimes
 
-                    if state.transit.journey == nil {
+                    // Only before you set off: once a way is being followed, the card at the top of
+                    // Now is that journey, and planning another reads as if you hadn't started.
+                    if !state.isTravelling {
                         VStack(alignment: .leading, spacing: 8) {
                             Button {
                                 state.planJourney(from: nil)
@@ -328,7 +332,7 @@ struct NowDeck: View {
                             .font(.caption)
                             .foregroundStyle(.mist)
                     }
-                    if let destination = commute.destination {
+                    if let destination = commute.destination, !state.isTravelling {
                         Button {
                             state.showWays(to: name, at: destination, id: "commute:\(name)")
                         } label: {

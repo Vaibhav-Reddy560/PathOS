@@ -39,6 +39,25 @@ struct TripGuideTests {
         #expect(guide?.minutesRemaining == 38)
     }
 
+    /// On the road, the time left is Apple Maps' for the rest of the route in today's traffic,
+    /// and a jam makes you behind before any leg is missed.
+    @Test func trafficOnTheRoadMovesTheArrival() throws {
+        let now = start.addingTimeInterval(4 * 60)
+        let planned = try #require(TripGuide.status(for: trip(), startedAt: start, now: now, location: home))
+        #expect(planned.minutesRemaining == 36)
+
+        // Six minutes of road left, as planned: nothing changes.
+        let onTime = TripGuide.adjusting(planned, in: trip(), startedAt: start, now: now, legMinutesLeft: 6)
+        #expect(onTime.minutesRemaining == 36)
+        #expect(onTime.minutesBehind == 0)
+
+        // Fourteen, in a jam: eight minutes later than planned, said as behind.
+        let jammed = TripGuide.adjusting(planned, in: trip(), startedAt: start, now: now, legMinutesLeft: 14)
+        #expect(jammed.minutesRemaining == 44)
+        #expect(jammed.minutesBehind == 8)
+        #expect(jammed.isBehind)
+    }
+
     /// At the station, the ride is next, and nothing is late.
     @Test func reachingAPlaceMovesYouOn() {
         let guide = TripGuide.status(for: trip(), startedAt: start, now: start.addingTimeInterval(11 * 60), location: station)

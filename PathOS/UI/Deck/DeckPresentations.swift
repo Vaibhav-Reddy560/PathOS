@@ -42,6 +42,14 @@ struct DeckPresentations: ViewModifier {
                 EventSheet(request: request)
             }
             .sheet(isPresented: $state.isTimetablePresented) { TimetableSheet() }
+            .sheet(item: $state.editingSession) { session in
+                if let entry = state.timetable.entry(id: session.slotID) {
+                    SessionEditor(entry: entry, occurrence: session) { _, copies in
+                        state.timetable.saveChanges()
+                        for copy in copies { state.timetable.add(copy) }
+                    }
+                }
+            }
             .sheet(isPresented: $state.isJourneySheetPresented) { JourneySheet() }
             .sheet(isPresented: $state.isTripsPresented) { TripSheet() }
             .sheet(isPresented: $state.isSettingsPresented) { SettingsView() }

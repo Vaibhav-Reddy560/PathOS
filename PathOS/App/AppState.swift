@@ -22,6 +22,8 @@ nonisolated struct EventSheetRequest: Identifiable, Hashable, Sendable {
     var text: String?
     /// A mail suggestion to start from, when you chose to edit it before adding.
     var mailSuggestion: UUID?
+    /// The day it's being added to, when it was opened from one: no need to ask for it again.
+    var day: Date?
 }
 
 /// A short confirmation shown at the top of the deck.
@@ -147,10 +149,18 @@ final class AppState {
     /// The road route for the leg being followed, and where you are along it.
     var tripNav: NavRoute?
     var tripStep: StepGuide.Position?
+    /// Where you are on that route: what's behind you stops being drawn, and what's left is timed.
+    var tripMatch: RouteProgress.Match?
+    /// Off the route and fetching a new one.
+    var isRerouting = false
+    /// What the traffic is doing to this leg, from Apple Maps' live times.
+    var tripTraffic: TripTraffic?
     /// Where the map is centred, once it stops moving.
     @ObservationIgnored var mapCenter: CLLocationCoordinate2D?
     /// Presents the event sheet: nil id means a new event.
     var eventSheet: EventSheetRequest?
+    /// A session of the weekly schedule being changed from the day it's on.
+    var editingSession: ClassSession?
     var isScannerPresented = false
     var isPhotoPickerPresented = false
     private(set) var toast: Toast?
@@ -213,7 +223,7 @@ final class AppState {
             UserDefaults.standard.set(adaptiveSound, forKey: "pathos.adaptiveSound")
             haptics.isAdaptive = adaptiveSound
             if adaptiveSound {
-                Task { await sound.start() }
+                Task { await resumeListening() }
             } else {
                 sound.stop()
             }
@@ -253,6 +263,13 @@ final class AppState {
     @ObservationIgnored var offRouteSamples = 0
     /// The once-a-second loop that follows the leg you're on.
     @ObservationIgnored var navigationTask: Task<Void, Never>?
+    /// When the traffic on the route was last asked about, and the Lock Screen last redrawn.
+    @ObservationIgnored var lastTrafficCheck = Date.distantPast
+    @ObservationIgnored var lastTripActivityUpdate = Date.distantPast
+    @ObservationIgnored var lastTripActivityStep: Int?
+    /// Today's log, kept to hand: distance is added on every fix.
+    @ObservationIgnored var cachedDayLog: DayLog?
+    @ObservationIgnored var lastDayLogSave = Date.distantPast
     /// Turns already spoken on this trip, so each is said once.
     @ObservationIgnored var spokenMoments: Set<NavigationVoice.Moment> = []
     @ObservationIgnored var announcedTripLeg: Int?
@@ -338,6 +355,13 @@ final class AppState {
         location.onSignificantChange = { [weak self] here in
             Task { await self?.movedInBackground(to: here) }
         }
+        location.onFix = { [weak self] fix in
+            self?.recordDistance(to: fix)
+        }
+        // Headphones went on, or a call ended: the noise sensor may be able to listen again.
+        sound.onMayResume = { [weak self] in
+            Task { await self?.resumeListening() }
+        }
         Task { await bootstrap() }
     }
 
@@ -394,9 +418,22 @@ final class AppState {
         if UserDefaults.standard.bool(forKey: "PathOSHoldLaunch") { return }
         #endif
         isLaunchComplete = true
-        if adaptiveSound {
-            await sound.start()
-        }
+        await resumeListening()
+    }
+
+    /// The noise sensor, on again when nothing else needs the audio: not while PathOS is
+    /// speaking or listening to you, and not while music or a video plays (it checks that itself).
+    func resumeListening() async {
+        guard adaptiveSound, isForeground, isLaunchComplete, !speech.isSpeaking, !voice.isListening,
+              !sound.isRunning else { return }
+        await sound.start()
+    }
+
+    /// Says something aloud. The noise sensor steps aside first: taking the microphone while
+    /// speaking changes the audio setup under the voice.
+    func say(_ text: String) {
+        sound.stop()
+        speech.speak(text)
     }
 
     func scenePhaseChanged(_ phase: ScenePhase) {
@@ -411,9 +448,7 @@ final class AppState {
             barometer.start()
             ai.refreshStatus()
             // Not during the launch view: on a first run, the microphone prompt would land on top of it.
-            if adaptiveSound && isLaunchComplete {
-                Task { await sound.start() }
-            }
+            Task { await resumeListening() }
             startForegroundLoop()
             followCurrentLegIfAny()
             Task {
@@ -442,9 +477,10 @@ final class AppState {
         loopTask = Task {
             await reconcilePinnedContext()
             while !Task.isCancelled {
+                // Back on once the music has stopped, or the voice has finished.
+                await resumeListening()
                 haptics.update(scene: sound.scene)
                 if let here = location.location {
-                    recordDistance(to: here)
                     await transit.refreshNearby(location: here)
                     await context.refresh(location: here)
                     await refreshDeparture()
@@ -499,17 +535,60 @@ final class AppState {
 
     // MARK: Day log
 
-    /// Adds real movement to today's log, ignoring GPS wobble and impossible jumps.
+    /// Adds real movement to today's log, on every fix, in the foreground or not. Measured from
+    /// the last point that counted, which is kept across launches, so a ride made with PathOS
+    /// closed still counts when it next runs.
     func recordDistance(to here: CLLocation) {
-        defer { lastDistanceLocation = here }
-        let log = todaysLog()
-        log.lastSeenAt = Date()
-        if log.firstSeenAt == nil {
-            log.firstSeenAt = Date()
+        let log: DayLog
+        if let cached = cachedDayLog, Calendar.current.isDate(cached.dayStart, inSameDayAs: here.timestamp) {
+            log = cached
+        } else {
+            log = todaysLog(for: here.timestamp)
+            cachedDayLog = log
         }
-        guard let previous = lastDistanceLocation else { return }
-        log.distanceMeters += DayDistance.step(fromDistance: here.distance(from: previous))
-        try? modelContainer.mainContext.save()
+        log.lastSeenAt = here.timestamp
+        if log.firstSeenAt == nil {
+            log.firstSeenAt = here.timestamp
+        }
+        guard let anchor = distanceAnchor else {
+            distanceAnchor = here
+            return
+        }
+        switch DayDistance.step(distance: here.distance(from: anchor),
+                                seconds: here.timestamp.timeIntervalSince(anchor.timestamp),
+                                accuracy: here.horizontalAccuracy) {
+        case .ignore:
+            break
+        case .skip:
+            distanceAnchor = here
+        case .count(let metres):
+            log.distanceMeters += metres
+            distanceAnchor = here
+        }
+        // Saved every half minute, not every second.
+        if Date().timeIntervalSince(lastDayLogSave) > 30 {
+            lastDayLogSave = Date()
+            try? modelContainer.mainContext.save()
+        }
+    }
+
+    /// The last point that counted towards today's distance.
+    private var distanceAnchor: CLLocation? {
+        get {
+            if let lastDistanceLocation { return lastDistanceLocation }
+            guard let stored = UserDefaults.standard.array(forKey: "pathos.distanceAnchor") as? [Double], stored.count == 4 else { return nil }
+            return CLLocation(coordinate: CLLocationCoordinate2D(latitude: stored[0], longitude: stored[1]), altitude: 0,
+                              horizontalAccuracy: stored[3], verticalAccuracy: -1,
+                              timestamp: Date(timeIntervalSince1970: stored[2]))
+        }
+        set {
+            lastDistanceLocation = newValue
+            if let newValue {
+                UserDefaults.standard.set([newValue.coordinate.latitude, newValue.coordinate.longitude,
+                                           newValue.timestamp.timeIntervalSince1970, newValue.horizontalAccuracy],
+                                          forKey: "pathos.distanceAnchor")
+            }
+        }
     }
 
     @discardableResult
@@ -638,6 +717,15 @@ final class AppState {
                 showWays(to: departure.placeName, at: CLLocationCoordinate2D(latitude: departure.latitude, longitude: departure.longitude),
                          id: "departure:\(departure.id)", arriveBy: departure.start)
             }
+        case "departure":
+            // From the "still going?" notification: its buttons, or a tap to decide in the app.
+            if let id = value("id") {
+                switch path.first {
+                case "drop": Task { await dropDeparture(id) }
+                case "keep": keepDeparture(id)
+                default: showDeck(.day)
+                }
+            }
         case "timetable": isTimetablePresented = true
         case "event": eventSheet = EventSheetRequest(editing: nil, text: value("text"))
         case "journey":
@@ -760,10 +848,22 @@ final class AppState {
             )
         }
 
+        // Only what's in your day: mail you haven't added, or a poster you scanned, is a
+        // suggestion, and reminding you of it as if it were a plan is what made reminders
+        // arrive for sessions you'd never heard of.
+        let here = location.location
+        let dropped = droppedDepartureIDs
         let nextEvent = events.events
+            .filter { $0.source.isInYourDay && !dropped.contains($0.id) }
             .compactMap { event -> AlertSnapshot.Event? in
                 guard let start = event.start, start >= now else { return nil }
-                return AlertSnapshot.Event(id: event.id, title: event.title, start: start, latitude: event.latitude, longitude: event.longitude)
+                let distance: Double? = if let here, let latitude = event.latitude, let longitude = event.longitude {
+                    here.distance(from: CLLocation(latitude: latitude, longitude: longitude))
+                } else {
+                    nil
+                }
+                return AlertSnapshot.Event(id: event.id, title: event.title, start: start, latitude: event.latitude,
+                                           longitude: event.longitude, distanceMeters: distance)
             }
             .min { $0.start < $1.start }
 
@@ -799,7 +899,8 @@ final class AppState {
                 }
             },
             nextEvent: nextEvent,
-            departure: departure,
+            // On the way already: "leave by" is for before you set off.
+            departure: isTravelling ? nil : departure,
             way: tripStatus.flatMap { status in
                 trip.map { trip in
                     let leg = trip.option.legs[min(status.legIndex, trip.option.legs.count - 1)]
@@ -810,8 +911,13 @@ final class AppState {
                         symbol: status.symbol,
                         minutesBehind: status.minutesBehind,
                         minutesRemaining: status.minutesRemaining,
-                        target: CompassTarget(id: "way:\(leg.id)", name: leg.endName,
-                                              latitude: leg.endLatitude, longitude: leg.endLongitude)
+                        // Nothing to point at once you're where this leg ends.
+                        target: isAt(leg.endCoordinate, within: TripGuide.radius(for: leg)) ? nil
+                            : CompassTarget(id: "way:\(leg.id)", name: leg.endName,
+                                            latitude: leg.endLatitude, longitude: leg.endLongitude),
+                        // Re-routing is the banner's to say; the island keeps to when you'll arrive.
+                        trafficNote: tripTraffic?.note,
+                        isTrafficSlow: tripTraffic?.isSlow == true
                     )
                 }
             },
@@ -838,18 +944,23 @@ final class AppState {
                 repeatsUrgent: repeatsUrgentAlerts,
                 isSpeaking: speaksDirections && trip != nil
             )
+            // A question is asked once, with its answers on the notification.
+            let droppable = alert.buttons.compactMap { button -> String? in
+                if case .dropDeparture(let id) = button.action { return id } else { return nil }
+            }.first
             notifications.post(
                 id: "pathos.alert.\(alert.id)",
                 title: alert.headline,
                 body: alert.detail,
-                category: NotificationService.Category.ambient,
-                link: URL(string: "pathos://dashboard"),
+                category: droppable == nil ? NotificationService.Category.ambient : NotificationService.Category.stillGoing,
+                link: droppable.flatMap { URL(string: "pathos://departure?id=\($0.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? $0)") }
+                    ?? URL(string: "pathos://dashboard"),
                 timeSensitive: plan.isTimeSensitive,
                 sound: haptics.shouldPlaySound,
-                repeatAfter: plan.repeatAfter
+                repeatAfter: droppable == nil ? plan.repeatAfter : nil
             )
             if plan.speaks {
-                speech.speak("\(alert.headline). \(alert.detail)")
+                say("\(alert.headline). \(alert.detail)")
             }
         }
         announcedAlertIDs = AmbientAlerts.announcedIDs(alerts)
@@ -875,7 +986,57 @@ final class AppState {
             endTrip()
         case .bookCab(let target):
             CabLauncher.open(preferredCab, drop: target.coordinate, pickup: location.location?.coordinate)
+        case .dropDeparture(let id):
+            Task { await dropDeparture(id) }
+        case .keepDeparture(let id):
+            keepDeparture(id)
         }
+    }
+
+    // MARK: Not going after all
+
+    /// Things you said you're not going to today: no more "leave now" or "you're late" for them.
+    var droppedDepartureIDs: Set<String> {
+        get { Set(UserDefaults.standard.stringArray(forKey: "pathos.droppedDepartures") ?? []) }
+        set { UserDefaults.standard.set(Array(newValue.suffix(60)), forKey: "pathos.droppedDepartures") }
+    }
+
+    /// Things you said you are still going to, so "still going?" isn't asked twice.
+    var keptDepartureIDs: Set<String> {
+        get { Set(UserDefaults.standard.stringArray(forKey: "pathos.keptDepartures") ?? []) }
+        set { UserDefaults.standard.set(Array(newValue.suffix(60)), forKey: "pathos.keptDepartures") }
+    }
+
+    func dropDeparture(_ id: String) async {
+        droppedDepartureIDs.insert(id)
+        dismissedAlertIDs.insert("leave.drop.\(id)")
+        let title = departure?.id == id ? departure?.title : nil
+        await notifications.removePending(withPrefix: "pathos.leave.\(id)")
+        await refreshDeparture()
+        await refreshPinnedContext()
+        showToast(title.map { "Dropped \($0) for today" } ?? "Dropped for today", role: .you, symbol: "xmark.circle.fill")
+    }
+
+    func keepDeparture(_ id: String) {
+        keptDepartureIDs.insert(id)
+        dismissedAlertIDs.insert("leave.drop.\(id)")
+        if departure?.id == id {
+            departure?.isAskingToDrop = false
+        }
+    }
+
+    /// Close enough to be at it, so there's nothing to point at and no way there to plan. Events
+    /// and sessions use the wider radius: a college or an office is a campus, not a door.
+    func isAt(_ coordinate: CLLocationCoordinate2D, within radius: Double = AppState.atPlaceRadius) -> Bool {
+        guard let here = location.location else { return false }
+        return here.distance(from: CLLocation(latitude: coordinate.latitude, longitude: coordinate.longitude)) <= radius
+    }
+
+    static let atPlaceRadius = 100.0
+
+    /// A way, a metro journey or a trip leg is being followed: you've set off.
+    var isTravelling: Bool {
+        trip != nil || transit.journey != nil || trackedLegID != nil
     }
 
     // MARK: Journeys
@@ -1248,8 +1409,9 @@ final class AppState {
     /// weekly schedule, at Work, or an event with a place. Travel time is Apple Maps' from where
     /// you are, asked again once you've moved or a few minutes have passed.
     func refreshDeparture(now: Date = Date()) async {
+        let dropped = droppedDepartureIDs
         guard let here = location.location,
-              let next = LeaveOnTime.next(in: destinations(on: now), now: now) else {
+              let next = LeaveOnTime.next(in: destinations(on: now).filter { !dropped.contains($0.id) }, now: now) else {
             departure = nil
             return
         }
@@ -1280,12 +1442,16 @@ final class AppState {
         departureCheckpoint = checkpoint
 
         let status = LeaveOnTime.status(start: next.start, travel: TimeInterval(minutes * 60), distance: distance, now: now)
+        // Following a way there is being on your way, whatever the distance says so far.
+        let isOnTheWay = checkpoint.isOnTheWay || isTravelling
         departure = AlertSnapshot.Departure(
             id: next.id, title: next.title, placeName: next.placeName, start: next.start,
-            travelMinutes: minutes, byRoad: byRoad, status: status, isOnTheWay: checkpoint.isOnTheWay,
-            latitude: next.latitude, longitude: next.longitude
+            travelMinutes: minutes, byRoad: byRoad, status: status, isOnTheWay: isOnTheWay,
+            latitude: next.latitude, longitude: next.longitude,
+            isAskingToDrop: LeaveOnTime.asksToDrop(status, isOnTheWay: isOnTheWay) && !keptDepartureIDs.contains(next.id)
         )
         scheduleLeaveReminders(for: departure!, now: now)
+        guard !isTravelling else { return }
         await offerWays(to: next, travelMinutes: minutes, status: status, from: here, now: now)
     }
 
@@ -1346,6 +1512,14 @@ final class AppState {
     /// PathOS closed. Cleared once you're there or it's already time.
     private func scheduleLeaveReminders(for departure: AlertSnapshot.Departure, now: Date) {
         let prefix = "pathos.leave.\(departure.id)"
+        // Already set off: "time to leave" would only arrive while you're in the auto.
+        if isTravelling {
+            if scheduledLeaveBy?.id == departure.id {
+                scheduledLeaveBy = nil
+                Task { await notifications.removePending(withPrefix: prefix) }
+            }
+            return
+        }
         let leaveBy: Date
         switch departure.status {
         case .inGoodTime(let at), .leaveSoon(let at):
@@ -1466,8 +1640,9 @@ final class AppState {
                 AlertSnapshot.Weather(temperatureC: $0.temperatureC, summary: $0.summary, symbol: $0.symbol, rainChanceNext2h: $0.rainChanceNext2h)
             },
             exitAdvice: context.exitAdvice,
-            agenda: agenda(on: now),
-            departure: departure,
+            agenda: agenda(on: now).filter { !droppedDepartureIDs.contains($0.id) },
+            // The journey has its own card, which says how it's going.
+            departure: isTravelling ? nil : departure,
             commute: commuteLine,
             memory: surfacedMemory?.memory,
             now: now
@@ -1477,8 +1652,9 @@ final class AppState {
     /// Today's classes, events and calendar entries, as the Day shows them.
     private func agenda(on day: Date) -> [LockScreenContext.Entry] {
         guard let interval = Calendar.current.dateInterval(of: .day, for: day) else { return [] }
+        // The room, which is what you need at college; the college itself only when there's none.
         let classes = timetable.sessions(on: day).map {
-            LockScreenContext.Entry(id: "class:\($0.id)", title: $0.subject, place: $0.whereText,
+            LockScreenContext.Entry(id: "class:\($0.id)", title: $0.subject, place: $0.room ?? $0.placeName,
                                     start: $0.start, end: $0.end, symbol: "calendar.day.timeline.left", role: .you)
         }
         let own = eventStore.events(on: day).filter { !$0.isAllDay }.map {
@@ -1503,11 +1679,8 @@ final class AppState {
     func listenAndAnswer() async {
         speech.stop()
         sound.stop()
-        defer {
-            if adaptiveSound {
-                Task { await sound.start() }
-            }
-        }
+        // The sensor comes back on the foreground loop once the answer has been spoken, not
+        // straight after asking, which cut into the answer.
         guard let question = await voice.listen() else { return }
         await ask(question)
     }
@@ -1537,7 +1710,7 @@ final class AppState {
         }
 
         assistantTurns.insert(AssistantTurn(question: question, answer: answer, places: assistantPlaces), at: 0)
-        speech.speak(answer)
+        say(answer)
     }
 
     /// Reads a change and puts it on the assistant card. Returns false when it wasn't a change
@@ -1558,7 +1731,7 @@ final class AppState {
             }
         }
         assistantTurns.insert(AssistantTurn(question: request, answer: reply, places: []), at: 0)
-        speech.speak(reply)
+        say(reply)
         return true
     }
 

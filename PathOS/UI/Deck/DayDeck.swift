@@ -13,8 +13,9 @@ struct DayDeck: View {
     @Query private var timetableExceptions: [TimetableException]
     @Query private var trips: [Trip]
     @Query private var savedPlaces: [SavedPlace]
-    @Query(filter: #Predicate<MailSuggestion> { $0.statusRaw == "pending" }) private var pendingMail: [MailSuggestion]
 
+    /// Answered elective questions; watched so an answer takes the question away at once.
+    @AppStorage(TimetableService.settledClashesKey) private var settledClashes = ""
     @State private var day = Calendar.current.startOfDay(for: Date())
     @State private var now = Date()
     /// A day in detail, or the month around it at a glance.
@@ -28,9 +29,12 @@ struct DayDeck: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 20) {
                 // Your schedule, a day or a month at a time, or what your mail is waiting on you for.
+                // Fixed titles. A count in Mail's changed with every day moved to, and each change
+                // rebuilt the control: its highlight slid across from Day and the text jumped. The
+                // day's count is on Mail's own "All" chip instead.
                 Picker("View", selection: $mode) {
                     ForEach(DayViewMode.allCases) { mode in
-                        Text(mode == .mail && mailCount > 0 ? "Mail · \(mailCount)" : mode.title).tag(mode)
+                        Text(mode.title).tag(mode)
                     }
                 }
                 .pickerStyle(.segmented)
@@ -38,7 +42,10 @@ struct DayDeck: View {
                 switch mode {
                 case .day: dayView
                 case .month: monthView
-                case .mail: MailInbox()
+                case .mail:
+                    // The day you were on: its mail, not everything waiting.
+                    dayPicker
+                    MailInbox(day: day)
                 }
             }
             .padding(.horizontal, 20)
@@ -54,11 +61,12 @@ struct DayDeck: View {
             }
         }
         .task(id: shownRange) {
-            calendarItems = CalendarEventSource.items(
-                from: shownRange.lowerBound,
-                to: shownRange.upperBound,
-                excluding: Set(allEvents.compactMap(\.calendarEventID))
-            )
+            // Read off the main thread: a month of Apple Calendar is a noticeable wait.
+            let range = shownRange
+            let mirrored = Set(allEvents.compactMap(\.calendarEventID))
+            calendarItems = await Task.detached(priority: .userInitiated) {
+                CalendarEventSource.items(from: range.lowerBound, to: range.upperBound, excluding: mirrored)
+            }.value
         }
         .onChange(of: mode) { _, mode in
             if mode == .month { month = MonthGrid.month(0, from: day) }
@@ -78,6 +86,21 @@ struct DayDeck: View {
         if isToday, let next = nextItem {
             nextUp(next)
         }
+        if !isPast {
+            ForEach(openClashes, id: \.self) { group in
+                ContentTile {
+                    ElectiveQuestion(
+                        group: group,
+                        when: TimetableClashes.when(group, in: timetableEntries.map(TimetableService.slot)),
+                        choose: { kept in
+                            state.timetable.keep(kept, of: group)
+                            state.showToast("\(kept) kept · the others are off your week")
+                        },
+                        keepAll: { state.timetable.keepAll(group) }
+                    )
+                }
+            }
+        }
         schedule(title: isPast ? "What happened" : "Plan")
         if !isPast {
             quickActions
@@ -95,15 +118,21 @@ struct DayDeck: View {
         }
     }
 
-    /// Mail still waiting on you, less muted senders.
-    private var mailCount: Int {
-        pendingMail.filter { !state.mail.isMuted($0.senderAddress) }.count
+    /// Sessions at the same time that you haven't chosen between: your electives, as printed.
+    private var openClashes: [[String]] {
+        let settled = TimetableService.settledClashKeys(from: settledClashes)
+        return TimetableClashes.groups(in: timetableEntries.map(TimetableService.slot))
+            .filter { !settled.contains(TimetableClashes.key($0)) }
     }
+
 
     @ViewBuilder
     private var monthView: some View {
+        // Every day's dots worked out in one pass, not the whole schedule rebuilt for each of the
+        // forty-odd days on the grid, which is what made switching to Month stutter.
+        let marks = monthMarks()
         MonthCalendar(month: $month, selected: $day) { date in
-            items(on: date).prefix(3).map(\.role)
+            marks[Calendar.current.startOfDay(for: date)] ?? []
         }
 
         schedule(title: day.formatted(.dateTime.weekday(.wide).day().month(.wide)))
@@ -227,7 +256,8 @@ struct DayDeck: View {
                 }
                 .accessibilityElement(children: .combine)
 
-                if let coordinate = next.coordinate {
+                // Not when you're already there: pointing at the building you're in helps nobody.
+                if let coordinate = next.coordinate, !state.isAt(coordinate, within: LeaveOnTime.arrivalRadius) {
                     Button {
                         state.startCompass(to: CompassTarget(id: next.id, name: next.title, latitude: coordinate.latitude, longitude: coordinate.longitude))
                     } label: {
@@ -292,7 +322,7 @@ struct DayDeck: View {
 
     private var addEventButton: some View {
         Button {
-            state.eventSheet = EventSheetRequest(editing: nil, text: nil)
+            state.eventSheet = EventSheetRequest(editing: nil, text: nil, day: day)
         } label: {
             QuickActionLabel(title: "Add event", symbol: "calendar.badge.plus")
         }
@@ -301,7 +331,7 @@ struct DayDeck: View {
 
     private var pasteButton: some View {
         Button {
-            state.eventSheet = EventSheetRequest(editing: nil, text: UIPasteboard.general.string)
+            state.eventSheet = EventSheetRequest(editing: nil, text: UIPasteboard.general.string, day: day)
         } label: {
             QuickActionLabel(title: "Paste", symbol: "doc.on.clipboard")
         }
@@ -347,7 +377,32 @@ struct DayDeck: View {
     private var items: [DayItem] { items(on: day) }
 
     private func events(on day: Date) -> [PathEvent] {
-        DayPlan.events(allEvents.map(EventStore.plannedEvent), on: day).compactMap { event(for: $0.id) }
+        let byID = Dictionary(allEvents.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        return DayPlan.events(allEvents.map(EventStore.plannedEvent), on: day).compactMap { byID[$0.id] }
+    }
+
+    /// Up to three dots for each day on the month's grid, earliest first: everything is prepared
+    /// once, then each day only picks out its own.
+    private func monthMarks() -> [Date: [SignalRole]] {
+        let calendar = Calendar.current
+        let planned = allEvents.map(EventStore.plannedEvent)
+        let slots = timetableEntries.map(TimetableService.slot)
+        let skips = timetableExceptions.map(TimetableService.skip)
+        let plannedLegs = trips.flatMap { $0.legs }.map(TripStore.plannedLeg)
+        var marks: [Date: [SignalRole]] = [:]
+        for date in MonthGrid.days(around: month) {
+            let dayStart = calendar.startOfDay(for: date)
+            let dayEnd = calendar.date(byAdding: .day, value: 1, to: dayStart) ?? dayStart
+            var timed: [(start: Date, role: SignalRole)] = []
+            timed += DayPlan.events(planned, on: date).map { ($0.start, SignalRole.world) }
+            timed += TimetableRoutine.sessions(slots: slots, skips: skips, on: date).map { ($0.start, SignalRole.you) }
+            timed += TripPlan.legs(plannedLegs, on: date).map { ($0.departure, SignalRole.you) }
+            timed += calendarItems
+                .filter { $0.start < dayEnd && ($0.end > dayStart || $0.start >= dayStart) }
+                .map { ($0.start, SignalRole.world) }
+            marks[dayStart] = timed.sorted { $0.start < $1.start }.prefix(3).map(\.role)
+        }
+        return marks
     }
 
     /// The day's sessions, at your Work place.
@@ -414,9 +469,6 @@ struct DayDeck: View {
         timetableExceptions.contains { $0.entryID == nil && Calendar.current.isDate($0.dayStart, inSameDayAs: day) }
     }
 
-    private func event(for id: UUID) -> PathEvent? {
-        allEvents.first { $0.id == id }
-    }
 
     private var dayLog: DayLog? {
         dayLogs.first { Calendar.current.isDate($0.dayStart, inSameDayAs: day) }
@@ -438,7 +490,13 @@ struct DayDeck: View {
 
     private func shift(by days: Int) {
         guard let next = Calendar.current.date(byAdding: .day, value: days, to: day) else { return }
-        withAnimation(PathMotion.control) { day = next }
+        // Mail swaps its list at once: animated, one day's cards slid out and the next's in, and
+        // the text around them bobbed up and down.
+        if mode == .mail {
+            day = next
+        } else {
+            withAnimation(PathMotion.control) { day = next }
+        }
     }
 }
 
@@ -622,7 +680,8 @@ private struct DayItemRow: View {
         .onTapGesture {
             switch item {
             case .event(let event): state.eventSheet = EventSheetRequest(editing: event.id, text: nil)
-            case .classSession: state.isTimetablePresented = true
+            // That session, on that day: changed for the day or for every week.
+            case .classSession(let session): state.editingSession = session
             case .leg: state.isTripsPresented = true
             case .calendar(let item):
                 // Apple Calendar owns these; it opens at the event's day.
@@ -632,7 +691,7 @@ private struct DayItemRow: View {
             }
         }
         .contextMenu {
-            if let coordinate = item.coordinate {
+            if let coordinate = item.coordinate, !state.isAt(coordinate, within: LeaveOnTime.arrivalRadius) {
                 Button("Point me there", systemImage: "location.north.line.fill") {
                     state.startCompass(to: CompassTarget(id: item.id, name: item.title, latitude: coordinate.latitude, longitude: coordinate.longitude))
                 }

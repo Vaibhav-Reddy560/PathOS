@@ -11,6 +11,9 @@ struct SearchDeck: View {
 
     @State private var isSearching = false
     @State private var problem: String?
+    @State private var suggestions = SearchSuggestions()
+    /// A suggestion picked, whose places are what's listed until the text changes.
+    @State private var picked: SearchSuggestions.Suggestion?
     @FocusState private var isFocused: Bool
 
     // Kept by the app rather than here, so a search is still there after showing a result on
@@ -37,6 +40,9 @@ struct SearchDeck: View {
                     placesToSet
                 } else {
                     yours
+                    if picked == nil, !suggestionsShown.isEmpty {
+                        suggestionList
+                    }
                     fromMaps
                 }
             }
@@ -51,9 +57,13 @@ struct SearchDeck: View {
             if focused { state.deckStop = .full }
         }
         .task(id: query) {
-            // Searches once you pause typing, not on every letter.
+            // Suggestions on every letter, as in Maps; the full search once you pause.
+            if picked.map({ query != $0.title }) ?? true {
+                picked = nil
+                suggestions.update(query, near: state.location.location)
+            }
             try? await Task.sleep(for: .milliseconds(450))
-            guard !Task.isCancelled else { return }
+            guard !Task.isCancelled, picked == nil else { return }
             await search()
         }
     }
@@ -207,6 +217,63 @@ struct SearchDeck: View {
         .padding(.vertical, 12)
     }
 
+    /// Apple Maps' suggestions that aren't already among the places listed.
+    private var suggestionsShown: [SearchSuggestions.Suggestion] {
+        let listed = Set(results.map { $0.name.lowercased() })
+        return suggestions.suggestions.filter { !listed.contains($0.title.lowercased()) }.prefix(6).map { $0 }
+    }
+
+    private var suggestionList: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            DeckSectionHeader(title: "Suggestions")
+            ContentTile(padding: 0) {
+                VStack(spacing: 0) {
+                    ForEach(Array(suggestionsShown.enumerated()), id: \.element.id) { index, suggestion in
+                        if index > 0 { RowDivider() }
+                        Button {
+                            Task { await run(suggestion) }
+                        } label: {
+                            HStack(spacing: 14) {
+                                SignalGlyph(symbol: suggestion.isQuery ? "magnifyingglass" : "mappin", role: .world, size: 36)
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(suggestion.title)
+                                        .font(.headline)
+                                        .foregroundStyle(.ice)
+                                        .lineLimit(1)
+                                    if !suggestion.subtitle.isEmpty {
+                                        Text(suggestion.subtitle)
+                                            .font(.subheadline)
+                                            .foregroundStyle(.mist)
+                                            .lineLimit(1)
+                                    }
+                                }
+                                Spacer(minLength: 0)
+                            }
+                            .padding(.horizontal, 14)
+                            .padding(.vertical, 10)
+                            .contentShape(.rect)
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+            }
+        }
+    }
+
+    /// A suggestion picked: its places become the list, the one place shown on the map.
+    private func run(_ suggestion: SearchSuggestions.Suggestion) async {
+        isSearching = true
+        defer { isSearching = false }
+        picked = suggestion
+        query = suggestion.title
+        let found = await suggestions.places(for: suggestion, near: state.location.location)
+        results = found
+        problem = nil
+        if found.count == 1, let only = found.first {
+            state.searchPlace = only
+        }
+    }
+
     @ViewBuilder
     private var fromMaps: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -330,6 +397,13 @@ private struct SearchResultRow: View {
                     .font(.subheadline.weight(.semibold))
             }
             .pathPrimaryAction()
+        } else if state.isAt(place.coordinate) {
+            // You're there: the map is the useful thing, not a pointer to where you stand.
+            Button(action: showOnMap) {
+                OneLineButtonLabel(title: "You're here · show on map", symbol: "map")
+                    .font(.subheadline.weight(.semibold))
+            }
+            .pathSecondaryAction()
         } else {
             Button {
                 state.startCompass(to: CompassTarget(id: "place:\(place.id)", name: place.name, latitude: place.latitude, longitude: place.longitude))
@@ -341,8 +415,10 @@ private struct SearchResultRow: View {
         }
 
         Menu {
-            Button("Ways to get there", systemImage: "arrow.triangle.turn.up.right.diamond.fill") {
-                state.showWays(to: place.name, at: place.coordinate, id: "place:\(place.id)")
+            if !state.isTravelling, !state.isAt(place.coordinate) {
+                Button("Ways to get there", systemImage: "arrow.triangle.turn.up.right.diamond.fill") {
+                    state.showWays(to: place.name, at: place.coordinate, id: "place:\(place.id)")
+                }
             }
             Button("Show on the map", systemImage: "map", action: showOnMap)
             Button("Set as Home", systemImage: PlaceKind.home.symbol) {

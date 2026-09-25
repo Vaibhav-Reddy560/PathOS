@@ -6,13 +6,24 @@ import SwiftData
 nonisolated struct LocalEvent: Identifiable, Hashable, Sendable {
     nonisolated enum Source: String, Sendable {
         case venue
+        /// A poster or flyer you scanned: something happening out there, not a plan of yours.
         case scanned
+        /// Your own: an event you added or a session of your weekly schedule.
+        case own
         case trip
         case calendar
+        /// Found in your mail and not yet added to your day.
         case mail
 
         /// Has a time, as opposed to a place you could go.
         var isEvent: Bool { self != .venue }
+
+        /// Already part of your plans, so Day has it and Radar doesn't need to.
+        var isYours: Bool { self == .own || self == .trip || self == .calendar }
+
+        /// Yours, or waiting on you to say so: the only events worth reminding you of. Mail you
+        /// haven't added is a suggestion, and a poster you scanned is something you might go to.
+        var isInYourDay: Bool { isYours }
     }
 
     var id: String

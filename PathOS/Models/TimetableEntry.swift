@@ -13,6 +13,8 @@ final class TimetableEntry {
     var endMinutes: Int = 600
     var room: String?
     var teacher: String?
+    /// Anything else worth knowing: bring the lab record, the syllabus, a link.
+    var notes: String?
     var isActive: Bool = true
     var createdAt: Date = Date()
 

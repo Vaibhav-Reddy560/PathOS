@@ -52,7 +52,7 @@ final class BackupService {
         }
         archive.sessions = fetch(TimetableEntry.self).map {
             .init(id: $0.id, subject: $0.subject, weekday: $0.weekday, startMinutes: $0.startMinutes,
-                  endMinutes: $0.endMinutes, room: $0.room, teacher: $0.teacher, isActive: $0.isActive,
+                  endMinutes: $0.endMinutes, room: $0.room, teacher: $0.teacher, notes: $0.notes, isActive: $0.isActive,
                   createdAt: $0.createdAt)
         }
         archive.exceptions = fetch(TimetableException.self).map {
@@ -196,6 +196,7 @@ final class BackupService {
                                          startMinutes: item.startMinutes, endMinutes: item.endMinutes,
                                          room: item.room, teacher: item.teacher)
             session.id = item.id
+            session.notes = item.notes
             session.isActive = item.isActive
             session.createdAt = item.createdAt
             context.insert(session)

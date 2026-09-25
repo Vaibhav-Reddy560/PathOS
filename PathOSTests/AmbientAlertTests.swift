@@ -144,6 +144,29 @@ struct AmbientAlertTests {
         #expect(AmbientAlerts.departureAlert(departure(.there)) == nil)
     }
 
+    /// Far too late and not moving, it stops saying "you'll be late" and asks instead, with the
+    /// answer on the alert itself.
+    @Test func farTooLateItAsksWhetherYoureStillGoing() {
+        var asking = departure(.late(arrival: now.addingTimeInterval(5_400), minutes: 35))
+        asking.isAskingToDrop = true
+        let alert = AmbientAlerts.departureAlert(asking)
+        #expect(alert?.id == "leave.drop.class:1")
+        #expect(alert?.headline == "Still going to Physics?")
+        #expect(alert?.buttons.map(\.action) == [.dropDeparture("class:1"), .keepDeparture("class:1")])
+    }
+
+    /// Something from your mail you haven't added, or anything else already at hand, gets no
+    /// "Point me there": an event you're standing at has nothing to point to.
+    @Test func noPointerToWhereYouAlreadyAre() {
+        let soon = now.addingTimeInterval(600)
+        let here = AmbientAlerts.prioritized(snapshot(event: AlertSnapshot.Event(
+            id: "event:1", title: "Episode 6", start: soon, latitude: 12.9, longitude: 77.5, distanceMeters: 20)))
+        #expect(here.first { $0.id == "event.soon.event:1" }?.buttons.isEmpty == true)
+        let away = AmbientAlerts.prioritized(snapshot(event: AlertSnapshot.Event(
+            id: "event:1", title: "Episode 6", start: soon, latitude: 12.9, longitude: 77.5, distanceMeters: 4_000)))
+        #expect(away.first { $0.id == "event.soon.event:1" }?.buttons.map(\.title) == ["Point me there"])
+    }
+
     /// The way you're making leads the island: quietly while it's going to plan, and for
     /// attention once you've fallen behind it.
     @Test func thePlanYoureFollowingLeadsUntilYouBoard() {
@@ -160,6 +183,17 @@ struct AmbientAlertTests {
         let calm = AmbientAlerts.prioritized(snapshot)
         #expect(calm.first?.id == "way")
         #expect(calm.first?.role == .you)
+        // On the island: when you'll get there, which the turn banner doesn't say.
+        #expect(calm.first?.compactText.hasPrefix("Arrive ") == true)
+
+        // Traffic Apple Maps reports makes it worth a look, before any leg is missed.
+        snapshot.way?.trafficNote = "Heavy traffic · +7 min"
+        snapshot.way?.isTrafficSlow = true
+        let slow = AmbientAlerts.prioritized(snapshot)
+        #expect(slow.first?.compactText == "Heavy traffic · +7 min")
+        #expect(slow.first?.role == .attention)
+        snapshot.way?.trafficNote = nil
+        snapshot.way?.isTrafficSlow = false
 
         snapshot.way?.minutesBehind = 12
         let late = AmbientAlerts.prioritized(snapshot)

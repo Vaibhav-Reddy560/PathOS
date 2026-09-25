@@ -32,7 +32,8 @@ struct WorldView: View {
             // the phone does. Everything else — browsing, picking places, a metro ride — is the
             // usual map.
             if isDrivingALeg {
-                NavigationMapView(route: state.tripNav?.coordinates ?? [], isFollowing: $isFollowingRoute)
+                NavigationMapView(route: state.tripNav?.coordinates ?? [], travelled: state.tripMatch?.fraction ?? 0,
+                                  isFollowing: $isFollowingRoute)
                     .ignoresSafeArea()
             } else {
                 WorldMapView(signals: signals, scope: mapScope, bottomInset: mapBottomInset)
@@ -107,7 +108,7 @@ struct WorldView: View {
         .animation(PathMotion.resolve(PathMotion.control, reduceMotion: reduceMotion), value: state.placePicking)
         .overlay(alignment: .top) {
             VStack(spacing: 8) {
-                IslandView(alerts: isNavigating ? alerts.filter { $0.id != "way" } : alerts)
+                IslandView(alerts: alerts)
                 // While a way is being followed, the map leads with the turn ahead.
                 // It belongs to the map, so it shows while the map is what you're looking at.
                 if isNavigating, let trip = state.trip, let status = state.tripStatus {

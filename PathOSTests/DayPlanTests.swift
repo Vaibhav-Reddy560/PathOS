@@ -81,4 +81,28 @@ struct DayPlanTests {
         #expect(DayDistance.step(fromDistance: 120) == 120)
         #expect(DayDistance.step(fromDistance: 50_000) == 0)
     }
+
+    /// A slow walk, fixed once a second: each step is a metre or so, and only adds up because
+    /// it's measured from the last point that counted.
+    @Test func aSlowWalkStillCounts() {
+        var total = 0.0
+        var sinceCounted = 0.0
+        for _ in 0..<60 {
+            sinceCounted += 1.2
+            switch DayDistance.step(distance: sinceCounted, seconds: 1, accuracy: 8) {
+            case .count(let metres): total += metres; sinceCounted = 0
+            case .skip: sinceCounted = 0
+            case .ignore: break
+            }
+        }
+        #expect(total >= 60)
+    }
+
+    /// Eight kilometres across town with PathOS closed counts when it's next open; eight
+    /// kilometres in a minute doesn't.
+    @Test func aRideInYourPocketCounts() {
+        #expect(DayDistance.step(distance: 8_000, seconds: 25 * 60, accuracy: 10) == .count(8_000))
+        #expect(DayDistance.step(distance: 8_000, seconds: 60, accuracy: 10) == .skip)
+        #expect(DayDistance.step(distance: 300, seconds: 60, accuracy: 200) == .ignore)
+    }
 }

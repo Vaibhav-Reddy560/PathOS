@@ -71,6 +71,10 @@ nonisolated enum LockScreenContext {
     /// Redrawn at least this often, for the weather.
     static let longestStale: TimeInterval = 60 * 60
 
+    /// A card is short: two lines under the title are all that fit without the last one being
+    /// cut off at the card's edge.
+    static let mostNotes = 2
+
     static func content(for inputs: Inputs) -> Content {
         let now = inputs.now
         // Still to come or under way; a deadline counts until it's due.
@@ -79,7 +83,6 @@ nonisolated enum LockScreenContext {
             .sorted { $0.start < $1.start }
         let lead = leading(in: timed, now: now)
         let umbrella = umbrellaLine(inputs)
-        var notes: [PathOSActivityAttributes.Note] = []
         let state: ContentState
         var staleDate = now.addingTimeInterval(longestStale)
 
@@ -88,8 +91,9 @@ nonisolated enum LockScreenContext {
             state = ContentState(
                 mode: .venue,
                 title: lead.title,
-                // The room on a line of its own: beside the times, it wrapped mid-phrase.
-                subtitle: [timeRange(lead), lead.place].compactMap { $0 }.joined(separator: "\n"),
+                // One line: the time and the room. The building is where you always go, and
+                // saying it on every line is what made each card say the same thing.
+                subtitle: [timeRange(lead), lead.place].compactMap { $0 }.joined(separator: " · "),
                 symbol: lead.symbol,
                 deepLink: URL(string: "pathos://day"),
                 startDate: lead.start,
@@ -97,9 +101,6 @@ nonisolated enum LockScreenContext {
                 role: isUnderway ? lead.role : .attention
             )
             staleDate = isUnderway ? lead.end : lead.start
-            if let memory = inputs.memory {
-                notes.append(.init(symbol: "mappin.and.ellipse", text: memory.title, role: .you))
-            }
         } else if let memory = inputs.memory {
             state = ContentState(
                 mode: .venue,
@@ -129,15 +130,19 @@ nonisolated enum LockScreenContext {
             )
         }
 
-        // When to leave comes first: it's the one note that can't wait.
-        if let leave = leaveLine(inputs) {
-            notes.append(leave)
+        // Most pressing first; the card keeps the first two.
+        var notes: [PathOSActivityAttributes.Note] = []
+        if let leave = leaveLine(inputs, lead: lead) {
+            notes.append(leave.note)
+            if let changesAt = leave.changesAt {
+                staleDate = min(staleDate, max(changesAt, now.addingTimeInterval(60)))
+            }
+        }
+        if lead != nil, let memory = inputs.memory {
+            notes.append(.init(symbol: "mappin.and.ellipse", text: memory.title, role: .you))
         }
         if let umbrella, state.title != "Take an umbrella" {
             notes.append(.init(symbol: "umbrella.fill", text: umbrella.note, role: .attention))
-        }
-        if let commute = commuteLine(inputs) {
-            notes.append(commute)
         }
         let later = timed.first { $0.start > now && $0.id != lead?.id && $0.start >= (lead?.start ?? now) }
         if let later, inputs.calendar.isDate(later.start, inSameDayAs: now) {
@@ -145,21 +150,24 @@ nonisolated enum LockScreenContext {
             notes.append(.init(
                 symbol: later.symbol,
                 text: ["Next: \(later.title) at \(at)", later.place].compactMap { $0 }.joined(separator: " · "),
-                role: later.role
+                role: later.role,
+                // Gone once it starts, rather than announcing something already under way.
+                until: later.start
             ))
             if lead == nil {
                 // Redrawn when it comes close enough to lead.
                 staleDate = min(staleDate, max(later.start.addingTimeInterval(-leadTime), now))
             }
         }
+        if let commute = commuteLine(inputs) {
+            notes.append(commute)
+        }
         if lead != nil, umbrella == nil, let weather = inputs.weather {
             notes.append(.init(symbol: weather.symbol, text: "\(weather.summary) · \(Int(weather.temperatureC.rounded()))°C", role: .world))
         }
 
         var shown = state
-        // Three now, not two: the context has a card of its own, so it no longer has to leave
-        // room for a journey that has one too.
-        shown.notes = notes.isEmpty ? nil : Array(notes.prefix(3))
+        shown.notes = notes.isEmpty ? nil : Array(notes.prefix(mostNotes))
         return Content(state: shown, staleDate: max(staleDate, now.addingTimeInterval(60)))
     }
 
@@ -177,10 +185,24 @@ nonisolated enum LockScreenContext {
         return underway ?? upcoming
     }
 
-    private static func timeRange(_ entry: Entry) -> String {
+    /// "12:10–2:00 PM": the shared AM or PM said once, so it fits on the line with the room.
+    static func timeRange(_ entry: Entry) -> String {
         let start = entry.start.formatted(date: .omitted, time: .shortened)
         guard entry.end > entry.start else { return "Due \(start)" }
-        return "\(start) to \(entry.end.formatted(date: .omitted, time: .shortened))"
+        let end = entry.end.formatted(date: .omitted, time: .shortened)
+        return compactRange(start, end)
+    }
+
+    static func compactRange(_ start: String, _ end: String) -> String {
+        // The meridiem is the last word, after a space iOS writes as a narrow no-break one.
+        let separators: Set<Character> = [" ", "\u{202F}", "\u{00A0}"]
+        if let startSplit = start.lastIndex(where: { separators.contains($0) }),
+           let endSplit = end.lastIndex(where: { separators.contains($0) }),
+           start[start.index(after: startSplit)...] == end[end.index(after: endSplit)...],
+           start[start.index(after: startSplit)...].allSatisfy(\.isLetter) {
+            return String.range(String(start[..<startSplit]), end, separator: "–")
+        }
+        return String.range(start, end, separator: "–")
     }
 
     /// Whether to take an umbrella: exactly when the exit check says so, which weighs a station's
@@ -194,23 +216,30 @@ nonisolated enum LockScreenContext {
         return (advice.detail, note)
     }
 
-    /// "Leave by 8:35 · 25 min by road to BMS College", or how late you'll be. Quiet once you're
-    /// there, and while you're on your way in good time.
-    private static func leaveLine(_ inputs: Inputs) -> PathOSActivityAttributes.Note? {
+    /// "Leave by 8:35 · 25 min by road", turning into "Leave now" at 8:35 on its own, or how late
+    /// you'll be. It names what it's for only when that isn't the card's own title. Quiet once
+    /// you're there, and while you're on your way in good time.
+    private static func leaveLine(_ inputs: Inputs, lead: Entry?) -> (note: PathOSActivityAttributes.Note, changesAt: Date?)? {
         guard let departure = inputs.departure else { return nil }
+        let what = lead?.title == departure.title ? "" : " for \(departure.title)"
+        let how = "\(departure.travelMinutes) min \(departure.byRoad ? "by road" : "on foot")"
         switch departure.status {
         case .there, .inGoodTime:
             return nil
-        case .leaveSoon(let leaveBy), .leaveNow(let leaveBy):
+        case .leaveSoon(let leaveBy):
             guard !departure.isOnTheWay else { return nil }
-            let isNow: Bool = if case .leaveNow = departure.status { true } else { false }
-            return .init(
+            return (.init(
                 symbol: "figure.walk.departure",
-                text: (isNow ? "Leave now" : "Leave by \(leaveBy.formatted(date: .omitted, time: .shortened))") + " · \(departure.travelText)",
-                role: isNow ? .attention : .you
-            )
+                text: "Leave by \(leaveBy.formatted(date: .omitted, time: .shortened))\(what) · \(how)",
+                role: .you,
+                until: leaveBy,
+                laterText: "Leave now\(what) · \(how)"
+            ), leaveBy)
+        case .leaveNow:
+            guard !departure.isOnTheWay else { return nil }
+            return (.init(symbol: "figure.walk.departure", text: "Leave now\(what) · \(how)", role: .attention), nil)
         case .late(_, let minutes):
-            return .init(symbol: "clock.badge.exclamationmark", text: "About \(minutes) min late · \(departure.travelText)", role: .attention)
+            return (.init(symbol: "clock.badge.exclamationmark", text: "About \(minutes) min late\(what) · \(how)", role: .attention), nil)
         }
     }
 

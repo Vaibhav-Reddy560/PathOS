@@ -165,26 +165,32 @@ struct SignalDetailView: View {
     }
 
     private var actions: some View {
-        VStack(spacing: 10) {
-            Button {
-                state.selectedSignalID = nil
-                state.startCompass(to: CompassTarget(id: signal.id, name: signal.title, latitude: signal.latitude, longitude: signal.longitude))
-            } label: {
-                Label("Point me there", systemImage: "location.north.line.fill")
-                    .font(.headline)
-                    .frame(maxWidth: .infinity, minHeight: 36)
+        let coordinate = CLLocationCoordinate2D(latitude: signal.latitude, longitude: signal.longitude)
+        // Somewhere you already are has nothing to point at and no way there; while you're
+        // following a way somewhere, planning another only muddles it.
+        let isHere = state.isAt(coordinate, within: signal.start == nil ? AppState.atPlaceRadius : LeaveOnTime.arrivalRadius)
+        return VStack(spacing: 10) {
+            if !isHere {
+                Button {
+                    state.selectedSignalID = nil
+                    state.startCompass(to: CompassTarget(id: signal.id, name: signal.title, latitude: signal.latitude, longitude: signal.longitude))
+                } label: {
+                    Label("Point me there", systemImage: "location.north.line.fill")
+                        .font(.headline)
+                        .frame(maxWidth: .infinity, minHeight: 36)
+                }
+                .pathPrimaryAction()
             }
-            .pathPrimaryAction()
 
-            Button {
-                state.showWays(to: signal.title,
-                               at: CLLocationCoordinate2D(latitude: signal.latitude, longitude: signal.longitude),
-                               id: "signal:\(signal.id)", arriveBy: signal.start)
-            } label: {
-                Label("Ways to get there", systemImage: "arrow.triangle.turn.up.right.diamond.fill")
-                    .frame(maxWidth: .infinity, minHeight: 32)
+            if !isHere, !state.isTravelling {
+                Button {
+                    state.showWays(to: signal.title, at: coordinate, id: "signal:\(signal.id)", arriveBy: signal.start)
+                } label: {
+                    Label("Ways to get there", systemImage: "arrow.triangle.turn.up.right.diamond.fill")
+                        .frame(maxWidth: .infinity, minHeight: 32)
+                }
+                .pathSecondaryAction()
             }
-            .pathSecondaryAction()
 
             if let legID {
                 let isFollowing = state.trackedLegID == legID

@@ -33,7 +33,7 @@ struct RadarDeck: View {
                     }
                 }
 
-                Text("Places come from Apple Maps and are kept for three days. Events show here when they have a place to go to; online ones are in Day.")
+                Text("Places come from Apple Maps and are kept for three days. Your own events, schedule and mail are in Day, so Radar only shows what's around you.")
                     .font(.caption)
                     .foregroundStyle(.mist)
                     .padding(.horizontal, 4)
@@ -181,6 +181,8 @@ private struct RadarRow: View {
 
     private var target: CompassTarget? {
         guard let latitude = item.latitude, let longitude = item.longitude else { return nil }
+        // Nothing to point at when you're already there.
+        if let distance = item.distanceMeters, distance < WorldSignalBuilder.hereRadius { return nil }
         return CompassTarget(id: item.id, name: item.title, latitude: latitude, longitude: longitude)
     }
 

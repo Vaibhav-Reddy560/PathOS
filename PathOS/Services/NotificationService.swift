@@ -13,11 +13,15 @@ final class NotificationService: NSObject {
         static let journey = "pathos.journey"
         static let mail = "pathos.mail"
         static let tripLeg = "pathos.tripLeg"
+        /// "Still going?", answered from the notification itself.
+        static let stillGoing = "pathos.stillGoing"
     }
 
     nonisolated enum Action {
         static let pinContext = "pathos.action.pinContext"
         static let trackLeg = "pathos.action.trackLeg"
+        static let dropDeparture = "pathos.action.dropDeparture"
+        static let keepDeparture = "pathos.action.keepDeparture"
     }
 
     private(set) var isAuthorized = false
@@ -42,6 +46,14 @@ final class NotificationService: NSObject {
             UNNotificationCategory(identifier: Category.event, actions: [], intentIdentifiers: []),
             UNNotificationCategory(identifier: Category.journey, actions: [], intentIdentifiers: []),
             UNNotificationCategory(identifier: Category.mail, actions: [], intentIdentifiers: []),
+            UNNotificationCategory(
+                identifier: Category.stillGoing,
+                actions: [
+                    UNNotificationAction(identifier: Action.dropDeparture, title: "Drop it", options: [.destructive]),
+                    UNNotificationAction(identifier: Action.keepDeparture, title: "I'm going", options: []),
+                ],
+                intentIdentifiers: []
+            ),
             UNNotificationCategory(
                 identifier: Category.tripLeg,
                 actions: [UNNotificationAction(identifier: Action.trackLeg, title: "Start tracking", options: [.foreground])],
@@ -176,6 +188,9 @@ extension NotificationService: UNUserNotificationCenterDelegate {
         case Action.pinContext: URL(string: "pathos://context/pin")
         // The leg's own link, with "/track" to start following it rather than just show it.
         case Action.trackLeg: link.flatMap { URL(string: $0 + "/track") }
+        // pathos://departure?id=… becomes pathos://departure/drop?id=…, answered without opening.
+        case Action.dropDeparture: link.flatMap { URL(string: $0.replacingOccurrences(of: "://departure?", with: "://departure/drop?")) }
+        case Action.keepDeparture: link.flatMap { URL(string: $0.replacingOccurrences(of: "://departure?", with: "://departure/keep?")) }
         default: link.flatMap(URL.init(string:))
         }
         if let target {

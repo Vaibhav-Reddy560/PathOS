@@ -46,6 +46,15 @@ nonisolated enum LeaveOnTime {
     static let lookAhead: TimeInterval = 4 * 3_600
     /// Something that started this recently, which you're not at yet, still counts: you're late.
     static let lateGrace: TimeInterval = 30 * 60
+    /// This late and still not on your way, you've probably decided not to go: PathOS asks once
+    /// instead of reminding you again.
+    static let askToDropAfterMinutes = 30
+
+    /// Whether to ask "still going?" rather than say you're late again.
+    static func asksToDrop(_ status: Status, isOnTheWay: Bool) -> Bool {
+        guard case .late(_, let minutes) = status else { return false }
+        return minutes >= askToDropAfterMinutes && !isOnTheWay
+    }
 
     static func status(start: Date, travel: TimeInterval, distance: Double, now: Date) -> Status {
         if distance <= arrivalRadius { return .there }

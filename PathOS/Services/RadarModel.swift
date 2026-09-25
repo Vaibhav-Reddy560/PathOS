@@ -190,10 +190,11 @@ final class RadarModel {
         }
     }
 
-    /// Has somewhere you could walk to, and isn't your own weekly schedule: those sessions are at
-    /// your Work place, which Radar has no need to point out.
+    /// Something happening out there that you could walk to. Your own plans — events you added,
+    /// your weekly schedule, trips, your calendar — are Day's, and mail you haven't added isn't
+    /// a plan of anyone's yet: Radar is what's around you, not what you've already got on.
     static func isPhysical(_ event: LocalEvent) -> Bool {
-        event.latitude != nil && event.longitude != nil && event.source != .venue && !event.id.hasPrefix("class:")
+        event.latitude != nil && event.longitude != nil && event.source == .scanned
     }
 
     private static func apply(_ ranking: RadarCache.Ranking, to pool: [RadarItem]) -> [RadarItem] {

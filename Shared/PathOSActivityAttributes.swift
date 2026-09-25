@@ -50,6 +50,9 @@ nonisolated struct PathOSActivityAttributes: ActivityAttributes {
         var notes: [Note]?
         /// Overrides the mode's colour, such as amber for a class about to start.
         var role: SignalRole?
+        /// When a journey gets you there. The Lock Screen counts down to it by itself, so the
+        /// time left is right whenever you look, not whenever PathOS last ran.
+        var arrivalDate: Date? = nil
 
         init(
             mode: Mode,
@@ -63,7 +66,8 @@ nonisolated struct PathOSActivityAttributes: ActivityAttributes {
             startDate: Date? = nil,
             endDate: Date? = nil,
             notes: [Note]? = nil,
-            role: SignalRole? = nil
+            role: SignalRole? = nil,
+            arrivalDate: Date? = nil
         ) {
             self.mode = mode
             self.title = title
@@ -77,6 +81,7 @@ nonisolated struct PathOSActivityAttributes: ActivityAttributes {
             self.endDate = endDate
             self.notes = notes
             self.role = role
+            self.arrivalDate = arrivalDate
         }
 
         /// The colour it's drawn in.
@@ -102,6 +107,17 @@ nonisolated struct PathOSActivityAttributes: ActivityAttributes {
         var symbol: String
         var text: String
         var role: SignalRole
+        /// Past this, the line says `laterText` instead, or goes: "Leave by 11:36" becomes
+        /// "Leave now" at 11:36 without PathOS having to run, and "Next: CNS at 2:55" leaves
+        /// once CNS starts.
+        var until: Date? = nil
+        var laterText: String? = nil
+
+        /// What it says at `now`, or nil once it has nothing left to say.
+        func text(at now: Date) -> String? {
+            guard let until, now >= until else { return text }
+            return laterText
+        }
     }
 
     var sessionName: String

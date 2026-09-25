@@ -77,6 +77,43 @@ final class SnapToActionService {
         )
     }
 
+    // MARK: Several events at once
+
+    /// A programme read into events. Laid out one to a line, it's read exactly by rules; the
+    /// on-device model is only asked when the rules find less than two, which is when the layout
+    /// is something they don't know.
+    func readEvents(text: String, on day: Date? = nil, now: Date = Date()) async -> (items: [EventListReader.Item], usedAI: Bool) {
+        let reference = day ?? now
+        let byRule = EventListReader.items(in: text, now: reference)
+        if byRule.count >= 2 || !ai.isAvailable {
+            return (byRule, false)
+        }
+        guard let rows = try? await ai.extractEvents(from: text, now: reference), !rows.isEmpty else {
+            return (byRule, false)
+        }
+        let items = rows.compactMap { row -> EventListReader.Item? in
+            guard let date = Self.parseLocalISO(row.date),
+                  let start = TimetableRoutine.minutes(fromTime: row.startTime) else { return nil }
+            let dayStart = Calendar.current.startOfDay(for: date)
+            let begins = dayStart.addingTimeInterval(Double(start) * 60)
+            let end = row.endTime.flatMap(TimetableRoutine.minutes(fromTime:)).map { dayStart.addingTimeInterval(Double($0) * 60) }
+            let title = row.title.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !title.isEmpty else { return nil }
+            return EventListReader.Item(title: title, start: begins,
+                                        end: end.flatMap { $0 > begins ? $0 : nil } ?? begins.addingTimeInterval(3_600),
+                                        place: row.place?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty)
+        }
+        return items.isEmpty ? (byRule, false) : (items.sorted { $0.start < $1.start }, true)
+    }
+
+    /// A photo of a programme: its text, read the same way.
+    func readEvents(image: UIImage, on day: Date? = nil) async throws -> (items: [EventListReader.Item], usedAI: Bool, text: String) {
+        let ocr = try await OCRParser.recognizeText(in: image)
+        guard !ocr.isEmpty else { throw SnapError.noText }
+        let read = await readEvents(text: ocr.fullText, on: day)
+        return (read.items, read.usedAI, ocr.fullText)
+    }
+
     @discardableResult
     func saveRecord(_ draft: ScanDraft, at location: CLLocation?) -> ScanRecord {
         let record = ScanRecord(kind: draft.kind, title: draft.title, summary: draft.summary, rawText: draft.rawText)

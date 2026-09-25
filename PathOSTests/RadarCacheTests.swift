@@ -102,13 +102,29 @@ struct RadarCacheTests {
         #expect(RadarCategory.food.scanned == [.food])
     }
 
+    private func event(_ source: LocalEvent.Source, latitude: Double?) -> LocalEvent {
+        LocalEvent(id: "e", title: "E", subtitle: "", start: now, latitude: latitude, longitude: latitude,
+                   distanceMeters: nil, source: source, symbol: "calendar")
+    }
+
     @Test func radarShowsOnlyEventsWithAPlace() {
-        func event(_ source: LocalEvent.Source, latitude: Double?) -> LocalEvent {
-            LocalEvent(id: "e", title: "E", subtitle: "", start: now, latitude: latitude, longitude: latitude,
-                       distanceMeters: nil, source: source, symbol: "calendar")
+        #expect(RadarModel.isPhysical(event(.scanned, latitude: 12.9)))
+        #expect(!RadarModel.isPhysical(event(.scanned, latitude: nil)))
+    }
+
+    /// Radar is what's around you. Your own events, your weekly schedule, trips and calendar are
+    /// already in Day, and mail you haven't added isn't a plan yet, so none of them show.
+    @Test func yourOwnPlansStayOutOfRadar() {
+        for source in [LocalEvent.Source.own, .trip, .calendar, .mail, .venue] {
+            #expect(!RadarModel.isPhysical(event(source, latitude: 12.9)))
         }
-        #expect(RadarModel.isPhysical(event(.calendar, latitude: 12.9)))
-        #expect(!RadarModel.isPhysical(event(.calendar, latitude: nil)))
-        #expect(!RadarModel.isPhysical(event(.mail, latitude: nil)))
+    }
+
+    /// Only what's in your day can remind you: mail you haven't added never does.
+    @Test func onlyYourDayReminds() {
+        #expect(LocalEvent.Source.own.isInYourDay)
+        #expect(LocalEvent.Source.calendar.isInYourDay)
+        #expect(!LocalEvent.Source.mail.isInYourDay)
+        #expect(!LocalEvent.Source.scanned.isInYourDay)
     }
 }

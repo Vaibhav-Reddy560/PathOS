@@ -53,6 +53,30 @@ nonisolated struct ScanExtraction {
 }
 
 @Generable
+nonisolated struct EventRow {
+    @Guide(description: "The event or session's name, without its time or place")
+    var title: String
+
+    @Guide(description: "Its date as yyyy-MM-dd")
+    var date: String
+
+    @Guide(description: "Start time, 24-hour HH:mm")
+    var startTime: String
+
+    @Guide(description: "End time, 24-hour HH:mm, only if the text gives one")
+    var endTime: String?
+
+    @Guide(description: "The venue, hall or room, only if the text gives one")
+    var place: String?
+}
+
+@Generable
+nonisolated struct EventListExtraction {
+    @Guide(description: "Every event in the text: one per session, per day it happens")
+    var events: [EventRow]
+}
+
+@Generable
 nonisolated struct VibePick {
     @Guide(description: "The item's id, copied exactly from the list")
     var itemID: String
@@ -231,6 +255,23 @@ final class AIClient {
             generating: ScanExtraction.self
         )
         return response.content
+    }
+
+    /// Reads a programme — a festival, a conference, a fest — into one row per session per day.
+    func extractEvents(from text: String, now: Date = Date()) async throws -> [EventRow] {
+        let session = LanguageModelSession(instructions: """
+            You read event programmes, such as a festival over several days or a conference \
+            agenda, into one row per session per day. \
+            Today is \(now.formatted(date: .complete, time: .omitted)). \
+            Resolve dates written without a year to the next time they come round. \
+            A line that is just a date applies to the sessions under it. \
+            Use 24-hour HH:mm times. Never invent sessions that aren't in the text.
+            """)
+        let response = try await session.respond(
+            to: "Programme:\n\(text.prefix(5_000))",
+            generating: EventListExtraction.self
+        )
+        return response.content.events
     }
 
     /// Reads a college timetable — a photo's text or pasted text — into one row per class.
