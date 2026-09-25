@@ -4,9 +4,12 @@ import AppKit
 // Puts each screenshot inside an iPhone, for the README.
 //
 //   1. Drop full-resolution screenshots into docs/screens/raw/, named after the slot they fill:
-//      map.png, now.png, ways.png, driving.png, mail.png
+//      now.png, day.png, radar.png, around.png, ways.png, driving.png, mail.png, vault.png
 //   2. Run:  swift Tools/Screens/frame.swift
-//   3. It writes docs/screens/<slot>.png, framed and sized for the README.
+//   3. It writes docs/screens/<slot>.png, each screenshot inside the iPhone.
+//
+// Nothing is compressed. Each screenshot is drawn into the frame pixel for pixel, at the size it
+// was captured at, and written as a lossless PNG; the README shows it smaller by width alone.
 //
 // A slot with no screenshot yet gets a placeholder in the same frame, so the README always looks
 // finished and a picture can be added later without touching the Markdown.
@@ -20,15 +23,17 @@ let palette = (
     ion: NSColor(srgbRed: 0.396, green: 0.902, blue: 0.816, alpha: 1)        // #65E6D0
 )
 
-/// The screen, in points. Everything else is measured from it.
-let screen = NSSize(width: 320, height: 692)
+/// The screen, in points. Everything else is measured from it. The proportions are an iPhone
+/// 16 Plus screenshot's (1290 x 2796), so a capture fills it with nothing cropped.
+let screen = NSSize(width: 320, height: 320 * 2796 / 1290)
 /// The black surround, and the metal rail around that.
 let bezel: CGFloat = 9
 let rail: CGFloat = 4
 /// Clear space around the phone, which holds the shadow and keeps two of these apart on a page.
 let margin: CGFloat = 34
-let scale: CGFloat = 1.6
-let slots = ["map", "now", "ways", "driving", "mail"]
+/// What a phone screenshot is wide, when there's none to measure.
+let defaultCaptureWidth: CGFloat = 1290
+let slots = ["now", "day", "radar", "around", "ways", "driving", "mail", "vault"]
 
 let root = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
 let rawFolder = root.appendingPathComponent("docs/screens/raw")
@@ -42,12 +47,46 @@ func squircle(_ rect: NSRect, radius: CGFloat) -> NSBezierPath {
     NSBezierPath(cgPath: CGPath(roundedRect: rect, cornerWidth: radius, cornerHeight: radius, transform: nil))
 }
 
-func frame(_ shot: NSImage?, slot: String) -> NSImage {
+/// A capture's size in pixels, not points: a PNG's resolution setting says what a point is, and
+/// it's the pixels that decide how sharp it stays.
+func pixelWidth(of url: URL) -> CGFloat? {
+    guard let data = try? Data(contentsOf: url), let rep = NSBitmapImageRep(data: data) else { return nil }
+    return CGFloat(rep.pixelsWide)
+}
+
+/// Whether a capture already shows the camera island. iPhone draws it into a screenshot only
+/// while it has something to show (the orange microphone dot, an activity), and otherwise leaves
+/// the screen under it, which on a framed phone would read as a hole in the glass.
+func showsIsland(_ shot: NSImage) -> Bool {
+    guard let rep = shot.representations.compactMap({ $0 as? NSBitmapImageRep }).first,
+          let colour = rep.colorAt(x: rep.pixelsWide / 2, y: Int(Double(rep.pixelsHigh) * 0.032))?
+              .usingColorSpace(.sRGB) else { return false }
+    // The island is true black; nothing PathOS draws is.
+    return colour.redComponent + colour.greenComponent + colour.blueComponent < 0.06
+}
+
+/// Every capture is drawn at the size the widest one was taken at, so the frames match and none
+/// is scaled down: the screen area comes out exactly as many pixels wide as the screenshot.
+let captureWidth: CGFloat = slots
+    .compactMap { pixelWidth(of: rawFolder.appendingPathComponent("\($0).png")) }
+    .max() ?? defaultCaptureWidth
+let scale: CGFloat = captureWidth / screen.width
+
+func frame(_ shot: NSImage?, slot: String) -> NSBitmapImageRep? {
     let bodySize = NSSize(width: screen.width + (bezel + rail) * 2, height: screen.height + (bezel + rail) * 2)
     let size = NSSize(width: bodySize.width + margin * 2, height: bodySize.height + margin * 2)
-    let image = NSImage(size: NSSize(width: size.width * scale, height: size.height * scale))
-    image.lockFocus()
-    guard let context = NSGraphicsContext.current else { image.unlockFocus(); return image }
+    let pixels = NSSize(width: (size.width * scale).rounded(), height: (size.height * scale).rounded())
+    // Drawn straight into a bitmap of exactly that many pixels. An image drawn on screen is made
+    // at the display's own density, which on a Retina Mac silently doubled or halved the result.
+    guard let bitmap = NSBitmapImageRep(
+        bitmapDataPlanes: nil, pixelsWide: Int(pixels.width), pixelsHigh: Int(pixels.height),
+        bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
+        colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0),
+        let context = NSGraphicsContext(bitmapImageRep: bitmap) else { return nil }
+    bitmap.size = pixels
+    NSGraphicsContext.saveGraphicsState()
+    defer { NSGraphicsContext.restoreGraphicsState() }
+    NSGraphicsContext.current = context
     context.imageInterpolation = .high
     context.cgContext.scaleBy(x: scale, y: scale)
 
@@ -68,8 +107,9 @@ func frame(_ shot: NSImage?, slot: String) -> NSImage {
     NSGraphicsContext.saveGraphicsState()
     let shadow = NSShadow()
     shadow.shadowColor = NSColor.black.withAlphaComponent(0.55)
-    shadow.shadowBlurRadius = 26
-    shadow.shadowOffset = NSSize(width: 0, height: -10)
+    // A shadow is measured in pixels however the drawing is scaled, so it's scaled by hand.
+    shadow.shadowBlurRadius = 26 * scale
+    shadow.shadowOffset = NSSize(width: 0, height: -10 * scale)
     shadow.set()
     NSColor.black.setFill()
     body.fill()
@@ -128,9 +168,11 @@ func frame(_ shot: NSImage?, slot: String) -> NSImage {
         NSBezierPath(ovalIn: NSRect(x: screenRect.midX - 4, y: screenRect.midY - 54, width: 8, height: 8)).fill()
     }
 
-    // The island.
-    NSColor.black.setFill()
-    squircle(NSRect(x: screenRect.midX - 47, y: screenRect.maxY - 36, width: 94, height: 27), radius: 13.5).fill()
+    // The island, unless the capture already has its own.
+    if shot.map(showsIsland) != true {
+        NSColor.black.setFill()
+        squircle(NSRect(x: screenRect.midX - 47, y: screenRect.maxY - 36, width: 94, height: 27), radius: 13.5).fill()
+    }
 
     // A sheen across the glass, the one thing that stops a drawn screen looking printed.
     NSGraphicsContext.saveGraphicsState()
@@ -148,17 +190,15 @@ func frame(_ shot: NSImage?, slot: String) -> NSImage {
     edge.lineWidth = 1
     edge.stroke()
 
-    image.unlockFocus()
-    return image
+    return bitmap
 }
 
 var framed = 0, placeholders = 0
 for slot in slots {
     let source = rawFolder.appendingPathComponent("\(slot).png")
     let shot = FileManager.default.fileExists(atPath: source.path) ? NSImage(contentsOf: source) : nil
-    let image = frame(shot, slot: slot)
-    guard let tiff = image.tiffRepresentation,
-          let data = NSBitmapImageRep(data: tiff)?.representation(using: .png, properties: [:]) else { continue }
+    guard let image = frame(shot, slot: slot),
+          let data = image.representation(using: .png, properties: [:]) else { continue }
     try? data.write(to: outFolder.appendingPathComponent("\(slot).png"))
     shot == nil ? (placeholders += 1) : (framed += 1)
     print("\(slot): \(shot == nil ? "placeholder" : "framed")")

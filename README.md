@@ -13,7 +13,7 @@ worked out on the phone itself.**
 ![Swift](https://img.shields.io/badge/Swift-6-B8F36B?style=for-the-badge&labelColor=090B0D)
 ![SwiftUI](https://img.shields.io/badge/SwiftUI-MapKit%20%C2%B7%20SwiftData-8E9B98?style=for-the-badge&labelColor=090B0D)
 ![On device](https://img.shields.io/badge/AI-on--device-FFBF69?style=for-the-badge&labelColor=090B0D)
-![Tests](https://img.shields.io/badge/tests-292%20passing-B8F36B?style=for-the-badge&labelColor=090B0D)
+![Tests](https://img.shields.io/badge/tests-320%20passing-B8F36B?style=for-the-badge&labelColor=090B0D)
 
 </div>
 
@@ -42,17 +42,18 @@ auto at the far end. Most travel apps will plan the middle. PathOS plans all thr
 ## What it does
 
 <!--
-  Screenshots: drop full-size captures into docs/screens/raw/ named map.png, now.png, ways.png,
-  driving.png and mail.png, then run `swift Tools/Screens/frame.swift`. They are placed inside the
-  iPhone frame automatically; nothing below needs editing.
+  Screenshots: drop full-size captures into docs/screens/raw/ named now.png, day.png, radar.png,
+  around.png, ways.png, driving.png, mail.png and vault.png, then run
+  `swift Tools/Screens/frame.swift`. They are placed inside the iPhone frame at full resolution;
+  nothing below needs editing.
 -->
 
 <div align="center">
-<img src="docs/screens/map.png" width="29%" alt="The map, with the deck collapsed">
+<img src="docs/screens/now.png" width="29%" alt="Now: where you are, the weather, pressure, altitude and sound around you">
 &nbsp;&nbsp;&nbsp;
-<img src="docs/screens/now.png" width="29%" alt="Now: where you are, the weather, travel times">
+<img src="docs/screens/day.png" width="29%" alt="Day: today's plan, each session with its time and place">
 &nbsp;&nbsp;&nbsp;
-<img src="docs/screens/ways.png" width="29%" alt="Ways to get there, with every leg and fare">
+<img src="docs/screens/radar.png" width="29%" alt="Radar: the places around you, each a tap from a pointer to it">
 </div>
 
 <br>
@@ -64,6 +65,14 @@ events happening near you, and a glass deck you pull up for everything else. Two
 or open.
 
 ### Whole journeys, door to door
+
+<div align="center">
+<img src="docs/screens/around.png" width="29%" alt="Getting around: the time by car, two-wheeler and metro or bus, and the nearest metro station">
+&nbsp;&nbsp;&nbsp;
+<img src="docs/screens/ways.png" width="29%" alt="Ways to get there: straight by road, or by metro with an auto at each end, each leg with its time and fare">
+</div>
+
+<br>
 
 Ask for any place and PathOS works out every way of getting there — straight there by road, the
 metro with whatever gets you to and from the stations, a direct bus where one runs — with **each
@@ -132,6 +141,12 @@ times, rooms. Each session then appears in Day every week at your **Work** place
 ("LH-3 · BMS College"), with a reminder before it starts.
 
 ### Spatial memory
+
+<div align="center">
+<img src="docs/screens/vault.png" width="31%" alt="The Vault: a saved spot with its photo, and Home and Work with their geofences">
+</div>
+
+<br>
 
 Save where you parked, with photos and tags. Walk away, come back, and PathOS surfaces it on the
 Lock Screen as you approach. Geofenced, so it costs nothing while you are away.
@@ -222,7 +237,7 @@ Tools/Screens/     Puts README screenshots inside an iPhone frame
 ```
 
 The rule: anything worth being sure about lives in `Core` as a pure function, and has a test.
-**292 tests** cover the journey planner, the fare tables, lateness, the turn guide, the deck's
+**320 tests** cover the journey planner, the fare tables, lateness, the turn guide, the deck's
 geometry, alert priorities and escalation, the timetable reader and the backup format.
 
 ---
@@ -289,12 +304,15 @@ icon, the one with no route or pins, which can be chosen in **Settings → App i
 ### Screenshots for this page
 
 ```bash
-# put captures in docs/screens/raw/ as map.png, now.png, ways.png, driving.png, mail.png
+# put captures in docs/screens/raw/ as now.png, day.png, radar.png, around.png,
+# ways.png, driving.png, mail.png, vault.png
 swift Tools/Screens/frame.swift
 ```
 
-Each is placed inside the iPhone frame and written to `docs/screens/`. A slot with no capture yet
-shows a labelled placeholder, so the page always reads as finished.
+Each is placed inside the iPhone frame and written to `docs/screens/`. Nothing is compressed: a
+capture is drawn into the frame pixel for pixel, at the size it was taken at, and saved as a
+lossless PNG; the page shows it smaller by width alone. A slot with no capture yet shows a labelled
+placeholder, so the page always reads as finished.
 
 ---
 

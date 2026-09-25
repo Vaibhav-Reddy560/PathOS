@@ -15,3 +15,8 @@ xcuserdata/
 # Views replaced during the map-first redesign. Kept on disk as a local reference,
 # not compiled and not part of the project.
 .retired-ui/
+
+# Screenshots as they came off the phone. The framed copies are made from docs/screens/raw/,
+# which holds the same files under the names the frame tool expects.
+/Images/
+/images/
