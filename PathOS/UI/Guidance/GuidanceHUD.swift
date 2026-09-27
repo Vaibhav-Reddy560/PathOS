@@ -84,6 +84,20 @@ struct GuidanceHUD: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
 
+            // Far enough for a way there to mean something: then it's the answer you actually
+            // want, so it gets a row of its own rather than a fifth of one. Closer, a route comes
+            // back empty and the pointer is the whole answer.
+            if state.routeIsWorthIt(to: target.coordinate) {
+                Button {
+                    let target = target
+                    state.compassTarget = nil
+                    state.showWays(to: target.name, at: target.coordinate, id: target.id)
+                } label: {
+                    OneLineButtonLabel(title: "Take me there", symbol: "arrow.triangle.turn.up.right.diamond.fill")
+                }
+                .pathPrimaryAction()
+            }
+
             GlassEffectContainer(spacing: 8) {
                 HStack(spacing: 8) {
                     HUDButton(title: state.isHeadsUp ? "Map" : "Heads-up", symbol: state.isHeadsUp ? "map" : "scope") {
@@ -101,13 +115,6 @@ struct GuidanceHUD: View {
                                 state.showToast("Turn on Live Activities for PathOS in Settings", role: .attention, symbol: "exclamationmark.circle.fill")
                             }
                         }
-                    }
-                    // The pointer can only say which way; from any distance the answer you
-                    // actually want is the way there.
-                    HUDButton(title: "Take me there", symbol: "arrow.triangle.turn.up.right.diamond.fill") {
-                        let target = target
-                        state.compassTarget = nil
-                        state.showWays(to: target.name, at: target.coordinate, id: target.id)
                     }
                     HUDButton(title: "Maps", symbol: "map.fill") {
                         let item = MKMapItem(location: CLLocation(latitude: target.latitude, longitude: target.longitude), address: nil)
@@ -181,6 +188,8 @@ private struct ArrowDial: View {
     }
 }
 
+/// One of the row of small actions. The label keeps a margin inside the glass on every side,
+/// and gives a little of its size before it would touch the edge — never the words themselves.
 private struct HUDButton: View {
     let title: String
     let symbol: String
@@ -188,15 +197,21 @@ private struct HUDButton: View {
 
     var body: some View {
         Button(action: action) {
-            VStack(spacing: 4) {
+            VStack(spacing: 5) {
+                // Every symbol in the same box: a crosshair is taller than a cross, and without
+                // this the words beneath them sit at different heights along the row.
                 Image(systemName: symbol)
                     .font(.system(size: 16, weight: .semibold))
+                    .frame(height: 22)
                 Text(title)
-                    .font(.caption2.weight(.semibold))
+                    .font(.caption.weight(.semibold))
                     .lineLimit(1)
+                    .minimumScaleFactor(0.8)
             }
             .foregroundStyle(.ice)
-            .frame(maxWidth: .infinity, minHeight: 52)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 8)
+            .frame(maxWidth: .infinity, minHeight: 56)
             .contentShape(.rect)
         }
         .buttonStyle(.plain)
