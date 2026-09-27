@@ -8,10 +8,6 @@
   <g opacity="1">
     <animate attributeName="opacity" values="0;1" dur="0.5s" begin="0.0s" fill="freeze"/>
     <rect x="44" y="54" width="34" height="34" rx="11" fill="#B8F36B"/>
-    <circle cx="61" cy="71" r="17" fill="none" stroke="#B8F36B" stroke-opacity="0.45" stroke-width="2">
-      <animate attributeName="r" values="17;26;17" dur="3.4s" begin="1.2s" repeatCount="indefinite"/>
-      <animate attributeName="stroke-opacity" values="0.45;0;0.45" dur="3.4s" begin="1.2s" repeatCount="indefinite"/>
-    </circle>
     <text x="104" y="68" font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Text', system-ui, sans-serif"
           font-size="19" font-weight="600" fill="#E8F0ED">Aurora</text>
     <text x="104" y="88" font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Text', system-ui, sans-serif"
@@ -22,10 +18,6 @@
   <g opacity="1">
     <animate attributeName="opacity" values="0;1" dur="0.5s" begin="0.15s" fill="freeze"/>
     <rect x="44" y="106" width="34" height="34" rx="11" fill="#65E6D0"/>
-    <circle cx="61" cy="123" r="17" fill="none" stroke="#65E6D0" stroke-opacity="0.45" stroke-width="2">
-      <animate attributeName="r" values="17;26;17" dur="3.4s" begin="1.45s" repeatCount="indefinite"/>
-      <animate attributeName="stroke-opacity" values="0.45;0;0.45" dur="3.4s" begin="1.45s" repeatCount="indefinite"/>
-    </circle>
     <text x="104" y="120" font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Text', system-ui, sans-serif"
           font-size="19" font-weight="600" fill="#E8F0ED">Ion</text>
     <text x="104" y="140" font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Text', system-ui, sans-serif"
@@ -36,10 +28,6 @@
   <g opacity="1">
     <animate attributeName="opacity" values="0;1" dur="0.5s" begin="0.3s" fill="freeze"/>
     <rect x="44" y="158" width="34" height="34" rx="11" fill="#FFBF69"/>
-    <circle cx="61" cy="175" r="17" fill="none" stroke="#FFBF69" stroke-opacity="0.45" stroke-width="2">
-      <animate attributeName="r" values="17;26;17" dur="3.4s" begin="1.7s" repeatCount="indefinite"/>
-      <animate attributeName="stroke-opacity" values="0.45;0;0.45" dur="3.4s" begin="1.7s" repeatCount="indefinite"/>
-    </circle>
     <text x="104" y="172" font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Text', system-ui, sans-serif"
           font-size="19" font-weight="600" fill="#E8F0ED">Amber</text>
     <text x="104" y="192" font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Text', system-ui, sans-serif"
@@ -50,10 +38,6 @@
   <g opacity="1">
     <animate attributeName="opacity" values="0;1" dur="0.5s" begin="0.44999999999999996s" fill="freeze"/>
     <rect x="44" y="210" width="34" height="34" rx="11" fill="#FF4438"/>
-    <circle cx="61" cy="227" r="17" fill="none" stroke="#FF4438" stroke-opacity="0.45" stroke-width="2">
-      <animate attributeName="r" values="17;26;17" dur="3.4s" begin="1.95s" repeatCount="indefinite"/>
-      <animate attributeName="stroke-opacity" values="0.45;0;0.45" dur="3.4s" begin="1.95s" repeatCount="indefinite"/>
-    </circle>
     <text x="104" y="224" font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Text', system-ui, sans-serif"
           font-size="19" font-weight="600" fill="#E8F0ED">Coral</text>
     <text x="104" y="244" font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Text', system-ui, sans-serif"
@@ -64,10 +48,6 @@
   <g opacity="1">
     <animate attributeName="opacity" values="0;1" dur="0.5s" begin="0.6s" fill="freeze"/>
     <rect x="44" y="262" width="34" height="34" rx="11" fill="#E8F0ED"/>
-    <circle cx="61" cy="279" r="17" fill="none" stroke="#E8F0ED" stroke-opacity="0.45" stroke-width="2">
-      <animate attributeName="r" values="17;26;17" dur="3.4s" begin="2.2s" repeatCount="indefinite"/>
-      <animate attributeName="stroke-opacity" values="0.45;0;0.45" dur="3.4s" begin="2.2s" repeatCount="indefinite"/>
-    </circle>
     <text x="104" y="276" font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Text', system-ui, sans-serif"
           font-size="19" font-weight="600" fill="#E8F0ED">Ice</text>
     <text x="104" y="296" font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Text', system-ui, sans-serif"
@@ -78,10 +58,6 @@
   <g opacity="1">
     <animate attributeName="opacity" values="0;1" dur="0.5s" begin="0.75s" fill="freeze"/>
     <rect x="44" y="314" width="34" height="34" rx="11" fill="#090B0D" stroke="#8E9B98" stroke-opacity="0.5" stroke-width="1.5"/>
-    <circle cx="61" cy="331" r="17" fill="none" stroke="#090B0D" stroke-opacity="0.45" stroke-width="2">
-      <animate attributeName="r" values="17;26;17" dur="3.4s" begin="2.45s" repeatCount="indefinite"/>
-      <animate attributeName="stroke-opacity" values="0.45;0;0.45" dur="3.4s" begin="2.45s" repeatCount="indefinite"/>
-    </circle>
     <text x="104" y="328" font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Text', system-ui, sans-serif"
           font-size="19" font-weight="600" fill="#E8F0ED">Void</text>
     <text x="104" y="348" font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Text', system-ui, sans-serif"
