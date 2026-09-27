@@ -13,7 +13,7 @@ worked out on the phone itself.**
 ![Swift](https://img.shields.io/badge/Swift-6-B8F36B?style=for-the-badge&labelColor=090B0D)
 ![SwiftUI](https://img.shields.io/badge/SwiftUI-MapKit%20%C2%B7%20SwiftData-8E9B98?style=for-the-badge&labelColor=090B0D)
 ![On device](https://img.shields.io/badge/AI-on--device-FFBF69?style=for-the-badge&labelColor=090B0D)
-![Tests](https://img.shields.io/badge/tests-320%20passing-B8F36B?style=for-the-badge&labelColor=090B0D)
+![Tests](https://img.shields.io/badge/tests-341%20passing-B8F36B?style=for-the-badge&labelColor=090B0D)
 
 </div>
 
@@ -237,7 +237,7 @@ Tools/Screens/     Puts README screenshots inside an iPhone frame
 ```
 
 The rule: anything worth being sure about lives in `Core` as a pure function, and has a test.
-**320 tests** cover the journey planner, the fare tables, lateness, the turn guide, the deck's
+**341 tests** cover the journey planner, the fare tables, lateness, the turn guide, the deck's
 geometry, alert priorities and escalation, the timetable reader and the backup format.
 
 ---

@@ -19,7 +19,8 @@
 
   <g clip-path="url(#frame)">
     <rect width="1200" height="380" fill="url(#ground)"/>
-    <g transform="rotate(-14 600 190)">
+    <g transform="rotate(-14 600 190)" opacity="1">
+      <animate attributeName="opacity" values="0;1" dur="1.1s" begin="0s" fill="freeze"/>
             <rect x="-363" y="-404" width="44" height="42" rx="5" fill="#E8F0ED" fill-opacity="0.035"/>
       <rect x="-363" y="-346" width="44" height="42" rx="5" fill="#E8F0ED" fill-opacity="0.035"/>
       <rect x="-363" y="-288" width="44" height="42" rx="5" fill="#E8F0ED" fill-opacity="0.035"/>
@@ -491,27 +492,68 @@
     <rect width="1200" height="380" fill="#090B0D" opacity="0.42"/>
     <ellipse cx="240" cy="170" rx="340" ry="250" fill="url(#glow)"/>
 
-    <!-- The route draws itself, the way a journey does. -->
-    <path d="M 96 328 L 560 328 L 560 302 L 1046 302 L 1046 134" fill="none" stroke="#090B0D" stroke-opacity="0.8" stroke-width="17" stroke-linecap="round" stroke-linejoin="round"/>
-    <path d="M 96 328 L 560 328 L 560 302 L 1046 302 L 1046 134" fill="none" stroke="#B8F36B" stroke-width="9" stroke-linecap="round" stroke-linejoin="round"
-          stroke-dasharray="1200" stroke-dashoffset="0">
-      <animate attributeName="stroke-dashoffset" values="1200;0" dur="2.4s" begin="0.4s" fill="freeze"
+    <!-- One journey, drawn the way PathOS plans one: an auto, the metro, an auto at the far end.
+         Every animation ends where the attribute already stands, so a renderer that ignores SMIL
+         still shows the finished picture. -->
+    <path id="journey" d="M 96 344 L 420 344 L 860 344 L 1010 344 L 1010 120" fill="none" stroke="none"/>
+    <path d="M 96 344 L 420 344 L 860 344 L 1010 344 L 1010 120" fill="none" stroke="#090B0D" stroke-opacity="0.85"
+          stroke-width="18" stroke-linecap="round" stroke-linejoin="round"/>
+
+    <!-- The auto out of your door. -->
+    <path d="M 96 344 L 420 344" fill="none" stroke="#B8F36B" stroke-width="9" stroke-linecap="round"
+          stroke-dasharray="324" stroke-dashoffset="0">
+      <animate attributeName="stroke-dashoffset" values="324;0" dur="0.8s" begin="0.35s" fill="freeze"
                calcMode="spline" keySplines="0.25 0 0.15 1" keyTimes="0;1"/>
     </path>
-    <circle cx="96" cy="328" r="16" fill="#090B0D"/>
-    <circle cx="96" cy="328" r="9.5" fill="#B8F36B">
-      <animate attributeName="r" values="9.5;13;9.5" dur="2.8s" begin="3s" repeatCount="indefinite"/>
+    <!-- The ride across the city: the world's own colour, not yours. -->
+    <path d="M 420 344 L 860 344" fill="none" stroke="#65E6D0" stroke-width="9" stroke-linecap="round"
+          stroke-dasharray="440" stroke-dashoffset="0">
+      <animate attributeName="stroke-dashoffset" values="440;0" dur="0.9s" begin="1.05s" fill="freeze"
+               calcMode="spline" keySplines="0.25 0 0.15 1" keyTimes="0;1"/>
+    </path>
+    <!-- And the last stretch to the door you actually wanted. -->
+    <path d="M 860 344 L 1010 344 L 1010 120" fill="none" stroke="#B8F36B" stroke-width="9" stroke-linecap="round"
+          stroke-linejoin="round" stroke-dasharray="374" stroke-dashoffset="0">
+      <animate attributeName="stroke-dashoffset" values="374;0" dur="0.8s" begin="1.85s" fill="freeze"
+               calcMode="spline" keySplines="0.25 0 0.15 1" keyTimes="0;1"/>
+    </path>
+
+    <!-- Where the two legs change over, so the journey reads as three things and not one line. -->
+    <circle cx="420" cy="344" r="7" fill="#090B0D" stroke="#65E6D0" stroke-width="3" opacity="1">
+      <animate attributeName="opacity" values="0;0;1" keyTimes="0;0.74;1" dur="1.45s" begin="0s" fill="freeze"/>
+    </circle>
+    <circle cx="860" cy="344" r="7" fill="#090B0D" stroke="#65E6D0" stroke-width="3" opacity="1">
+      <animate attributeName="opacity" values="0;0;1" keyTimes="0;0.84;1" dur="2.3s" begin="0s" fill="freeze"/>
     </circle>
 
-    <!-- The pin lands where the route arrives. -->
-    <g>
-      <animate attributeName="opacity" values="0;0;1" keyTimes="0;0.86;1" dur="3.1s" begin="0s" fill="freeze"/>
-      <circle cx="1046" cy="134" r="14" fill="#FFBF69" opacity="0.3">
-        <animate attributeName="r" values="14;34;14" dur="3.2s" begin="3.2s" repeatCount="indefinite"/>
-        <animate attributeName="opacity" values="0.3;0;0.3" dur="3.2s" begin="3.2s" repeatCount="indefinite"/>
+    <!-- You, at your own door. -->
+    <circle cx="96" cy="344" r="16" fill="#090B0D"/>
+    <circle cx="96" cy="344" r="9.5" fill="#B8F36B">
+      <animate attributeName="r" values="9.5;13;9.5" dur="2.8s" begin="3.4s" repeatCount="indefinite"/>
+    </circle>
+
+    <!-- And the one thing a map is for: the dot that is you, on its way. -->
+    <circle r="8" fill="#E8F0ED" opacity="1">
+      <animate attributeName="opacity" values="0;0;1" keyTimes="0;0.92;1" dur="3.4s" begin="0s" fill="freeze"/>
+      <animateMotion dur="6s" begin="3.4s" repeatCount="indefinite" rotate="auto" keyPoints="0;1"
+                     keyTimes="0;1" calcMode="spline" keySplines="0.45 0 0.55 1">
+        <mpath href="#journey"/>
+      </animateMotion>
+    </circle>
+
+    <!-- Where you were going all along. -->
+    <g opacity="1">
+      <animate attributeName="opacity" values="0;0;1" keyTimes="0;0.88;1" dur="2.75s" begin="0s" fill="freeze"/>
+      <circle cx="1010" cy="120" r="14" fill="#FFBF69" opacity="0.3">
+        <animate attributeName="r" values="14;34;14" dur="3.2s" begin="3.4s" repeatCount="indefinite"/>
+        <animate attributeName="opacity" values="0.3;0;0.3" dur="3.2s" begin="3.4s" repeatCount="indefinite"/>
       </circle>
-      <path d="M1046 134 L1024 96 A 24 24 0 1 1 1068 96 Z" fill="#FFBF69" stroke="#090B0D" stroke-width="5" stroke-linejoin="round"/>
-      <circle cx="1046" cy="88" r="9" fill="#090B0D"/>
+      <g transform="translate(0 0)">
+        <animateTransform attributeName="transform" type="translate" values="0,-20;0,0" dur="0.45s"
+                          begin="2.4s" fill="freeze" calcMode="spline" keySplines="0.3 1.4 0.5 1" keyTimes="0;1"/>
+        <path d="M1010 120 L988 82 A 24 24 0 1 1 1032 82 Z" fill="#FFBF69" stroke="#090B0D" stroke-width="5" stroke-linejoin="round"/>
+        <circle cx="1010" cy="74" r="9" fill="#090B0D"/>
+      </g>
     </g>
 
     <!-- The mark, from PathOS_Logo.svg itself. -->
@@ -522,14 +564,27 @@
       <path d="M748.613 454.374C731.413 458.974 717.313 472.474 713.113 488.274C712.313 491.574 711.613 497.774 711.613 502.274C711.613 515.774 714.713 522.974 726.213 536.874C736.313 548.974 738.113 552.974 738.113 563.774C738.113 571.074 737.713 572.974 735.413 577.274C730.213 587.074 721.713 593.174 697.113 604.574C690.013 607.874 678.713 613.174 672.113 616.274C653.613 625.074 644.713 629.274 609.113 645.974C575.413 661.774 564.113 668.174 552.613 677.974C540.913 687.974 528.113 705.874 522.213 720.174C505.713 760.074 511.213 803.774 537.013 837.974C554.013 860.474 580.413 877.174 609.013 883.374C620.213 885.874 642.213 886.274 653.613 884.374C665.513 882.274 682.113 876.774 690.613 872.074C707.813 862.574 709.913 860.574 798.913 771.874C849.013 721.874 888.313 681.974 891.713 677.474C898.513 668.474 904.613 656.374 907.613 645.674C910.413 636.174 911.313 618.074 909.713 606.674C907.413 590.574 899.413 572.074 889.313 558.874C885.813 554.274 816.113 485.374 798.113 468.574C783.913 455.374 765.113 449.974 748.613 454.374Z" fill="url(#mark)"/>
     </g>
 
-    <g>
+    <!-- The words sit left of x=900 and the route rises at x=1010, so the line can never run into
+         it. `textLength` pins each line's width whatever font the reader's machine has, which is
+         what let the tagline reach the route on a phone. -->
+    <g opacity="1">
       <animate attributeName="opacity" values="0;1" dur="0.9s" begin="0.45s" fill="freeze"/>
-      <text x="340" y="160" font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Display', 'Segoe UI', Inter, system-ui, sans-serif"
-            font-size="94" font-weight="600" fill="#E8F0ED" letter-spacing="-2">PathOS</text>
-      <text x="344" y="214" font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI', Inter, system-ui, sans-serif"
-            font-size="30" font-weight="500" fill="#65E6D0">The map is the interface.</text>
-      <text x="344" y="258" font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI', Inter, system-ui, sans-serif"
-            font-size="21" fill="#8E9B98">Your places, your day and your city — worked out on the phone itself.</text>
+      <g transform="translate(0 0)">
+        <animateTransform attributeName="transform" type="translate" values="0,14;0,0" dur="0.9s"
+                          begin="0.45s" fill="freeze" calcMode="spline" keySplines="0.2 0 0.1 1" keyTimes="0;1"/>
+        <text x="340" y="150" font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Display', 'Segoe UI', Inter, system-ui, sans-serif"
+              font-size="94" font-weight="600" fill="#E8F0ED" letter-spacing="-2"
+              textLength="300" lengthAdjust="spacingAndGlyphs">PathOS</text>
+        <text x="344" y="204" font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI', Inter, system-ui, sans-serif"
+              font-size="31" font-weight="500" fill="#65E6D0"
+              textLength="388" lengthAdjust="spacingAndGlyphs">The map is the interface.</text>
+        <text x="344" y="252" font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI', Inter, system-ui, sans-serif"
+              font-size="27" fill="#8E9B98"
+              textLength="472" lengthAdjust="spacingAndGlyphs">Your places, your day, your city.</text>
+        <text x="344" y="288" font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI', Inter, system-ui, sans-serif"
+              font-size="27" fill="#8E9B98"
+              textLength="466" lengthAdjust="spacingAndGlyphs">Worked out on the phone itself.</text>
+      </g>
     </g>
   </g>
 </svg>
