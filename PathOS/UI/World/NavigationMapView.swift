@@ -9,17 +9,21 @@ import SwiftUI
 /// app on the phone uses. Hand-rolled versions of those (a look-ahead camera, a heading dead band,
 /// an animation per location update) are what made it drift and lag.
 ///
-/// Two things are PathOS's own. The line is drawn only ahead of you, in stretches coloured by the
-/// traffic on them, and its head is carried forward between fixes so it keeps up with a puck MapKit
-/// is moving smoothly. And the puck itself is drawn here, because MapKit's own comes with a wide
-/// pale halo whenever the fix is poor, which reads on a dark map as a hole in the glass.
+/// The rest is PathOS's own. The line is drawn only ahead of you, piece by piece, each piece in the
+/// colour of the traffic on it, and its head is carried forward between fixes so it keeps up with
+/// a puck MapKit is moving smoothly. The puck is drawn here, because MapKit's own comes with a wide
+/// pale halo whenever the fix is poor, which reads on a dark map as a hole in the glass. And the
+/// end of the line has the pin, so you can see where it's taking you.
 struct NavigationMapView: UIViewRepresentable {
     /// The leg's route, drawn as the line to follow.
     var route: [CLLocationCoordinate2D]
     /// Where you were on it at the last fix, and how fast: the line's head is drawn from this.
     var trim: RouteTrim.Anchor?
-    /// How the traffic runs along it. Empty draws one aurora line, which is what it was before.
-    var bands: [RouteTraffic.Band] = []
+    /// How held up each piece of it is, in `RouteTraffic.pieces` order. Missing pieces draw aurora,
+    /// which is what the line is until anything has been measured.
+    var traffic: [Double] = []
+    /// Where the line ends: the pin.
+    var destination: CLLocationCoordinate2D?
     /// Apple's own places, when you've asked to see them.
     var places = POIDisplay()
     /// The last fix, so the first frame opens on the road rather than on nothing.
@@ -29,8 +33,9 @@ struct NavigationMapView: UIViewRepresentable {
 
     /// How much road is in view, in metres: close enough to see the turn you're taking.
     static let metresAcross = 420.0
-    /// Three is enough for what the probe can tell apart, with one spare.
-    static let bandSlots = 3
+    /// Drawn a little larger than on the launch screen: it has to be found among the streets at a
+    /// glance while driving.
+    static let pinScale = 1.3
 
     func makeUIView(context: Context) -> MKMapView {
         let map = MKMapView()
@@ -59,8 +64,9 @@ struct NavigationMapView: UIViewRepresentable {
 
         // Set before the route is laid out, so a new line starts where you are on it rather than
         // where you were on the old one.
-        coordinator.bands = bands.isEmpty ? [RouteTraffic.Band(start: 0, end: 1, severity: 0)] : bands
+        coordinator.severities = traffic
         coordinator.anchor = trim
+        coordinator.place(destination, on: map)
 
         // Coordinates aren't comparable; the count and the ends say whether it's a new route.
         let fingerprint = Self.fingerprint(of: route)
@@ -96,7 +102,7 @@ struct NavigationMapView: UIViewRepresentable {
     final class Coordinator: NSObject, MKMapViewDelegate {
         var isFollowing: Binding<Bool>
         var routeFingerprint = ""
-        var bands: [RouteTraffic.Band] = []
+        var severities: [Double] = []
         var anchor: RouteTrim.Anchor?
         var hasStartedFollowing = false
         var isSettingUp = false
@@ -104,13 +110,17 @@ struct NavigationMapView: UIViewRepresentable {
         /// left alone.
         private var hasFramed = false
 
-        /// The dark line under the coloured ones, and one line per stretch. All of them run over
-        /// the same coordinates: which part each draws is a fraction of the line's length, so the
-        /// colours meet on the road without the route being cut into pieces.
+        /// The dark line under the coloured ones, run end to end, and a line for each piece of the
+        /// route over it. The pieces are cut the way `RouteTraffic` cuts them, so the colour a piece
+        /// is measured at is the colour its own stretch of road is drawn in.
         private var casing: MKPolyline?
-        private var bandLines: [BandLine] = []
-        private var bandRenderers: [Int: MKPolylineRenderer] = [:]
         private var casingRenderer: MKPolylineRenderer?
+        private var pieceLines: [PieceLine] = []
+        private var pieceRenderers: [Int: MKPolylineRenderer] = [:]
+        /// The degree each piece's renderer was last coloured at, so the colour is only set when
+        /// it changes and not thirty times a second.
+        private var drawnSeverity: [Int: Double] = [:]
+        private var destinationPin: DestinationPin?
         /// Where the head is drawn now, and the length it's measured against.
         private var shown = 0.0
         private var routeMetres = 0.0
@@ -151,56 +161,90 @@ struct NavigationMapView: UIViewRepresentable {
 
         func layOutRoute(_ route: [CLLocationCoordinate2D], on map: MKMapView) {
             map.removeOverlays(map.overlays)
-            bandRenderers = [:]
+            pieceRenderers = [:]
+            drawnSeverity = [:]
             casingRenderer = nil
-            bandLines = []
+            pieceLines = []
             casing = nil
             shown = anchor?.fraction ?? 0
-            routeMetres = anchor?.routeMetres ?? 0
-            guard route.count > 1 else { return }
+            guard route.count > 1 else {
+                routeMetres = 0
+                return
+            }
+            // Measured the same way the trip measures it, so the fraction you've travelled lands
+            // on the same metre of the same piece.
+            routeMetres = RouteProgress.length(route)
 
             let dark = MKPolyline(coordinates: route, count: route.count)
             casing = dark
             map.addOverlay(dark, level: .aboveRoads)
-            // Added furthest-first so the stretch you're on is drawn last and sits on top: where
-            // two stretches meet, its round cap overshoots into the one beyond rather than the
-            // other way round.
-            for slot in (0..<NavigationMapView.bandSlots).reversed() {
-                let line = BandLine(coordinates: route, count: route.count)
-                line.slot = slot
-                bandLines.append(line)
+            // Added furthest-first so the piece you're on is drawn last and sits on top: where two
+            // meet, its round cap overshoots into the one beyond rather than the other way round.
+            for (index, piece) in RouteTraffic.pieces(routeMetres: routeMetres).enumerated().reversed() {
+                let shape = RouteProgress.slice(route, from: piece.startMetres, to: piece.endMetres)
+                guard shape.count > 1 else { continue }
+                let line = PieceLine(coordinates: shape, count: shape.count)
+                line.index = index
+                line.startMetres = piece.startMetres
+                line.metres = piece.metres
+                pieceLines.append(line)
                 map.addOverlay(line, level: .aboveRoads)
             }
         }
 
-        /// Where the head of the line is now, and what each stretch should draw.
+        /// The pin at the end of the line: moved when the leg's end moves, gone when there's none.
+        func place(_ destination: CLLocationCoordinate2D?, on map: MKMapView) {
+            guard let destination, CLLocationCoordinate2DIsValid(destination) else {
+                if let pin = destinationPin {
+                    map.removeAnnotation(pin)
+                    destinationPin = nil
+                }
+                return
+            }
+            if let pin = destinationPin {
+                if pin.coordinate.latitude != destination.latitude || pin.coordinate.longitude != destination.longitude {
+                    pin.coordinate = destination
+                }
+            } else {
+                let pin = DestinationPin()
+                pin.coordinate = destination
+                map.addAnnotation(pin)
+                destinationPin = pin
+            }
+        }
+
+        /// Where the head of the line is now, and what each piece should draw.
         func draw(force: Bool = false, now: Date = Date()) {
             if let anchor {
-                routeMetres = anchor.routeMetres
                 shown = RouteTrim.shown(anchor, lastShown: shown, sinceFix: now.timeIntervalSince(anchor.at))
             }
             if let casingRenderer {
-                set(casingRenderer, start: shown, end: 1, force: force)
+                set(casingRenderer, start: shown, end: 1, metres: routeMetres, force: force)
             }
-            for slot in 0..<NavigationMapView.bandSlots {
-                guard let renderer = bandRenderers[slot] else { continue }
-                guard let band = bands[safe: slot] else {
-                    hide(renderer)
-                    continue
+            let head = shown * routeMetres
+            for line in pieceLines {
+                guard let renderer = pieceRenderers[line.index] else { continue }
+                let severity = severities[safe: line.index] ?? 0
+                if drawnSeverity[line.index] != severity {
+                    drawnSeverity[line.index] = severity
+                    renderer.strokeColor = UIColor(PathOSPalette.color(PathOSPalette.traffic(severity: severity)))
+                    renderer.setNeedsDisplay()
                 }
-                renderer.strokeColor = UIColor(PathOSPalette.color(PathOSPalette.traffic(severity: band.severity)))
-                set(renderer, start: max(band.start, shown), end: band.end, force: force)
+                // The head, as a fraction of this piece: below zero it hasn't reached it yet, and
+                // past one the piece is behind you and hidden.
+                let start = (head - line.startMetres) / max(line.metres, 0.001)
+                set(renderer, start: max(0, start), end: 1, metres: line.metres, force: force)
             }
         }
 
         /// Half a metre of real road — below that nothing on screen would move, and a redraw walks
         /// the whole line. The old fixed fraction was 7 m on a long leg, which stepped visibly.
-        private func set(_ renderer: MKPolylineRenderer, start: Double, end: Double, force: Bool) {
+        private func set(_ renderer: MKPolylineRenderer, start: Double, end: Double, metres: Double, force: Bool) {
             guard start < end else {
                 hide(renderer)
                 return
             }
-            let moved = abs(Double(renderer.strokeStart) - start) * max(routeMetres, 1)
+            let moved = abs(Double(renderer.strokeStart) - start) * max(metres, 1)
             let wasHidden = renderer.alpha < 1
             guard force || wasHidden || moved > 0.5 else { return }
             renderer.alpha = 1
@@ -238,7 +282,7 @@ struct NavigationMapView: UIViewRepresentable {
         /// Nothing to carry forward: stopped at a light, or a fix so old that reckoning from it
         /// would be invention.
         private var isWorthReckoning: Bool {
-            guard let anchor, !bandLines.isEmpty else { return false }
+            guard let anchor, !pieceLines.isEmpty else { return false }
             guard anchor.metresPerSecond >= RouteTrim.stopped else { return false }
             return Date().timeIntervalSince(anchor.at) < 5
         }
@@ -297,6 +341,12 @@ struct NavigationMapView: UIViewRepresentable {
         /// heading cone goes with it and isn't missed: the map turns to your heading, so a cone
         /// that always points up the screen says nothing.
         func mapView(_ mapView: MKMapView, viewFor annotation: any MKAnnotation) -> MKAnnotationView? {
+            if annotation is DestinationPin {
+                let view = mapView.dequeueReusableAnnotationView(withIdentifier: PinView.reuseID) as? PinView
+                    ?? PinView(annotation: annotation, reuseIdentifier: PinView.reuseID)
+                view.annotation = annotation
+                return view
+            }
             guard annotation is MKUserLocation else { return nil }
             let view = mapView.dequeueReusableAnnotationView(withIdentifier: PuckView.reuseID) as? PuckView
                 ?? PuckView(annotation: annotation, reuseIdentifier: PuckView.reuseID)
@@ -309,10 +359,12 @@ struct NavigationMapView: UIViewRepresentable {
             let renderer = MKPolylineRenderer(polyline: line)
             renderer.lineCap = .round
             renderer.lineJoin = .round
-            if let band = line as? BandLine {
+            if let piece = line as? PieceLine {
                 renderer.lineWidth = 9
-                renderer.strokeColor = UIColor(Color.aurora)
-                bandRenderers[band.slot] = renderer
+                let severity = severities[safe: piece.index] ?? 0
+                renderer.strokeColor = UIColor(PathOSPalette.color(PathOSPalette.traffic(severity: severity)))
+                drawnSeverity[piece.index] = severity
+                pieceRenderers[piece.index] = renderer
             } else {
                 renderer.lineWidth = 15
                 renderer.strokeColor = UIColor(Color.void).withAlphaComponent(0.9)
@@ -325,11 +377,16 @@ struct NavigationMapView: UIViewRepresentable {
     }
 }
 
-/// One stretch of the route. A subclass only so the renderer can tell them apart. Not a view and
-/// not on any actor: MapKit makes and keeps these itself.
-private nonisolated final class BandLine: MKPolyline {
-    var slot = 0
+/// One piece of the route, and where it sits along the whole of it. A subclass only so the
+/// renderer can tell them apart. Not a view and not on any actor: MapKit makes and keeps these.
+private nonisolated final class PieceLine: MKPolyline {
+    var index = 0
+    var startMetres = 0.0
+    var metres = 0.0
 }
+
+/// Where the line ends.
+private nonisolated final class DestinationPin: MKPointAnnotation {}
 
 /// Weak, because `CADisplayLink` keeps its target alive and the run loop keeps the link: a
 /// coordinator as its own target would outlive the map and go on firing.
@@ -373,6 +430,45 @@ private final class PuckView: MKAnnotationView {
         }
         layer.addSublayer(ring)
         layer.addSublayer(dot)
+    }
+
+    required init?(coder: NSCoder) {
+        super.init(coder: coder)
+    }
+}
+
+/// The pin at the end of the line: the launch screen's pin, amber, the same shape.
+private final class PinView: MKAnnotationView {
+    static let reuseID = "pathos.destination"
+
+    override init(annotation: (any MKAnnotation)?, reuseIdentifier: String?) {
+        super.init(annotation: annotation, reuseIdentifier: reuseIdentifier)
+        let scale = NavigationMapView.pinScale
+        let width = (PinShape.headRadius * 2 + 4) * scale
+        let height = (PinShape.height + 4) * scale
+        frame = CGRect(x: 0, y: 0, width: width, height: height)
+        canShowCallout = false
+        isEnabled = false
+        // Never hidden to make room for Apple's own labels: it's the one thing on the map that
+        // says where you're going.
+        displayPriority = .required
+        zPriority = .defaultSelected
+        // The point of the pin on the place, not its middle.
+        centerOffset = CGPoint(x: 0, y: -height / 2 + 2 * scale)
+
+        let tip = CGPoint(x: width / 2 / scale, y: height / scale - 2)
+        var transform = CGAffineTransform(scaleX: scale, y: scale)
+        let outline = CAShapeLayer()
+        outline.path = PinShape.path(tip: tip).cgPath.copy(using: &transform)
+        outline.fillColor = UIColor(Color.void).cgColor
+        let body = CAShapeLayer()
+        body.path = PinShape.path(tip: tip, inset: 1.5).cgPath.copy(using: &transform)
+        body.fillColor = UIColor(Color.amber).cgColor
+        body.fillRule = .evenOdd
+        for layer in [outline, body] {
+            layer.actions = ["position": NSNull(), "bounds": NSNull(), "path": NSNull()]
+            self.layer.addSublayer(layer)
+        }
     }
 
     required init?(coder: NSCoder) {

@@ -280,6 +280,12 @@ final class AppState {
     @ObservationIgnored var lastNavigationUpdate = Date.distantPast
     /// When the traffic on the route was last asked about, and the Lock Screen last redrawn.
     @ObservationIgnored var lastTrafficCheck = Date.distantPast
+    /// What's been measured of each piece of the route, for colouring it; which route that was;
+    /// and when the last few pieces were asked about.
+    @ObservationIgnored var trafficReadings: [Int: RouteTraffic.Reading] = [:]
+    @ObservationIgnored var trafficRouteID: UUID?
+    @ObservationIgnored var isMeasuringTraffic = false
+    @ObservationIgnored var lastTrafficBatch = Date.distantPast
     @ObservationIgnored var lastTripActivityUpdate = Date.distantPast
     @ObservationIgnored var lastTripActivityStep: Int?
     /// Today's log, kept to hand: distance is added on every fix.

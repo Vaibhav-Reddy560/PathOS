@@ -222,22 +222,6 @@ final class PlacesService {
         return (response.expectedTravelTime, response.distance)
     }
 
-    /// A stretch of road measured both ways at once: as it is now, and as it is when nothing is
-    /// in the way. The free-flow half is allowed to fail on its own — a stretch whose ordinary
-    /// self is unknown is shown as flowing, never guessed at.
-    func roadProbe(to destination: CLLocationCoordinate2D, from origin: CLLocation,
-                   now: Date = Date()) async -> RouteTraffic.Measure? {
-        async let live = roadTime(to: destination, from: origin, departingAt: now)
-        async let quiet = roadTime(to: destination, from: origin,
-                                   departingAt: RouteTraffic.quietHour(after: now))
-        guard let measured = await live else { return nil }
-        let freeFlow = await quiet
-        // Two requests can be routed down different roads; only times for the same road subtract.
-        let sameRoad = freeFlow.map { abs($0.metres - measured.metres) < max(50, measured.metres * 0.1) } ?? false
-        return RouteTraffic.Measure(metres: measured.metres, seconds: measured.seconds,
-                                    freeFlowSeconds: sameRoad ? freeFlow?.seconds : nil)
-    }
-
     /// A route with its turns, for following a leg on the map. Apple Maps has no two-wheeler
     /// mode, so a scooter or a bike taxi follows the car's route, which is the same road.
     func directions(to destination: CLLocationCoordinate2D, from origin: CLLocation,

@@ -33,7 +33,8 @@ struct WorldView: View {
             // usual map.
             if isDrivingALeg {
                 NavigationMapView(route: state.tripNav?.coordinates ?? [], trim: state.tripTrim,
-                                  bands: state.tripFlow?.shown(on: state.tripNav) ?? [],
+                                  traffic: state.tripFlow?.shown(on: state.tripNav) ?? [],
+                                  destination: legEnd,
                                   places: state.poiDisplay, here: state.location.location?.coordinate,
                                   isFollowing: $isFollowingRoute)
                     .ignoresSafeArea()
@@ -177,6 +178,13 @@ struct WorldView: View {
     /// On a leg you travel along a road for, with the map showing it — MapKit's map takes over.
     private var isDrivingALeg: Bool {
         isNavigating && state.isNavigatingByRoad
+    }
+
+    /// Where the leg you're on ends: the destination, or the station a first leg takes you to.
+    /// The pin goes where the line goes.
+    private var legEnd: CLLocationCoordinate2D? {
+        guard let trip = state.trip, let status = state.tripStatus else { return nil }
+        return trip.option.legs[safe: status.legIndex]?.endCoordinate
     }
 
     /// The deck steps aside while guiding, and waits for the launch view to lift.

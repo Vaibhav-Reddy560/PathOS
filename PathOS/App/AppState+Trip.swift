@@ -32,17 +32,18 @@ nonisolated struct TripTraffic: Equatable, Sendable {
     static let worthSaying = 4
 }
 
-/// How the traffic runs along the route you're on, in stretches of it.
+/// How the traffic runs along the route you're on, piece by piece.
 nonisolated struct TripFlow: Equatable, Sendable {
-    /// The route these stretches were measured on.
+    /// The route these pieces were measured on.
     var routeID: UUID
-    var bands: [RouteTraffic.Band]
+    /// How held up each piece is, 0…1, in the order `RouteTraffic.pieces` cuts the route.
+    var severities: [Double]
     var at: Date
 
-    /// The stretches, but only while they still belong to the route on screen. A re-route brings
+    /// The pieces, but only while they still belong to the route on screen. A re-route brings
     /// a new route with a new id, so old colours can't survive it.
-    func shown(on route: NavRoute?) -> [RouteTraffic.Band] {
-        route?.id == routeID ? bands : []
+    func shown(on route: NavRoute?) -> [Double] {
+        route?.id == routeID ? severities : []
     }
 }
 
@@ -144,6 +145,8 @@ extension AppState {
         tripTrim = nil
         tripTraffic = nil
         tripFlow = nil
+        trafficReadings = [:]
+        trafficRouteID = nil
         isRerouting = false
         navLegID = nil
         lastTripActivityStep = nil
@@ -232,6 +235,15 @@ extension AppState {
             Task { await checkTraffic(for: leg) }
         }
 
+        // The colours along the line, a few pieces at a time while it's on screen. Not on foot:
+        // a pavement has no traffic.
+        if isForeground, leg.mode != .walk, let nav = tripNav, navLegID == leg.id, !isRerouting,
+           !isMeasuringTraffic, now.timeIntervalSince(lastTrafficBatch) >= Self.trafficBatchInterval {
+            lastTrafficBatch = now
+            let travelled = tripMatch?.travelled ?? 0
+            Task { await measureTraffic(on: nav, travelled: travelled, now: now) }
+        }
+
         speakNextTurn(status: status, leg: leg)
 
         // The Lock Screen, kept as current as the map: at once when the turn changes, and every
@@ -298,17 +310,8 @@ extension AppState {
     /// as navigation apps do; otherwise the times on screen follow the traffic.
     private func checkTraffic(for leg: DoorToDoor.Leg, now: Date = Date()) async {
         guard let trip, let nav = tripNav, let match = tripMatch, let here = location.location else { return }
-        // Where the next stretch of road ends, worked out before anything is awaited.
-        let ahead = RouteProgress.point(nav.coordinates, from: match, after: RouteTraffic.probeMetres)
         isFetchingRoute = true
-        // One round trip for all of it: the whole of what's left, the stretch right in front of
-        // you, and what that whole stretch takes with nothing in the way, which is what says
-        // whether the road is held up or simply narrow.
-        async let whole = places.routes(to: leg.endCoordinate, from: here, byRoad: true)
-        async let stretch = probe(ahead, from: here, now: now)
-        async let quiet = places.roadTime(to: leg.endCoordinate, from: here,
-                                          departingAt: RouteTraffic.quietHour(after: now))
-        let (routes, probe, wholeFreeFlow) = await (whole, stretch, quiet)
+        let routes = await places.routes(to: leg.endCoordinate, from: here, byRoad: true)
         isFetchingRoute = false
         guard self.trip?.option.id == trip.option.id, navLegID == leg.id, let fastest = routes.first else { return }
 
@@ -355,29 +358,6 @@ extension AppState {
         if tripTraffic?.isSlow == true, !wasSlow, speaksDirections {
             say("Heavy traffic ahead. About \(delay) minutes longer than planned.")
         }
-
-        // Where the traffic is, as stretches of the line: the kilometre in front of you, and what
-        // comes after it. A probe that came back down a different road than the one being followed
-        // is thrown away rather than used to colour it.
-        let measured = ahead.flatMap { target -> RouteTraffic.Measure? in
-            guard let probe, abs(probe.metres - target.metres) < max(200, target.metres * 0.25) else { return nil }
-            return probe
-        }
-        let remainingMetres = same?.distanceMeters ?? match.remaining
-        // The whole of what's left, without the traffic: same guard, since a quiet-hour route
-        // that took a different road can't be subtracted from this one.
-        let remainingFreeFlow = wholeFreeFlow.flatMap { quiet -> TimeInterval? in
-            abs(quiet.metres - remainingMetres) < max(200, remainingMetres * 0.15) ? quiet.seconds : nil
-        }
-        tripFlow = TripFlow(
-            routeID: nav.id,
-            bands: RouteTraffic.bands(
-                routeMetres: match.total, travelledMetres: match.travelled, probe: measured,
-                remaining: RouteTraffic.Measure(metres: remainingMetres, seconds: yours,
-                                                freeFlowSeconds: remainingFreeFlow)
-            ),
-            at: now
-        )
     }
 
     /// Puts you on a route just fetched: where you are along it, which turn that makes next, and
@@ -390,11 +370,48 @@ extension AppState {
         tripStep = StepGuide.position(in: route.steps, at: here.coordinate)
     }
 
-    /// How long the stretch in front of you takes, when there is one to ask about.
-    private func probe(_ target: (coordinate: CLLocationCoordinate2D, metres: Double)?,
-                       from here: CLLocation, now: Date) async -> RouteTraffic.Measure? {
-        guard let target else { return nil }
-        return await places.roadProbe(to: target.coordinate, from: here, now: now)
+    /// Measures the next few pieces of the route that are due, and recolours the line.
+    ///
+    /// Each piece is asked about for now and, once, for a quiet hour, and drawn by how much longer
+    /// it's taking than the same road takes empty. A few at a time, nearest first: the stretch
+    /// you're about to drive is coloured within seconds of setting off and the far end within a
+    /// minute, without asking Apple Maps for more than it will answer.
+    private func measureTraffic(on nav: NavRoute, travelled: Double, now: Date) async {
+        if trafficRouteID != nav.id {
+            trafficRouteID = nav.id
+            trafficReadings = [:]
+        }
+        let pieces = RouteTraffic.pieces(routeMetres: RouteProgress.length(nav.coordinates))
+        let asks = RouteTraffic.due(pieces, readings: trafficReadings, travelledMetres: travelled, now: now)
+        guard !asks.isEmpty else { return }
+        isMeasuringTraffic = true
+        defer { isMeasuringTraffic = false }
+
+        let quiet = RouteTraffic.quietHour(after: now)
+        var answers: [(RouteTraffic.Request, (seconds: TimeInterval, metres: Double)?)] = []
+        await withTaskGroup(of: (RouteTraffic.Request, (seconds: TimeInterval, metres: Double)?).self) { group in
+            for ask in asks {
+                let piece = pieces[ask.piece]
+                let ends = RouteProgress.slice(nav.coordinates, from: piece.startMetres, to: piece.endMetres)
+                guard let from = ends.first, let to = ends.last else { continue }
+                group.addTask { [places] in
+                    let origin = CLLocation(latitude: from.latitude, longitude: from.longitude)
+                    let time = await places.roadTime(to: to, from: origin, departingAt: ask.ask == .now ? now : quiet)
+                    return (ask, time)
+                }
+            }
+            for await answer in group {
+                answers.append(answer)
+            }
+        }
+        // Re-routed while these were out: they belong to a line that's no longer on screen.
+        guard trafficRouteID == nav.id, tripNav?.id == nav.id else { return }
+        for (ask, time) in answers {
+            trafficReadings[ask.piece] = RouteTraffic.record(time, for: ask.ask, on: pieces[ask.piece],
+                                                             into: trafficReadings[ask.piece] ?? .init(), at: now)
+        }
+        tripFlow = TripFlow(routeID: nav.id,
+                            severities: RouteTraffic.severities(trafficReadings, count: pieces.count), at: now)
     }
 
     /// The plan's status, timed instead by what's left of the route you're on in today's traffic,
@@ -411,6 +428,8 @@ extension AppState {
     static let offRouteSamplesBeforeReroute = 2
     /// How often the traffic on the route is asked about.
     static let trafficCheckInterval: TimeInterval = 60
+    /// How often the next few pieces of the line are measured for their colour.
+    static let trafficBatchInterval: TimeInterval = 8
 
     /// Where you've got to, what to do next, and whether the plan is slipping. Called on the
     /// foreground loop and on every background wake, so it keeps working in your pocket.

@@ -1,43 +1,61 @@
 import Foundation
 
-/// How the traffic runs along the road ahead, in stretches of the route.
+/// How the traffic runs along the route, piece by piece.
 ///
 /// Apple Maps publishes no per-street traffic, but it will time any stretch of road for any
-/// departure. So PathOS asks twice: once for the next kilometre and once for the whole of what's
-/// left, and takes the difference. That gives two stretches — what's immediately ahead, and what
-/// comes after it.
+/// departure. So the route is cut into pieces of about half a kilometre to a kilometre and each is
+/// asked about on its own: how long it takes now, and — once, since it doesn't change — how long
+/// it takes at half three in the morning, which is Apple Maps' own answer for the same road with
+/// nothing on it. Each piece is coloured by the one against the other.
 ///
-/// Taking the difference is the whole point. A clear kilometre in front of a jam averages out to
-/// "slow" over the whole remaining route, which is exactly the answer that would send you into it.
+/// Both halves of that matter.
 ///
-/// Each stretch is then judged against *itself*, not against a speed. Asking how fast a road is
-/// moving sounds like the plainest measure there is, and it is wrong: the lanes around Jayanagar
-/// run at 18 km/h at four in the morning with nothing on them, because of the speed humps and a
-/// junction every hundred metres. Judged by speed alone the whole of a city's side streets is a
-/// permanent jam. So every stretch is asked about a second time for a quiet hour, and what's
-/// reported is how much longer it is taking than the same road takes when nothing is in the way.
+/// **Pieces, not the route.** An earlier version timed the next kilometre and the whole of the
+/// rest, and so drew at most two colours. A jam on the Outer Ring Road then tinted all eight
+/// kilometres orange, including the empty lanes at either end, while a short trip down the same
+/// lanes drew green at the same moment. A colour has to belong to the road it's drawn on.
+///
+/// **Against itself, not against a speed.** The lanes around Jayanagar run at 18 km/h at four in
+/// the morning with nothing on them, because of the speed humps and a junction every hundred
+/// metres. Judged by speed alone the whole of a city's side streets is a permanent jam.
 nonisolated enum RouteTraffic {
 
-    /// What one stretch of road measured.
-    nonisolated struct Measure: Equatable, Sendable {
-        var metres: Double
-        /// How long it takes in the traffic on it now.
-        var seconds: TimeInterval
-        /// How long the same stretch takes when nothing is in the way. Nil when Apple Maps
-        /// wouldn't say, and then the stretch is reported as flowing rather than guessed at.
-        var freeFlowSeconds: TimeInterval?
+    /// A fixed piece of the route. Fixed for as long as the route is: a re-route brings new ones.
+    nonisolated struct Piece: Equatable, Sendable {
+        var startMetres: Double
+        var endMetres: Double
 
-        /// What's left of this stretch once a shorter one inside it has been accounted for.
-        /// Free flow subtracts only when both halves know it: the rest of a road can't be timed
-        /// against a baseline that was never measured for the part being taken off it.
-        func less(_ part: Measure) -> Measure {
-            var freeFlow: TimeInterval?
-            if let whole = freeFlowSeconds, let inside = part.freeFlowSeconds {
-                freeFlow = whole - inside
-            }
-            return Measure(metres: metres - part.metres, seconds: seconds - part.seconds,
-                           freeFlowSeconds: freeFlow)
+        var metres: Double { endMetres - startMetres }
+    }
+
+    /// What's been measured of one piece.
+    nonisolated struct Reading: Equatable, Sendable {
+        /// How long it takes in the traffic now, and when that was asked.
+        var seconds: TimeInterval?
+        var measuredAt: Date?
+        /// How long it takes with nothing in the way. Asked once per route: it doesn't change.
+        var freeFlowSeconds: TimeInterval?
+        var freeFlowMisses = 0
+        /// Apple Maps answered for a different road than this piece — a one-way, or a U-turn on a
+        /// divided road. Not asked about again, and never coloured by its own guess.
+        var isUnmeasurable = false
+
+        /// How held up the piece is, once both halves are known.
+        var severity: Double? {
+            guard !isUnmeasurable, let seconds, let freeFlowSeconds else { return nil }
+            return RouteTraffic.severity(seconds: seconds, freeFlow: freeFlowSeconds)
         }
+    }
+
+    /// Which of the two things a piece is asked.
+    nonisolated enum Ask: Equatable, Sendable {
+        case now
+        case freeFlow
+    }
+
+    nonisolated struct Request: Equatable, Sendable {
+        var piece: Int
+        var ask: Ask
     }
 
     nonisolated enum Flow: String, Equatable, Sendable {
@@ -71,37 +89,35 @@ nonisolated enum RouteTraffic {
         }
     }
 
-    /// A stretch of the route, as fractions of the whole of it, so it composes with the part
-    /// already behind you without being worked out again.
-    nonisolated struct Band: Equatable, Sendable {
-        var start: Double
-        var end: Double
-        /// 0 while the road runs as it always does, up to 1 when it's as held up as PathOS shows.
-        var severity: Double
+    // MARK: Cutting the route
 
-        var flow: Flow { Flow(severity: severity) }
+    /// Never more pieces than this: each costs a request to keep fresh.
+    static let pieceLimit = 12
+    /// Nor shorter than this. Below it the time for a piece is mostly the junctions at its ends.
+    static let shortestPiece = 500.0
+
+    /// The route cut into equal pieces. The same route always cuts the same way, so the map and
+    /// the measuring agree on which piece is which without being told.
+    static func pieces(routeMetres: Double) -> [Piece] {
+        guard routeMetres > 0 else { return [] }
+        let count = max(1, min(pieceLimit, Int(routeMetres / shortestPiece)))
+        let length = routeMetres / Double(count)
+        return (0..<count).map { Piece(startMetres: Double($0) * length, endMetres: Double($0 + 1) * length) }
     }
 
-    /// How far ahead the road's speed is asked about.
-    static let probeMetres = 1_000.0
-    /// Shorter than this isn't worth a colour of its own.
-    static let shortestBand = 200.0
-    /// Two stretches this close in degree are one stretch.
-    static let sameEnough = 0.12
+    // MARK: What a measurement means
 
-    /// Slower than free flow by less than this is the road being the road, not traffic.
-    /// Apple Maps' own times drift by a few per cent between identical requests, and a junction
-    /// or a light that happens to be red costs more than that on a short stretch.
-    static let freeFlowing = 1.15
-    /// Taking well over twice as long as it should is as bad as the colour goes. Past this the
-    /// road is stopped and there is nothing more to say about it.
-    static let jammed = 2.2
+    /// Slower than free flow by less than this is the road being the road, not traffic: a road
+    /// still moving at four-fifths of its empty speed is what every map draws green.
+    static let freeFlowing = 1.25
+    /// Taking twice as long as it should — half its empty speed — is as bad as the colour goes.
+    static let jammed = 2.0
 
     /// How badly a stretch is held up, 0…1.
     ///
     /// Zero means "running as it always does", which is not the same as fast: a lane that never
-    /// exceeds 18 km/h scores zero when it is doing 18 km/h, and a motorway that normally does
-    /// 80 scores badly at 40. That is the whole difference between this and measuring speed.
+    /// exceeds 18 km/h scores zero when it is doing 18 km/h, and a main road that normally does
+    /// 50 scores badly at 20.
     static func severity(seconds: TimeInterval, freeFlow: TimeInterval?) -> Double {
         guard let freeFlow, seconds > 0, freeFlow > 0 else { return 0 }
         let ratio = seconds / freeFlow
@@ -109,33 +125,87 @@ nonisolated enum RouteTraffic {
         return min(1, (ratio - freeFlowing) / (jammed - freeFlowing))
     }
 
-    static func severity(of measure: Measure) -> Double {
-        severity(seconds: measure.seconds, freeFlow: measure.freeFlowSeconds)
+    /// The degree each piece is drawn at. A piece not yet measured, or that can't be, takes the
+    /// milder of its measured neighbours rather than a guess of its own — a gap in a jam shouldn't
+    /// read as a clear road, and a gap between two clear pieces shouldn't read as anything else.
+    /// With nothing measured on one side of it, it reads as flowing, which is what PathOS drew
+    /// before it knew.
+    static func severities(_ readings: [Int: Reading], count: Int) -> [Double] {
+        let known = (0..<count).map { readings[$0]?.severity }
+        return known.indices.map { index in
+            if let measured = known[index] { return measured }
+            let before = known[..<index].last { $0 != nil } ?? nil
+            let after = known[(index + 1)...].first { $0 != nil } ?? nil
+            guard let before, let after else { return 0 }
+            return min(before, after)
+        }
     }
 
-    /// The route ahead split into stretches. Without a probe, or with too little left after it,
-    /// the whole of what remains is one stretch.
-    static func bands(routeMetres: Double, travelledMetres: Double,
-                      probe: Measure?, remaining: Measure) -> [Band] {
-        guard routeMetres > 0 else { return [] }
-        let head = min(1, max(0, travelledMetres / routeMetres))
-        let whole = Band(start: head, end: 1, severity: severity(of: remaining))
-        guard let probe, probe.metres > 0, probe.seconds > 0 else { return [whole] }
+    // MARK: What to ask next
 
-        // What's left after the stretch just measured — not the whole of it again.
-        let rest = remaining.less(probe)
-        guard rest.metres >= shortestBand, rest.seconds > 0 else { return [whole] }
+    /// Pieces starting within this of you are kept fresh every minute; further on, every two and
+    /// a half. Traffic a few kilometres off will have changed by the time you reach it anyway.
+    static let nearMetres = 3_000.0
+    static let freshNear: TimeInterval = 60
+    static let freshFar: TimeInterval = 150
+    /// Requests in one go. Apple Maps throttles an app that asks for much more than one a second.
+    static let batchSize = 4
 
-        let boundary = min(1, head + probe.metres / routeMetres)
-        guard boundary > head else { return [whole] }
-        let near = severity(of: probe)
-        let far = severity(of: rest)
-        // A clear kilometre in front of a clear rest is one line, not two.
-        guard abs(near - far) > sameEnough else {
-            return [Band(start: head, end: 1, severity: max(near, far))]
+    /// The next few questions worth asking, nearest piece first, so the stretch you're about to
+    /// drive is coloured within seconds of setting off and the far end within a minute. Pieces
+    /// wholly behind you are never asked about again.
+    static func due(_ pieces: [Piece], readings: [Int: Reading], travelledMetres: Double,
+                    now: Date, limit: Int = batchSize) -> [Request] {
+        var asks: [Request] = []
+        for (index, piece) in pieces.enumerated() where piece.endMetres > travelledMetres {
+            let reading = readings[index] ?? Reading()
+            guard !reading.isUnmeasurable else { continue }
+            if reading.freeFlowSeconds == nil {
+                asks.append(Request(piece: index, ask: .freeFlow))
+            }
+            let freshFor = piece.startMetres - travelledMetres < nearMetres ? freshNear : freshFar
+            if reading.measuredAt.map({ now.timeIntervalSince($0) >= freshFor }) ?? true {
+                asks.append(Request(piece: index, ask: .now))
+            }
+            if asks.count >= limit { break }
         }
-        return [Band(start: head, end: boundary, severity: near),
-                Band(start: boundary, end: 1, severity: far)]
+        return Array(asks.prefix(limit))
+    }
+
+    /// Free flow is asked for at most this many times before a piece is left alone.
+    static let freeFlowTries = 2
+
+    /// A reading with one answer folded in.
+    ///
+    /// An answer for a different road — much longer or shorter than the piece — marks the piece
+    /// unmeasurable rather than colour it with the time of a street it isn't. No answer at all
+    /// is waited out: the live time is asked again when it's next due, and free flow is given a
+    /// couple of tries.
+    static func record(_ answer: (seconds: TimeInterval, metres: Double)?, for ask: Ask,
+                       on piece: Piece, into reading: Reading, at now: Date) -> Reading {
+        var reading = reading
+        guard let answer, answer.seconds > 0 else {
+            switch ask {
+            case .now:
+                reading.measuredAt = now
+            case .freeFlow:
+                reading.freeFlowMisses += 1
+                if reading.freeFlowMisses >= freeFlowTries { reading.isUnmeasurable = true }
+            }
+            return reading
+        }
+        guard abs(answer.metres - piece.metres) <= max(150, piece.metres * 0.3) else {
+            reading.isUnmeasurable = true
+            return reading
+        }
+        switch ask {
+        case .now:
+            reading.seconds = answer.seconds
+            reading.measuredAt = now
+        case .freeFlow:
+            reading.freeFlowSeconds = answer.seconds
+        }
+        return reading
     }
 
     /// A time the roads are empty, for asking Apple Maps what a stretch takes without traffic.

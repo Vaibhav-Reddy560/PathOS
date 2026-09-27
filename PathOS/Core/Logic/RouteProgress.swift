@@ -74,33 +74,40 @@ nonisolated enum RouteProgress {
         return Match(segment: found.segment, point: point, travelled: travelled, total: total, offset: found.offset)
     }
 
-    /// The point `metres` further along the route, and how far that turned out to be — shorter
-    /// when the route ends first. Where the speed of the road ahead is asked about.
-    static func point(_ route: [CLLocationCoordinate2D], from match: Match,
-                      after metres: Double) -> (coordinate: CLLocationCoordinate2D, metres: Double)? {
-        guard route.count > 1, metres > 0, match.segment + 1 < route.count else { return nil }
+    /// How long the route is, in the same metres every other measure along it uses.
+    static func length(_ route: [CLLocationCoordinate2D]) -> Double {
+        zip(route, route.dropFirst()).reduce(0) { $0 + GeoMath.distance(from: $1.0, to: $1.1) }
+    }
 
+    /// The part of the route between two distances along it, cut exactly at both ends. How the
+    /// route is split into pieces that are each measured, and drawn, on their own.
+    static func slice(_ route: [CLLocationCoordinate2D], from start: Double, to end: Double) -> [CLLocationCoordinate2D] {
+        guard route.count > 1, end > start else { return [] }
         func between(_ a: CLLocationCoordinate2D, _ b: CLLocationCoordinate2D, _ t: Double) -> CLLocationCoordinate2D {
-            CLLocationCoordinate2D(latitude: a.latitude + (b.latitude - a.latitude) * t,
-                                   longitude: a.longitude + (b.longitude - a.longitude) * t)
+            let t = min(1, max(0, t))
+            return CLLocationCoordinate2D(latitude: a.latitude + (b.latitude - a.latitude) * t,
+                                          longitude: a.longitude + (b.longitude - a.longitude) * t)
         }
-
-        // The rest of the segment you're on, then segment by segment.
-        var walked = GeoMath.distance(from: match.point, to: route[match.segment + 1])
-        if walked >= metres {
-            return (between(match.point, route[match.segment + 1], metres / max(walked, 0.001)), metres)
-        }
-        var index = match.segment + 1
-        while index + 1 < route.count {
-            let step = GeoMath.distance(from: route[index], to: route[index + 1])
-            if walked + step >= metres {
-                return (between(route[index], route[index + 1], (metres - walked) / max(step, 0.001)), metres)
-            }
+        var slice: [CLLocationCoordinate2D] = []
+        var walked = 0.0
+        for index in 0..<(route.count - 1) {
+            let a = route[index], b = route[index + 1]
+            let step = GeoMath.distance(from: a, to: b)
+            let from = walked
             walked += step
-            index += 1
+            // Wholly before the start.
+            guard walked > start else { continue }
+            if slice.isEmpty {
+                slice.append(between(a, b, step > 0 ? (start - from) / step : 0))
+            }
+            if walked >= end {
+                slice.append(between(a, b, step > 0 ? (end - from) / step : 1))
+                return slice
+            }
+            slice.append(b)
         }
-        // The route ends first: its end, and how far that is.
-        return (route[route.count - 1], walked)
+        // The route ended first: the slice runs to its end.
+        return slice
     }
 
     /// The line still ahead of you, starting where you are on it — which is all the map draws.
