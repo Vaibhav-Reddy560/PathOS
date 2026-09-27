@@ -49,8 +49,8 @@
   </g>
   <g opacity="1">
     <animate attributeName="opacity" values="0;1" dur="0.5s" begin="0.44999999999999996s" fill="freeze"/>
-    <rect x="44" y="210" width="34" height="34" rx="11" fill="#FF6B5F"/>
-    <circle cx="61" cy="227" r="17" fill="none" stroke="#FF6B5F" stroke-opacity="0.45" stroke-width="2">
+    <rect x="44" y="210" width="34" height="34" rx="11" fill="#FF4438"/>
+    <circle cx="61" cy="227" r="17" fill="none" stroke="#FF4438" stroke-opacity="0.45" stroke-width="2">
       <animate attributeName="r" values="17;26;17" dur="3.4s" begin="1.95s" repeatCount="indefinite"/>
       <animate attributeName="stroke-opacity" values="0.45;0;0.45" dur="3.4s" begin="1.95s" repeatCount="indefinite"/>
     </circle>
@@ -59,7 +59,7 @@
     <text x="104" y="244" font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Text', system-ui, sans-serif"
           font-size="15" fill="#8E9B98">Urgent: location is off</text>
     <text x="660" y="232" font-family="ui-monospace, SFMono-Regular, Menlo, monospace"
-          font-size="15" fill="#FF6B5F" opacity="0.85">#FF6B5F</text>
+          font-size="15" fill="#FF4438" opacity="0.85">#FF4438</text>
   </g>
   <g opacity="1">
     <animate attributeName="opacity" values="0;1" dur="0.5s" begin="0.6s" fill="freeze"/>

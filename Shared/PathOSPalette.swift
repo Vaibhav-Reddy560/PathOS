@@ -11,7 +11,7 @@ nonisolated enum PathOSPalette {
     static let aurora: UInt32 = 0xB8F36B
     static let ion: UInt32 = 0x65E6D0
     static let amber: UInt32 = 0xFFBF69
-    static let coral: UInt32 = 0xFF6B5F
+    static let coral: UInt32 = 0xFF4438
 
     static func color(_ hex: UInt32) -> Color {
         Color(

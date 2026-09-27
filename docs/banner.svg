@@ -505,8 +505,8 @@
       <animate attributeName="stroke-dashoffset" values="324;0" dur="0.8s" begin="0.35s" fill="freeze"
                calcMode="spline" keySplines="0.25 0 0.15 1" keyTimes="0;1"/>
     </path>
-    <!-- The ride across the city: the world's own colour, not yours. -->
-    <path d="M 420 344 L 860 344" fill="none" stroke="#65E6D0" stroke-width="9" stroke-linecap="round"
+    <!-- The ride across the city. Aurora like the rest: a route is always yours. -->
+    <path d="M 420 344 L 860 344" fill="none" stroke="#B8F36B" stroke-width="9" stroke-linecap="round"
           stroke-dasharray="440" stroke-dashoffset="0">
       <animate attributeName="stroke-dashoffset" values="440;0" dur="0.9s" begin="1.05s" fill="freeze"
                calcMode="spline" keySplines="0.25 0 0.15 1" keyTimes="0;1"/>
@@ -519,10 +519,10 @@
     </path>
 
     <!-- Where the two legs change over, so the journey reads as three things and not one line. -->
-    <circle cx="420" cy="344" r="7" fill="#090B0D" stroke="#65E6D0" stroke-width="3" opacity="1">
+    <circle cx="420" cy="344" r="7" fill="#090B0D" stroke="#B8F36B" stroke-width="3" opacity="1">
       <animate attributeName="opacity" values="0;0;1" keyTimes="0;0.74;1" dur="1.45s" begin="0s" fill="freeze"/>
     </circle>
-    <circle cx="860" cy="344" r="7" fill="#090B0D" stroke="#65E6D0" stroke-width="3" opacity="1">
+    <circle cx="860" cy="344" r="7" fill="#090B0D" stroke="#B8F36B" stroke-width="3" opacity="1">
       <animate attributeName="opacity" values="0;0;1" keyTimes="0;0.84;1" dur="2.3s" begin="0s" fill="freeze"/>
     </circle>
 

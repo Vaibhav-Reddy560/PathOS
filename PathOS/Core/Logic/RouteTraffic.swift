@@ -16,7 +16,8 @@ nonisolated enum RouteTraffic {
         case slow
         case heavy
 
-        /// Aurora, amber, coral — the palette's own meanings: yours, worth a glance, urgent.
+        /// Aurora, amber, coral — the palette's own meanings: moving, worth a glance, urgent.
+        /// Coral is PathOS's one red, which is the colour a jam has to be.
         var role: SignalRole {
             switch self {
             case .clear: .you

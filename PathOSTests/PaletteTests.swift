@@ -11,7 +11,7 @@ struct PaletteTests {
         #expect(PathOSPalette.aurora == 0xB8F36B)
         #expect(PathOSPalette.ion == 0x65E6D0)
         #expect(PathOSPalette.amber == 0xFFBF69)
-        #expect(PathOSPalette.coral == 0xFF6B5F)
+        #expect(PathOSPalette.coral == 0xFF4438)
     }
 
     @Test func rolesKeepTheirMeaning() {

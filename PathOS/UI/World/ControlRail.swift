@@ -6,6 +6,7 @@ struct ControlRail: View {
     let scope: Namespace.ID
 
     @Environment(AppState.self) private var state
+    @State private var isShowingLayers = false
 
     var body: some View {
         VStack(spacing: 10) {
@@ -34,72 +35,28 @@ struct ControlRail: View {
                     RailButton(symbol: "waveform", label: "Ask PathOS") {
                         state.activateAssistant(listen: true)
                     }
-                    layersMenu
+                    layersButton
                 }
             }
         }
         .buttonBorderShape(.circle)
     }
 
-    private var layersMenu: some View {
-        Menu {
-            // Apple's own map, under PathOS's: off by default, and as much of it as you want.
-            Menu("Apple Maps places", systemImage: "mappin.circle") {
-                Toggle("Everything", systemImage: "globe.asia.australia", isOn: everything)
-                Section("Or just these") {
-                    ForEach(POIGroups.each, id: \.rawValue) { group in
-                        Toggle(group.label, systemImage: group.symbol, isOn: places(group))
-                            .disabled(state.poiDisplay.showsEverything)
-                    }
-                }
-            }
-            Section("What PathOS shows") {
-                Toggle("Walk rings", systemImage: "circle.dotted", isOn: layer(.rings))
-                Toggle("Places", systemImage: "mappin", isOn: layer(.places))
-                Toggle("Events", systemImage: "ticket", isOn: layer(.events))
-                Toggle("Your memories", systemImage: "bookmark", isOn: layer(.memories))
-                Toggle("Bus stops & metro", systemImage: "bus", isOn: layer(.transit))
-            }
+    /// The panel stays open while you set the map up, rather than closing on every tap.
+    private var layersButton: some View {
+        Button {
+            isShowingLayers = true
         } label: {
-            RailGlyph(symbol: "square.3.layers.3d", role: .world)
+            RailGlyph(symbol: "square.3.layers.3d", role: state.poiDisplay.isOn ? .you : .world)
         }
+        .buttonStyle(.plain)
         .glassEffect(.regular.interactive(), in: .circle)
         .accessibilityLabel("Map layers")
-    }
-
-    /// Everything Apple knows, which replaces any chosen kinds rather than adding to them.
-    private var everything: Binding<Bool> {
-        Binding {
-            state.poiDisplay.showsEverything
-        } set: { isOn in
-            state.poiDisplay.showsEverything = isOn
-            if isOn {
-                state.poiDisplay.groups = []
-            }
-        }
-    }
-
-    private func places(_ group: POIGroups) -> Binding<Bool> {
-        Binding {
-            state.poiDisplay.groups.contains(group)
-        } set: { isOn in
-            if isOn {
-                state.poiDisplay.groups.insert(group)
-            } else {
-                state.poiDisplay.groups.remove(group)
-            }
-        }
-    }
-
-    private func layer(_ layer: MapLayers) -> Binding<Bool> {
-        Binding {
-            state.mapLayers.contains(layer)
-        } set: { isOn in
-            if isOn {
-                state.mapLayers.insert(layer)
-            } else {
-                state.mapLayers.remove(layer)
-            }
+        .popover(isPresented: $isShowingLayers, arrowEdge: .trailing) {
+            MapLayersPanel()
+                // A popover on the map, anchored to its own button: as a sheet it would cover the
+                // map you are setting up.
+                .presentationCompactAdaptation(.popover)
         }
     }
 }

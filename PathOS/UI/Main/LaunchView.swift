@@ -118,8 +118,9 @@ private struct LaunchStage: View {
             var route = Path()
             route.addLines(scene.route)
 
-            // The route draws itself, dashed like the one in the icon — and in two colours, because
-            // this is a PathOS journey: your own legs at each end, the ride across the middle.
+            // The route draws itself, dashed like the one in the icon. The middle of a PathOS
+            // journey is the part you're carried, and it's drawn solid rather than in another
+            // colour: the whole route is yours, so the whole route is aurora.
             let drawn = ease(t, from: Self.routeStart, over: Self.routeEnd - Self.routeStart, curve: .inOut)
             if drawn > 0 {
                 let whole = route.trimmedPath(from: 0, to: drawn)
@@ -129,8 +130,8 @@ private struct LaunchStage: View {
                                style: StrokeStyle(lineWidth: 4, lineCap: .round, lineJoin: .round, dash: [9, 7]))
                 if drawn > Self.ride.lowerBound {
                     let ride = route.trimmedPath(from: Self.ride.lowerBound, to: min(drawn, Self.ride.upperBound))
-                    context.stroke(ride, with: .color(.ion),
-                                   style: StrokeStyle(lineWidth: 4, lineCap: .round, lineJoin: .round, dash: [9, 7]))
+                    context.stroke(ride, with: .color(.aurora),
+                                   style: StrokeStyle(lineWidth: 4, lineCap: .round, lineJoin: .round))
                 }
             }
 
