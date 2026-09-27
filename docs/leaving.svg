@@ -7,11 +7,11 @@
   </text>
   
   <g>
-    <rect x="140" y="108" width="330" height="14" rx="7" fill="#65E6D0" opacity="0.28"/>
-    <rect x="140" y="108" width="330" height="14" rx="7" fill="#65E6D0">
+    <rect x="140" y="108" width="330" height="14" rx="7" fill="#8E9B98" opacity="0.28"/>
+    <rect x="140" y="108" width="330" height="14" rx="7" fill="#8E9B98">
       <animate attributeName="width" values="0;330" dur="0.8s" begin="0.3s" fill="freeze"/>
     </rect>
-    <text x="305" y="152" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Text', system-ui, sans-serif" font-size="15" fill="#65E6D0">in good time</text>
+    <text x="305" y="152" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Text', system-ui, sans-serif" font-size="15" fill="#8E9B98">in good time</text>
   </g>
   <g>
     <rect x="470" y="108" width="330" height="14" rx="7" fill="#B8F36B" opacity="0.28"/>

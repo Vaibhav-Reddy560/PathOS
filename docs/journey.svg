@@ -14,7 +14,7 @@
     </g>
     <g>
       <line x1="432" y1="120" x2="768" y2="120" stroke="#090B0D" stroke-width="16" stroke-linecap="round"/>
-      <line x1="432" y1="120" x2="768" y2="120" stroke="#65E6D0" stroke-width="9" stroke-linecap="round" 
+      <line x1="432" y1="120" x2="768" y2="120" stroke="#FF4438" stroke-width="9" stroke-linecap="round" 
             stroke-dashoffset="0" pathLength="100">
         <animate attributeName="stroke-dasharray" values="0 100;100 0" dur="0.9s" begin="1.2s" fill="freeze"/>
       </line>
@@ -39,13 +39,13 @@
     </g>
     <g>
       <circle cx="432" cy="120" r="17" fill="#090B0D"/>
-      <circle cx="432" cy="120" r="10" fill="#65E6D0"/>
+      <circle cx="432" cy="120" r="10" fill="#FF4438"/>
       <text x="432" y="166" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Text', system-ui, sans-serif"
             font-size="19" font-weight="600" fill="#E8F0ED">Jayadeva Hospital</text>
       <text x="432" y="196" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Text', system-ui, sans-serif"
             font-size="15" fill="#8E9B98">Green Line to National College</text>
       <text x="432" y="220" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Text', system-ui, sans-serif"
-            font-size="14" fill="#65E6D0" opacity="0.9">7 stops · 22 min · about ₹30</text>
+            font-size="14" fill="#FF4438" opacity="0.9">7 stops · 22 min · about ₹30</text>
     </g>
     <g>
       <circle cx="768" cy="120" r="17" fill="#090B0D"/>
