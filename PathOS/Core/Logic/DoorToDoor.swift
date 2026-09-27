@@ -118,10 +118,15 @@ nonisolated enum DoorToDoor {
     /// Asked for each road or walking leg. Returning nil falls back to a rough estimate.
     typealias RoadTimes = @Sendable (CLLocationCoordinate2D, CLLocationCoordinate2D, Bool) async -> RoadHop?
 
+    /// Nearer than this and there is no journey to plan.
+    ///
+    /// It is `TripGuide.placeRadius` on purpose, and the two have to stay equal. That radius is
+    /// how close counts as having reached the end of a leg, so a way started any nearer than it
+    /// reports "You've arrived" on its very first fix: the banner never appears, the map never
+    /// takes over, and tapping Follow this way looks like it did nothing at all. What helps at
+    /// this range is a pointer, not a route.
+    static let tooCloseToRoute = TripGuide.placeRadius
     /// Far enough that you'd take something to the station rather than walk.
-    /// Nearer than this and there is no journey to plan: you can see it from where you stand, and
-    /// what helps is a pointer, not a route.
-    static let tooCloseToRoute = 120.0
     static let walkToStation = 1_100.0
     /// Getting in, buying a token and reaching the platform.
     static let stationEntryMinutes = 4
