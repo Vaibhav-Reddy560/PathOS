@@ -35,18 +35,36 @@ xcodebuild test -scheme PathOS -destination 'platform=iOS Simulator,name=iPhone 
 
 1. **Turn on Developer Mode.** On the iPhone: **Settings → Privacy & Security → Developer Mode → On**. The phone restarts.
 2. **Connect the phone.** Plug it in with USB and tap **Trust**.
-3. **Build and install.**
-   - The easiest route: `open PathOS.xcodeproj`, pick your iPhone as the run destination, then press **⌘R**.
-   - Command-line route:
-     ```sh
-     xcrun devicectl list devices            # copy your iPhone's identifier
-     xcodebuild -scheme PathOS -destination 'platform=iOS,id=<DEVICE_ID>' -allowProvisioningUpdates build
-     xcrun devicectl device install app --device <DEVICE_ID> \
-       ~/Library/Developer/Xcode/DerivedData/PathOS-*/Build/Products/Debug-iphoneos/PathOS.app
-     ```
+3. **Build and install.** One command, from the project folder:
+   ```sh
+   ./reinstall.sh
+   ```
+   It finds the phone, builds with a fresh certificate and installs over the top. If it can't find
+   the phone it says what to check. Or `open PathOS.xcodeproj`, pick your iPhone and press **⌘R**.
 4. **Trust your developer certificate.** The first time only, go to **Settings → General → VPN & Device Management → your Apple ID → Trust**.
 
-> **Free Apple ID:** the app stops launching after **7 days**. Repeat step 3 to refresh it. Your data is kept.
+## Every seven days
+
+A free Apple ID signs an app for **7 days**. After that it won't open — the phone says
+*"PathOS is no longer available"*. To put it back:
+
+```sh
+cd "/Volumes/Extra Storage/Projects/PathOS App"
+./reinstall.sh
+```
+
+Plug the phone in (or have it on the same Wi-Fi, unlocked), and that's the whole job — about a
+minute. **Nothing you have saved is lost**: installing over the top keeps the app's own storage, so
+your places, memories and photos, events, weekly schedule, trips, mail, scans and expenses are all
+still there. Only *deleting* the app loses them, which is what **Settings → Your data** is for.
+
+You'll have to sign in to Gmail again, though — Google signs test apps out every seven days too.
+
+If the script can't find the phone:
+- Plug it in with a cable that carries data, unlock it, and tap **Trust**.
+- **Settings → Privacy & Security → Developer Mode** must be on (the phone restarts).
+- If it installs but won't open, trust the certificate again under **Settings → General → VPN &
+  Device Management**.
 
 ## 4. First run on the phone
 
