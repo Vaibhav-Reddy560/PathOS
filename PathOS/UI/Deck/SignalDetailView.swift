@@ -170,23 +170,24 @@ struct SignalDetailView: View {
         // following a way somewhere, planning another only muddles it.
         let isHere = state.isAt(coordinate, within: signal.start == nil ? AppState.atPlaceRadius : LeaveOnTime.arrivalRadius)
         return VStack(spacing: 10) {
-            if !isHere {
+            if !isHere, !state.isTravelling {
                 Button {
-                    state.selectedSignalID = nil
-                    state.startCompass(to: CompassTarget(id: signal.id, name: signal.title, latitude: signal.latitude, longitude: signal.longitude))
+                    state.showWays(to: signal.title, at: coordinate, id: "signal:\(signal.id)", arriveBy: signal.start)
                 } label: {
-                    Label("Point me there", systemImage: "location.north.line.fill")
+                    Label("Take me there", systemImage: "arrow.triangle.turn.up.right.diamond.fill")
                         .font(.headline)
                         .frame(maxWidth: .infinity, minHeight: 36)
                 }
                 .pathPrimaryAction()
             }
 
-            if !isHere, !state.isTravelling {
+            // Close enough to walk: the pointer is for finding the exact spot.
+            if !isHere, state.pointerIsUseful(to: coordinate) {
                 Button {
-                    state.showWays(to: signal.title, at: coordinate, id: "signal:\(signal.id)", arriveBy: signal.start)
+                    state.selectedSignalID = nil
+                    state.startCompass(to: CompassTarget(id: signal.id, name: signal.title, latitude: signal.latitude, longitude: signal.longitude))
                 } label: {
-                    Label("Ways to get there", systemImage: "arrow.triangle.turn.up.right.diamond.fill")
+                    Label("Point me there", systemImage: "location.north.line.fill")
                         .frame(maxWidth: .infinity, minHeight: 32)
                 }
                 .pathSecondaryAction()

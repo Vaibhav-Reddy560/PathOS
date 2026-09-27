@@ -6,6 +6,8 @@ nonisolated struct AmbientAlert: Identifiable, Equatable, Sendable {
         case requestLocation
         case openSettings
         case pointTo(CompassTarget)
+        /// The ways of actually getting there, which is what a place you aren't at needs.
+        case waysTo(CompassTarget)
         case endGuidance
         case endJourney
         case endTrip
@@ -219,7 +221,8 @@ nonisolated enum AmbientAlerts {
             if untilStart >= 0 && untilStart <= eventSoonWindow {
                 var buttons: [AmbientAlert.Button] = []
                 if let target = target(for: event) {
-                    buttons.append(AmbientAlert.Button(title: "Point me there", symbol: "location.north.line.fill", action: .pointTo(target), isPrimary: true))
+                    buttons.append(AmbientAlert.Button(title: "Take me there", symbol: "arrow.triangle.turn.up.right.diamond.fill",
+                                                       action: .waysTo(target), isPrimary: true))
                 }
                 alerts.append(AmbientAlert(
                     id: "event.soon.\(event.id)",
@@ -385,7 +388,8 @@ nonisolated enum AmbientAlerts {
         let target = CompassTarget(id: "leave:\(departure.id)", name: departure.placeName,
                                    latitude: departure.latitude, longitude: departure.longitude)
         let ways = [
-            AmbientAlert.Button(title: "Point me there", symbol: "location.north.line.fill", action: .pointTo(target), isPrimary: true),
+            AmbientAlert.Button(title: "Take me there", symbol: "arrow.triangle.turn.up.right.diamond.fill",
+                                action: .waysTo(target), isPrimary: true),
             AmbientAlert.Button(title: "Book a cab", symbol: "car.fill", action: .bookCab(target)),
         ]
         switch departure.status {

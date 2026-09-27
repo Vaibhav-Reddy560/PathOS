@@ -151,10 +151,14 @@ final class AppState {
     var tripStep: StepGuide.Position?
     /// Where you are on that route: what's behind you stops being drawn, and what's left is timed.
     var tripMatch: RouteProgress.Match?
+    /// The last known position on the route, for drawing the line's head between fixes.
+    var tripTrim: RouteTrim.Anchor?
     /// Off the route and fetching a new one.
     var isRerouting = false
     /// What the traffic is doing to this leg, from Apple Maps' live times.
     var tripTraffic: TripTraffic?
+    /// Where along the route the traffic is, for colouring the line.
+    var tripFlow: TripFlow?
     /// Where the map is centred, once it stops moving.
     @ObservationIgnored var mapCenter: CLLocationCoordinate2D?
     /// Presents the event sheet: nil id means a new event.
@@ -168,6 +172,14 @@ final class AppState {
     private(set) var isLaunchComplete = false
     var mapLayers = AppState.savedMapLayers() {
         didSet { UserDefaults.standard.set(mapLayers.rawValue, forKey: "pathos.mapLayers") }
+    }
+    /// How much of Apple Maps' own map shows under PathOS's signals. Off by default: the map
+    /// leads with what PathOS found for you, until you ask for the rest.
+    var poiDisplay = AppState.savedPOIDisplay() {
+        didSet {
+            UserDefaults.standard.set(poiDisplay.showsEverything, forKey: "pathos.mapPOI.all")
+            UserDefaults.standard.set(poiDisplay.groups.rawValue, forKey: "pathos.mapPOI.groups")
+        }
     }
     /// Where guidance is pointing. Setting it hides the deck and shows the guidance HUD over the map.
     var compassTarget: CompassTarget? {
@@ -263,6 +275,9 @@ final class AppState {
     @ObservationIgnored var offRouteSamples = 0
     /// The once-a-second loop that follows the leg you're on.
     @ObservationIgnored var navigationTask: Task<Void, Never>?
+    /// When the trip last had its position worked out: fixes and the loop both ask, and between
+    /// them they would otherwise do the same arithmetic twice in a row.
+    @ObservationIgnored var lastNavigationUpdate = Date.distantPast
     /// When the traffic on the route was last asked about, and the Lock Screen last redrawn.
     @ObservationIgnored var lastTrafficCheck = Date.distantPast
     @ObservationIgnored var lastTripActivityUpdate = Date.distantPast
@@ -356,13 +371,24 @@ final class AppState {
             Task { await self?.movedInBackground(to: here) }
         }
         location.onFix = { [weak self] fix in
-            self?.recordDistance(to: fix)
+            guard let self else { return }
+            recordDistance(to: fix)
+            // Following a way, the map moves with the fix rather than with a timer: a line trimmed
+            // on the next tick of a one-second loop always trails the puck.
+            if trip != nil {
+                updateNavigationPosition()
+            }
         }
         // Headphones went on, or a call ended: the noise sensor may be able to listen again.
         sound.onMayResume = { [weak self] in
             Task { await self?.resumeListening() }
         }
         Task { await bootstrap() }
+    }
+
+    private static func savedPOIDisplay() -> POIDisplay {
+        POIDisplay(showsEverything: UserDefaults.standard.bool(forKey: "pathos.mapPOI.all"),
+                   groups: POIGroups(rawValue: UserDefaults.standard.integer(forKey: "pathos.mapPOI.groups")))
     }
 
     /// Layers saved before the transit layer existed get it switched on, once.
@@ -459,6 +485,8 @@ final class AppState {
             }
         case .background:
             isForeground = false
+            // Whatever has been counted since the last save, before the app is suspended.
+            try? modelContainer.mainContext.save()
             loopTask?.cancel()
             loopTask = nil
             sound.stop()
@@ -484,6 +512,7 @@ final class AppState {
                     await transit.refreshNearby(location: here)
                     await context.refresh(location: here)
                     await refreshDeparture()
+                    recordAttendance()
                     await refreshTrip()
                     if lastGeofenceSyncLocation.map({ here.distance(from: $0) > 1_000 }) ?? true {
                         lastGeofenceSyncLocation = here
@@ -507,6 +536,7 @@ final class AppState {
             await context.refresh(location: here, force: true)
         }
         await refreshDeparture()
+        recordAttendance()
         await refreshTrip()
         await refreshPinnedContext()
         await routine.rescheduleReminders()
@@ -550,7 +580,10 @@ final class AppState {
         if log.firstSeenAt == nil {
             log.firstSeenAt = here.timestamp
         }
-        guard let anchor = distanceAnchor else {
+        // Nothing to measure from: no anchor, one from yesterday (whose journey would land on
+        // today), or one so old that what happened in between is anyone's guess.
+        guard let anchor = distanceAnchor,
+              DayDistance.canMeasure(from: anchor.timestamp, to: here.timestamp) else {
             distanceAnchor = here
             return
         }
@@ -600,6 +633,7 @@ final class AppState {
         }
         let log = DayLog(dayStart: dayStart)
         modelContainer.mainContext.insert(log)
+        try? modelContainer.mainContext.save()
         return log
     }
 
@@ -976,6 +1010,8 @@ final class AppState {
             }
         case .pointTo(let target):
             startCompass(to: target)
+        case .waysTo(let target):
+            showWays(to: target.name, at: target.coordinate, id: target.id)
         case .endGuidance:
             compassTarget = nil
         case .endJourney:
@@ -1033,6 +1069,16 @@ final class AppState {
     }
 
     static let atPlaceRadius = 100.0
+    /// The pointer is for the last stretch: it points at a spot you could walk to and find, which
+    /// is the one thing a map can't do for you. Further than this, what you want is directions.
+    static let pointerRange = 500.0
+
+    /// Whether pointing at a place would tell you anything a route wouldn't tell you better.
+    func pointerIsUseful(to coordinate: CLLocationCoordinate2D) -> Bool {
+        guard let here = location.location else { return false }
+        let away = here.distance(from: CLLocation(latitude: coordinate.latitude, longitude: coordinate.longitude))
+        return away > WorldSignalBuilder.hereRadius && away <= Self.pointerRange
+    }
 
     /// A way, a metro journey or a trip leg is being followed: you've set off.
     var isTravelling: Bool {
@@ -1455,8 +1501,24 @@ final class AppState {
         await offerWays(to: next, travelMinutes: minutes, status: status, from: here, now: now)
     }
 
-    /// How long you have in hand beyond the travel time before something starts.
+    /// How long you have in hand beyond the travel time before something starts. Past this, the
+    /// notification saying the ways are ready would be too early to act on.
     static let waysMarginMinutes = 15
+    /// How far ahead Getting around works out the ways to the next thing, so the card is ready
+    /// when you look rather than when you're already late.
+    static let waysLeadMinutes = 90
+
+    /// The ways to the next place you need to be, worked out ahead of being asked for. Cached by
+    /// `JourneyPlanner`, so this is cheap to call again.
+    func planWaysToNext(now: Date = Date()) async {
+        guard let departure, departure.status != .there, !isTravelling, let here = location.location,
+              departure.start.timeIntervalSince(now) <= Double(Self.waysLeadMinutes) * 60 else { return }
+        await journeys.options(
+            key: "departure:\(departure.id)",
+            to: CLLocationCoordinate2D(latitude: departure.latitude, longitude: departure.longitude),
+            named: departure.placeName, from: here, now: now
+        )
+    }
 
     /// Close to the time you'd have to set off, the ways of getting there are worked out ahead of
     /// being asked for, and said once. Getting around then has them ready.
@@ -1618,6 +1680,7 @@ final class AppState {
         guard !isForeground else { return }
         await context.refresh(location: here)
         await refreshDeparture()
+        recordAttendance()
         await refreshTrip()
         await refreshPinnedContext()
         notifyNewAlerts()
@@ -1647,6 +1710,64 @@ final class AppState {
             memory: surfacedMemory?.memory,
             now: now
         )
+    }
+
+    // MARK: Who turned up
+
+    /// Things seen to be somewhere else while they were on. Kept for the session; the verdict is
+    /// written down once the thing has finished.
+    @ObservationIgnored private var seenAwayFrom: Set<String> = []
+
+    /// Notes where you were against what your day held, so the day's count is of the things you
+    /// went to rather than the things that were scheduled. Silence counts as having gone: the app
+    /// being closed is not evidence of absence.
+    func recordAttendance(now: Date = Date()) {
+        let items = destinations(on: now)
+        guard !items.isEmpty else { return }
+        let log = todaysLog(for: now)
+        let here = location.location?.coordinate
+        let dropped = droppedDepartureIDs
+        var attended = Set(log.attendedIDs)
+        var missed = Set(log.missedIDs)
+        let before = (attended, missed)
+
+        for item in items {
+            if item.start <= now, item.end > now {
+                switch Attendance.sighting(at: here, of: item.coordinate) {
+                case .there: attended.insert(item.id)
+                case .away: seenAwayFrom.insert(item.id)
+                case .unknown: break
+                }
+            } else if item.end <= now, !attended.contains(item.id), !missed.contains(item.id) {
+                let verdict = Attendance.verdict(sawThere: false,
+                                                 sawAway: seenAwayFrom.contains(item.id),
+                                                 wasDropped: dropped.contains(item.id))
+                if verdict == .missed {
+                    missed.insert(item.id)
+                }
+            }
+        }
+        guard (attended, missed) != before else { return }
+        log.attendedIDs = attended.sorted()
+        log.missedIDs = missed.sorted()
+        try? modelContainer.mainContext.save()
+    }
+
+    /// Putting PathOS right by hand: you were there, or you weren't.
+    func setAttendance(_ id: String, attended: Bool, on day: Date) {
+        let log = todaysLog(for: day)
+        var went = Set(log.attendedIDs)
+        var skipped = Set(log.missedIDs)
+        if attended {
+            went.insert(id)
+            skipped.remove(id)
+        } else {
+            skipped.insert(id)
+            went.remove(id)
+        }
+        log.attendedIDs = went.sorted()
+        log.missedIDs = skipped.sorted()
+        try? modelContainer.mainContext.save()
     }
 
     /// Today's classes, events and calendar entries, as the Day shows them.

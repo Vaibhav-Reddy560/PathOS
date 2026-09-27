@@ -52,6 +52,11 @@
 	<string>PathOS uses the camera to scan posters, receipts, and parking indicators into spatial actions.</string>
 	<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
 	<string>PathOS tracks geofences to surface context-aware departure warnings and parking memory.</string>
+	<key>NSLocationTemporaryUsageDescriptionDictionary</key>
+	<dict>
+		<key>Navigation</key>
+		<string>PathOS needs your exact position while it leads you somewhere, to draw the road you are on and say each turn as you reach it.</string>
+	</dict>
 	<key>NSLocationWhenInUseUsageDescription</key>
 	<string>PathOS uses your location to provide directional spatial guidance and geofenced memory alerts.</string>
 	<key>NSMicrophoneUsageDescription</key>

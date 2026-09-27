@@ -74,6 +74,35 @@ nonisolated enum RouteProgress {
         return Match(segment: found.segment, point: point, travelled: travelled, total: total, offset: found.offset)
     }
 
+    /// The point `metres` further along the route, and how far that turned out to be — shorter
+    /// when the route ends first. Where the speed of the road ahead is asked about.
+    static func point(_ route: [CLLocationCoordinate2D], from match: Match,
+                      after metres: Double) -> (coordinate: CLLocationCoordinate2D, metres: Double)? {
+        guard route.count > 1, metres > 0, match.segment + 1 < route.count else { return nil }
+
+        func between(_ a: CLLocationCoordinate2D, _ b: CLLocationCoordinate2D, _ t: Double) -> CLLocationCoordinate2D {
+            CLLocationCoordinate2D(latitude: a.latitude + (b.latitude - a.latitude) * t,
+                                   longitude: a.longitude + (b.longitude - a.longitude) * t)
+        }
+
+        // The rest of the segment you're on, then segment by segment.
+        var walked = GeoMath.distance(from: match.point, to: route[match.segment + 1])
+        if walked >= metres {
+            return (between(match.point, route[match.segment + 1], metres / max(walked, 0.001)), metres)
+        }
+        var index = match.segment + 1
+        while index + 1 < route.count {
+            let step = GeoMath.distance(from: route[index], to: route[index + 1])
+            if walked + step >= metres {
+                return (between(route[index], route[index + 1], (metres - walked) / max(step, 0.001)), metres)
+            }
+            walked += step
+            index += 1
+        }
+        // The route ends first: its end, and how far that is.
+        return (route[route.count - 1], walked)
+    }
+
     /// The line still ahead of you, starting where you are on it — which is all the map draws.
     static func ahead(of route: [CLLocationCoordinate2D], from match: Match) -> [CLLocationCoordinate2D] {
         guard match.segment + 1 < route.count else { return [] }

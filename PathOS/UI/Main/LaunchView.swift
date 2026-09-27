@@ -62,12 +62,14 @@ private struct LaunchStage: View {
     let pulses: Bool
 
     /// Long enough for every stage to have finished.
-    static let settled: TimeInterval = 2
+    static let settled: TimeInterval = 1.6
 
-    private static let routeStart = 0.3
-    private static let routeEnd = 1.35
-    private static let pinLands = 1.65
+    private static let routeStart = 0.2
+    private static let routeEnd = 1.0
+    private static let pinLands = 1.2
     private static let pulseLength = 1.4
+    /// Where the ride is, along the route: the middle of the journey is the part you don't drive.
+    private static let ride = 0.34...0.68
 
     var body: some View {
         ZStack {
@@ -78,8 +80,7 @@ private struct LaunchStage: View {
             Image("LaunchMark")
                 .position(scene.center)
             Text("PathOS")
-                .font(.system(size: 22, weight: .semibold))
-                .tracking(0.4)
+                .font(.pathTitle)
                 .foregroundStyle(.ice)
                 .opacity(ease(t, from: 0.2, over: 0.45))
                 .offset(y: 8 * (1 - ease(t, from: 0.2, over: 0.45)))
@@ -117,13 +118,20 @@ private struct LaunchStage: View {
             var route = Path()
             route.addLines(scene.route)
 
-            // The route draws itself, dashed like the one in the icon.
+            // The route draws itself, dashed like the one in the icon — and in two colours, because
+            // this is a PathOS journey: your own legs at each end, the ride across the middle.
             let drawn = ease(t, from: Self.routeStart, over: Self.routeEnd - Self.routeStart, curve: .inOut)
             if drawn > 0 {
-                context.stroke(route.trimmedPath(from: 0, to: drawn), with: .color(Color.void.opacity(0.9)),
+                let whole = route.trimmedPath(from: 0, to: drawn)
+                context.stroke(whole, with: .color(Color.void.opacity(0.9)),
                                style: StrokeStyle(lineWidth: 8, lineCap: .round, lineJoin: .round))
-                context.stroke(route.trimmedPath(from: 0, to: drawn), with: .color(.aurora),
+                context.stroke(whole, with: .color(.aurora),
                                style: StrokeStyle(lineWidth: 4, lineCap: .round, lineJoin: .round, dash: [9, 7]))
+                if drawn > Self.ride.lowerBound {
+                    let ride = route.trimmedPath(from: Self.ride.lowerBound, to: min(drawn, Self.ride.upperBound))
+                    context.stroke(ride, with: .color(.ion),
+                                   style: StrokeStyle(lineWidth: 4, lineCap: .round, lineJoin: .round, dash: [9, 7]))
+                }
             }
 
             // While PathOS finishes starting, light runs along the route: the loader.

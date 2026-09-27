@@ -4,6 +4,9 @@ import Observation
 @Observable
 final class LocationManager: NSObject {
     private(set) var authorization: CLAuthorizationStatus = .notDetermined
+    /// Whether iOS is giving the exact position or one rounded to a few kilometres. Reduced, MapKit
+    /// draws a wide circle where you are instead of a dot, and no road can be followed.
+    private(set) var accuracyAuthorization: CLAccuracyAuthorization = .fullAccuracy
     private(set) var location: CLLocation?
     /// True-north heading in degrees (falls back to magnetic until a location fix exists).
     private(set) var headingDegrees: Double?
@@ -31,6 +34,7 @@ final class LocationManager: NSObject {
         manager.delegate = self
         manager.headingFilter = 2
         authorization = manager.authorizationStatus
+        accuracyAuthorization = manager.accuracyAuthorization
     }
 
     var hasAnyAccess: Bool { authorization == .authorizedAlways || authorization == .authorizedWhenInUse }
@@ -44,6 +48,18 @@ final class LocationManager: NSObject {
     func requestAlways() {
         manager.requestAlwaysAuthorization()
     }
+
+    /// Asks for the exact position for as long as PathOS is leading you somewhere. iOS asks you
+    /// once and remembers the answer for the session; with Precise Location left off, the map can
+    /// only show a wide circle around where you might be.
+    func requestFullAccuracy() async {
+        guard hasAnyAccess, manager.accuracyAuthorization == .reducedAccuracy else { return }
+        try? await manager.requestTemporaryFullAccuracyAuthorization(withPurposeKey: "Navigation")
+        accuracyAuthorization = manager.accuracyAuthorization
+    }
+
+    /// True while iOS is rounding your position, so nothing that needs a road should be trusted.
+    var isPositionApproximate: Bool { accuracyAuthorization == .reducedAccuracy }
 
     func startUpdates() {
         guard updatesTask == nil else { return }
@@ -152,10 +168,13 @@ final class LocationManager: NSObject {
 }
 
 extension LocationManager: CLLocationManagerDelegate {
+    /// Called for a change of accuracy as well as of permission.
     nonisolated func locationManagerDidChangeAuthorization(_ manager: CLLocationManager) {
         let status = manager.authorizationStatus
+        let accuracy = manager.accuracyAuthorization
         MainActor.assumeIsolated {
             self.authorization = status
+            self.accuracyAuthorization = accuracy
         }
     }
 

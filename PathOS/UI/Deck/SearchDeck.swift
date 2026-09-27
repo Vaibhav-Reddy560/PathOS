@@ -1,3 +1,4 @@
+import CoreLocation
 import SwiftData
 import SwiftUI
 
@@ -201,9 +202,9 @@ struct SearchDeck: View {
             }
             Spacer(minLength: 0)
             Button {
-                state.startCompass(to: CompassTarget(id: id, name: title, latitude: latitude, longitude: longitude))
+                state.showWays(to: title, at: CLLocationCoordinate2D(latitude: latitude, longitude: longitude), id: id)
             } label: {
-                Image(systemName: "location.north.line.fill")
+                Image(systemName: "arrow.triangle.turn.up.right.diamond.fill")
                     .font(.system(size: 15, weight: .semibold))
                     .foregroundStyle(.aurora)
                     .frame(width: 44, height: 44)
@@ -211,7 +212,7 @@ struct SearchDeck: View {
             }
             .buttonStyle(.plain)
             .glassEffect(.regular.interactive(), in: .circle)
-            .accessibilityLabel("Point me to \(title)")
+            .accessibilityLabel("Ways to \(title)")
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 12)
@@ -406,18 +407,20 @@ private struct SearchResultRow: View {
             .pathSecondaryAction()
         } else {
             Button {
-                state.startCompass(to: CompassTarget(id: "place:\(place.id)", name: place.name, latitude: place.latitude, longitude: place.longitude))
+                state.showWays(to: place.name, at: place.coordinate, id: "place:\(place.id)")
             } label: {
-                OneLineButtonLabel(title: "Point me there", symbol: "location.north.line.fill")
+                OneLineButtonLabel(title: "Take me there", symbol: "arrow.triangle.turn.up.right.diamond.fill")
                     .font(.subheadline.weight(.semibold))
             }
             .pathPrimaryAction()
         }
 
         Menu {
-            if !state.isTravelling, !state.isAt(place.coordinate) {
-                Button("Ways to get there", systemImage: "arrow.triangle.turn.up.right.diamond.fill") {
-                    state.showWays(to: place.name, at: place.coordinate, id: "place:\(place.id)")
+            // Near enough to walk to: the pointer finds the door a route can only get you near.
+            if state.pointerIsUseful(to: place.coordinate) {
+                Button("Point me there", systemImage: "location.north.line.fill") {
+                    state.startCompass(to: CompassTarget(id: "place:\(place.id)", name: place.name,
+                                                         latitude: place.latitude, longitude: place.longitude))
                 }
             }
             Button("Show on the map", systemImage: "map", action: showOnMap)

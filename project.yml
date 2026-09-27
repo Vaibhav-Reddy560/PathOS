@@ -54,6 +54,8 @@ targets:
           - UIInterfaceOrientationPortrait
         NSLocationWhenInUseUsageDescription: "PathOS uses your location to provide directional spatial guidance and geofenced memory alerts."
         NSLocationAlwaysAndWhenInUseUsageDescription: "PathOS tracks geofences to surface context-aware departure warnings and parking memory."
+        NSLocationTemporaryUsageDescriptionDictionary:
+          Navigation: "PathOS needs your exact position while it leads you somewhere, to draw the road you are on and say each turn as you reach it."
         NSMotionUsageDescription: "PathOS reads barometric pressure changes to predict local rain shifts upon departure."
         NSCameraUsageDescription: "PathOS uses the camera to scan posters, receipts, and parking indicators into spatial actions."
         NSMicrophoneUsageDescription: "PathOS analyzes ambient noise levels to adjust alert haptics and listens to your voice questions."

@@ -31,6 +31,65 @@ nonisolated struct MapLayers: OptionSet, Hashable, Sendable {
     static let all: MapLayers = [.rings, .places, .events, .memories, .transit]
 }
 
+/// Kinds of Apple Maps' own places, grouped the way someone looking at a map wants them rather
+/// than the way a search does: what you'd pull over for, not what you'd go out for.
+nonisolated struct POIGroups: OptionSet, Hashable, Sendable {
+    let rawValue: Int
+
+    static let food = POIGroups(rawValue: 1 << 0)
+    static let shops = POIGroups(rawValue: 1 << 1)
+    static let fuel = POIGroups(rawValue: 1 << 2)
+    static let transit = POIGroups(rawValue: 1 << 3)
+    static let culture = POIGroups(rawValue: 1 << 4)
+    static let outdoors = POIGroups(rawValue: 1 << 5)
+    static let services = POIGroups(rawValue: 1 << 6)
+
+    static let all: POIGroups = [.food, .shops, .fuel, .transit, .culture, .outdoors, .services]
+    /// In menu order.
+    static let each: [POIGroups] = [.food, .shops, .fuel, .transit, .culture, .outdoors, .services]
+
+    var label: String {
+        switch self {
+        case .food: "Food & drink"
+        case .shops: "Shops"
+        case .fuel: "Fuel & parking"
+        case .transit: "Transit"
+        case .culture: "Culture"
+        case .outdoors: "Parks & outdoors"
+        case .services: "Services"
+        default: "Places"
+        }
+    }
+
+    var symbol: String {
+        switch self {
+        case .food: "fork.knife"
+        case .shops: "bag"
+        case .fuel: "fuelpump"
+        case .transit: "tram"
+        case .culture: "theatermasks"
+        case .outdoors: "tree"
+        case .services: "cross.case"
+        default: "mappin"
+        }
+    }
+}
+
+/// How much of Apple Maps' own map shows under PathOS's signals.
+///
+/// "Everything" is a mode rather than a list: Apple adds categories with every release, and a list
+/// would quietly stop meaning everything.
+nonisolated struct POIDisplay: Equatable, Sendable {
+    var showsEverything = false
+    var groups: POIGroups = []
+
+    /// Anything of Apple's own is being shown.
+    var isOn: Bool { showsEverything || !groups.isEmpty }
+
+    /// Changes exactly when the map would have to be told something different.
+    var fingerprint: String { showsEverything ? "all" : "\(groups.rawValue)" }
+}
+
 /// Anything PathOS draws on the map, already carrying what its colour means.
 nonisolated struct WorldSignal: Identifiable, Hashable, Sendable {
     nonisolated enum Kind: String, Sendable {

@@ -92,7 +92,8 @@ final class BackupService {
         }
         archive.days = fetch(DayLog.self).map {
             .init(dayStart: $0.dayStart, distanceMeters: $0.distanceMeters, placeVisits: $0.placeVisits,
-                  firstSeenAt: $0.firstSeenAt, lastSeenAt: $0.lastSeenAt)
+                  firstSeenAt: $0.firstSeenAt, lastSeenAt: $0.lastSeenAt,
+                  attendedIDs: $0.attendedIDs, missedIDs: $0.missedIDs)
         }
         archive.settings = Self.savedSettings
         archive.settingLists = Self.savedSettingLists
@@ -291,6 +292,8 @@ final class BackupService {
             day.placeVisits = item.placeVisits
             day.firstSeenAt = item.firstSeenAt
             day.lastSeenAt = item.lastSeenAt
+            day.attendedIDs = item.attendedIDs
+            day.missedIDs = item.missedIDs
             context.insert(day)
         }
 
@@ -319,6 +322,7 @@ final class BackupService {
     private static let settingKeys = [
         "pathos.preferredCab", "pathos.adaptiveSound", "pathos.speaksDirections",
         "pathos.mapLayers", "pathos.calendarEventsEnabled",
+        "pathos.mapPOI.all", "pathos.mapPOI.groups", "pathos.repeatsUrgentAlerts",
     ]
     private static let settingListKeys = ["pathos.prioritySenders", "pathos.mutedSenders", "pathos.mailAccounts"]
 

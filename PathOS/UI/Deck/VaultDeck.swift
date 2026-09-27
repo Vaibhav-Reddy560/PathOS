@@ -238,10 +238,19 @@ private struct MemoryRow: View {
 
             Spacer(minLength: 0)
 
+            // Near enough to walk to and find: the pointer does what a map can't. Further away,
+            // what you want is the way there.
+            let spot = CLLocationCoordinate2D(latitude: note.latitude, longitude: note.longitude)
+            let isNear = state.pointerIsUseful(to: spot)
             Button {
-                state.startCompass(to: CompassTarget(id: note.geofenceID, name: note.title, latitude: note.latitude, longitude: note.longitude))
+                if isNear {
+                    state.startCompass(to: CompassTarget(id: note.geofenceID, name: note.title,
+                                                         latitude: note.latitude, longitude: note.longitude))
+                } else {
+                    state.showWays(to: note.title, at: spot, id: note.geofenceID)
+                }
             } label: {
-                Image(systemName: "location.north.line.fill")
+                Image(systemName: isNear ? "location.north.line.fill" : "arrow.triangle.turn.up.right.diamond.fill")
                     .font(.system(size: 15, weight: .semibold))
                     .foregroundStyle(.aurora)
                     .frame(width: 44, height: 44)
@@ -249,7 +258,7 @@ private struct MemoryRow: View {
             }
             .buttonStyle(.plain)
             .glassEffect(.regular.interactive(), in: .circle)
-            .accessibilityLabel("Point me to \(note.title)")
+            .accessibilityLabel(isNear ? "Point me to \(note.title)" : "Ways to \(note.title)")
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 12)

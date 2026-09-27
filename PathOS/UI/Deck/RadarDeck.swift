@@ -145,9 +145,9 @@ private struct RadarRow: View {
 
             if let target {
                 Button {
-                    state.startCompass(to: target)
+                    state.showWays(to: item.title, at: target.coordinate, id: item.id, arriveBy: item.start)
                 } label: {
-                    Image(systemName: "location.north.line.fill")
+                    Image(systemName: "arrow.triangle.turn.up.right.diamond.fill")
                         .font(.system(size: 15, weight: .semibold))
                         .foregroundStyle(.aurora)
                         .frame(width: 44, height: 44)
@@ -155,7 +155,7 @@ private struct RadarRow: View {
                 }
                 .buttonStyle(.plain)
                 .glassEffect(.regular.interactive(), in: .circle)
-                .accessibilityLabel("Point me to \(item.title)")
+                .accessibilityLabel("Ways to \(item.title)")
             }
         }
         .padding(.horizontal, 14)

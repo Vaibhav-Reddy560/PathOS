@@ -18,8 +18,13 @@ struct WorldMapView: View {
     /// False once you've moved the map yourself while following a way.
     @State private var isFollowingMap = true
 
-    /// Pulls Apple's dark map toward Void while annotations stay bright. Set to 0 to turn off.
-    static let veilOpacity = 0.28
+    /// Pulls Apple's dark map toward Void while annotations stay bright. It sits under the labels,
+    /// so it darkens the ground they stand on rather than dimming them — and it leans in while
+    /// Apple's own pins are showing, so PathOS's aurora and ion markers still lead the eye.
+    static func veilOpacity(showingPlaces: Bool, reduceTransparency: Bool) -> Double {
+        if reduceTransparency { return 0.45 }
+        return showingPlaces ? 0.38 : 0.28
+    }
     static let walkRingMinutes = [5, 10, 15]
 
     var body: some View {
@@ -30,9 +35,10 @@ struct WorldMapView: View {
         } ?? []
 
         Map(position: $camera, selection: $state.selectedSignalID, scope: scope) {
-            if Self.veilOpacity > 0, let here {
+            if let here {
                 MapPolygon(coordinates: Self.veil(around: here))
-                    .foregroundStyle(Color.void.opacity(reduceTransparency ? 0.45 : Self.veilOpacity))
+                    .foregroundStyle(Color.void.opacity(Self.veilOpacity(showingPlaces: state.poiDisplay.isOn,
+                                                                        reduceTransparency: reduceTransparency)))
                     .mapOverlayLevel(level: .aboveRoads)
             }
 
@@ -115,12 +121,13 @@ struct WorldMapView: View {
             }
 
             UserAnnotation {
-                UserMarker(isScanning: radar.isLoading)
+                UserMarker(isScanning: radar.isLoading && state.trip == nil)
             }
             .annotationSubtitles(.hidden)
         }
         // Traffic while you're on your way, as Maps shows it; otherwise the map stays quiet.
-        .mapStyle(.standard(elevation: .realistic, emphasis: .muted, pointsOfInterest: .excludingAll, showsTraffic: state.trip != nil))
+        .mapStyle(.standard(elevation: .realistic, emphasis: .muted,
+                            pointsOfInterest: state.poiDisplay.categories, showsTraffic: state.trip != nil))
         .mapControls {}
         .safeAreaPadding(.bottom, bottomInset)
         .onMapCameraChange(frequency: .onEnd) { context in

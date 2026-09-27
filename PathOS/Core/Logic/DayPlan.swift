@@ -74,6 +74,11 @@ nonisolated enum DayDistance {
     static let maximumStepMeters = 2_000.0
     /// A fix vaguer than this says little about where you went.
     static let worstAccuracy = 65.0
+    /// Measuring from a point older than this, or from yesterday, says nothing about today: the
+    /// journey between them went unseen, and lands on whichever day happens to ask.
+    static let oldestAnchor: TimeInterval = 6 * 3_600
+    /// No single step is longer than this. Past it, something has gone wrong with the fixes.
+    static let longestStep = 50_000.0
     /// Faster than this between two fixes is a jump, not travel: 200 km/h.
     static let fastestTravel = 55.0
 
@@ -94,9 +99,16 @@ nonisolated enum DayDistance {
     /// which dropped every step of a slow walk as wobble: ten metres at a time, never fifteen.
     /// Gaps are fine: a ride with PathOS closed counts on its return, at any believable speed,
     /// where the old two-kilometre cap threw the whole ride away.
+    /// Whether the last point that counted can still be measured from, or the gap since is too
+    /// long to say anything about.
+    static func canMeasure(from anchor: Date, to fix: Date, calendar: Calendar = .current) -> Bool {
+        calendar.isDate(anchor, inSameDayAs: fix) && fix.timeIntervalSince(anchor) <= oldestAnchor
+    }
+
     static func step(distance: Double, seconds: TimeInterval, accuracy: Double) -> Step {
         guard accuracy >= 0, accuracy <= worstAccuracy else { return .ignore }
         guard distance >= max(minimumStepMeters, accuracy) else { return .ignore }
+        if distance > longestStep { return .skip }
         if seconds > 0, distance / seconds > fastestTravel { return .skip }
         if seconds <= 0, distance > maximumStepMeters { return .skip }
         return .count(distance)

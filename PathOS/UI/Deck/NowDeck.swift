@@ -41,6 +41,9 @@ struct NowDeck: View {
         .task {
             await state.refreshCommute()
         }
+        .task(id: state.departure?.id) {
+            await state.planWaysToNext()
+        }
     }
 
     // MARK: Sections
@@ -220,9 +223,10 @@ struct NowDeck: View {
                 title: "Getting around",
                 trailing: state.routine.todaysDeparture().map { "You usually leave \(RoutineLearner.format(minutes: $0))" }
             )
-            // Only until you pick one: from then on, the card at the top of Now is the journey
-            // itself, and a list of ways you didn't take is noise.
-            if let departure = state.departure, isWorthRouting(departure), state.trip == nil {
+            // What's actually next leads, whether that's a class, an event or work. Until you
+            // pick a way: from then on the card at the top of Now is the journey itself, and a
+            // list of ways you didn't take is noise.
+            if let departure = nextToGetTo {
                 waysToNextCard(departure)
             }
             ContentTile {
@@ -267,11 +271,20 @@ struct NowDeck: View {
         }
     }
 
-    /// Something with a place, close enough that how to get there is the question.
-    private func isWorthRouting(_ departure: AlertSnapshot.Departure) -> Bool {
-        guard departure.status != .there else { return false }
-        let spare = Int(departure.start.timeIntervalSinceNow / 60) - departure.travelMinutes
-        return spare <= AppState.waysMarginMinutes
+    /// The next thing today that happens somewhere you aren't, while you aren't already on your
+    /// way to something. It used to appear only once you were within a quarter of an hour of
+    /// having to leave, which is exactly when it's too late to be useful.
+    private var nextToGetTo: AlertSnapshot.Departure? {
+        guard let departure = state.departure, departure.status != .there, !state.isTravelling else { return nil }
+        return departure
+    }
+
+    /// Whether the commute tile would only repeat the card above it.
+    private var commuteIsTheSamePlace: Bool {
+        guard let next = nextToGetTo, let destination = state.commute?.destination else { return false }
+        return GeoMath.distance(from: destination,
+                                to: CLLocationCoordinate2D(latitude: next.latitude, longitude: next.longitude))
+            <= LeaveOnTime.arrivalRadius
     }
 
     /// The quickest whole way to whatever is next, ready before it's asked for.
@@ -314,9 +327,9 @@ struct NowDeck: View {
     @ViewBuilder
     private var travelTimes: some View {
         VStack(alignment: .leading, spacing: 14) {
-            if let commute = state.commute, let name = commute.destinationName {
+            if let commute = state.commute, let name = commute.destinationName, !commuteIsTheSamePlace {
                 VStack(alignment: .leading, spacing: 10) {
-                    Text("To \(name)")
+                    Text(nextToGetTo == nil ? "To \(name)" : "Also to \(name)")
                         .font(.headline)
                         .foregroundStyle(.ice)
                     ForEach(commute.options, id: \.mode) { option in

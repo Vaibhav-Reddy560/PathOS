@@ -194,6 +194,29 @@ final class PlacesService {
         return (Int((response.expectedTravelTime / 60).rounded(.up)), response.distance)
     }
 
+    /// Where to ask a route from. Moving, it's a little ahead of you in the direction you're
+    /// going: Apple Maps knows nothing of which way you face, and a route from exactly where you
+    /// stand on a divided road often begins with a U-turn.
+    static func launchPoint(from origin: CLLocation, byRoad: Bool) -> CLLocation {
+        guard byRoad, origin.speed >= 3, origin.course >= 0,
+              origin.courseAccuracy >= 0, origin.courseAccuracy < 45 else { return origin }
+        let ahead = GeoMath.coordinate(origin.coordinate, metres: min(120, origin.speed * 6), bearing: origin.course)
+        return CLLocation(latitude: ahead.latitude, longitude: ahead.longitude)
+    }
+
+    /// How long the next stretch of road takes in the traffic on it now, and how long that stretch
+    /// turned out to be. Unrounded, unlike `hop`: a kilometre in 60 seconds and one in 119 both
+    /// round to "2 min", and they are 60 km/h and 30 km/h.
+    func roadProbe(to destination: CLLocationCoordinate2D, from origin: CLLocation) async -> (seconds: TimeInterval, metres: Double)? {
+        let request = MKDirections.Request()
+        request.source = MKMapItem(location: Self.launchPoint(from: origin, byRoad: true), address: nil)
+        request.destination = MKMapItem(location: CLLocation(latitude: destination.latitude, longitude: destination.longitude), address: nil)
+        request.transportType = .automobile
+        request.departureDate = Date()
+        guard let response = try? await MKDirections(request: request).calculateETA() else { return nil }
+        return (response.expectedTravelTime, response.distance)
+    }
+
     /// A route with its turns, for following a leg on the map. Apple Maps has no two-wheeler
     /// mode, so a scooter or a bike taxi follows the car's route, which is the same road.
     func directions(to destination: CLLocationCoordinate2D, from origin: CLLocation,
@@ -208,11 +231,7 @@ final class PlacesService {
     /// route from exactly where you stand on a divided road often began with a U-turn.
     func routes(to destination: CLLocationCoordinate2D, from origin: CLLocation, byRoad: Bool) async -> [NavRoute] {
         let request = MKDirections.Request()
-        var start = origin
-        if byRoad, origin.speed >= 3, origin.course >= 0, origin.courseAccuracy >= 0, origin.courseAccuracy < 45 {
-            let ahead = GeoMath.coordinate(origin.coordinate, metres: min(120, origin.speed * 6), bearing: origin.course)
-            start = CLLocation(latitude: ahead.latitude, longitude: ahead.longitude)
-        }
+        let start = Self.launchPoint(from: origin, byRoad: byRoad)
         request.source = MKMapItem(location: start, address: nil)
         request.destination = MKMapItem(location: CLLocation(latitude: destination.latitude, longitude: destination.longitude), address: nil)
         request.transportType = byRoad ? .automobile : .walking
@@ -332,7 +351,10 @@ final class PlacesService {
 }
 
 /// A route to follow on the map: its shape, its turns, and how long it should take.
-nonisolated struct NavRoute: Sendable {
+nonisolated struct NavRoute: Identifiable, Sendable {
+    /// New for every route fetched, so anything worked out about one — the traffic along it — can
+    /// be told apart from the next without remembering to clear it.
+    var id = UUID()
     var coordinates: [CLLocationCoordinate2D]
     var steps: [StepGuide.Step]
     var minutes: Int

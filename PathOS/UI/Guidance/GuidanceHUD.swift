@@ -12,6 +12,8 @@ struct GuidanceHUD: View {
     @State private var displayAngle: Double = 0
 
     static let alignmentTolerance = 12.0
+    /// Further than this and a walking time is not an answer.
+    static let walkable = 2_000.0
 
     var body: some View {
         let here = state.location.location
@@ -45,10 +47,19 @@ struct GuidanceHUD: View {
                                 valueFont: .pathDisplay
                             )
                             .contentTransition(.numericText())
-                            Text("· \(state.guidanceRoute?.minutes ?? GeoMath.walkingMinutes(forDistance: distance)) min walk")
-                                .font(.subheadline)
-                                .foregroundStyle(.mist)
-                                .lineLimit(1)
+                            // Past a couple of kilometres nobody is walking it, and an hour and a
+                            // half of "walk" is a number that only misleads.
+                            if distance <= Self.walkable {
+                                Text("· \(state.guidanceRoute?.minutes ?? GeoMath.walkingMinutes(forDistance: distance)) min walk")
+                                    .font(.subheadline)
+                                    .foregroundStyle(.mist)
+                                    .lineLimit(1)
+                            } else {
+                                Text("· too far to walk")
+                                    .font(.subheadline)
+                                    .foregroundStyle(.mist)
+                                    .lineLimit(1)
+                            }
                         }
                     } else {
                         Text("Finding you…")
@@ -90,6 +101,13 @@ struct GuidanceHUD: View {
                                 state.showToast("Turn on Live Activities for PathOS in Settings", role: .attention, symbol: "exclamationmark.circle.fill")
                             }
                         }
+                    }
+                    // The pointer can only say which way; from any distance the answer you
+                    // actually want is the way there.
+                    HUDButton(title: "Take me there", symbol: "arrow.triangle.turn.up.right.diamond.fill") {
+                        let target = target
+                        state.compassTarget = nil
+                        state.showWays(to: target.name, at: target.coordinate, id: target.id)
                     }
                     HUDButton(title: "Maps", symbol: "map.fill") {
                         let item = MKMapItem(location: CLLocation(latitude: target.latitude, longitude: target.longitude), address: nil)

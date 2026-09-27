@@ -105,7 +105,8 @@ struct DayDeck: View {
         if !isPast {
             quickActions
         }
-        if !timetableEntries.isEmpty, !isPast {
+        // Only where there is something to take off.
+        if !isPast, !classSessions.isEmpty || isDayOff {
             classesToggle
         }
         summary
@@ -221,7 +222,7 @@ struct DayDeck: View {
                     unit: distance > 0 && parts.count > 1 ? String(parts[1]) : nil,
                     role: .you
                 )
-                MetricView(label: "Events", value: "\(events.count + calendarItems(on: day).count)", role: .world)
+                MetricView(label: "Events", value: "\(eventsAttended)", role: .world)
                 MetricView(label: "Saved here", value: "\(memoriesSaved)", role: .you)
                 Spacer(minLength: 0)
             }
@@ -259,9 +260,9 @@ struct DayDeck: View {
                 // Not when you're already there: pointing at the building you're in helps nobody.
                 if let coordinate = next.coordinate, !state.isAt(coordinate, within: LeaveOnTime.arrivalRadius) {
                     Button {
-                        state.startCompass(to: CompassTarget(id: next.id, name: next.title, latitude: coordinate.latitude, longitude: coordinate.longitude))
+                        state.showWays(to: next.placeName ?? next.title, at: coordinate, id: next.id, arriveBy: next.start)
                     } label: {
-                        Label("Point me there", systemImage: "location.north.line.fill")
+                        Label("Take me there", systemImage: "arrow.triangle.turn.up.right.diamond.fill")
                             .font(.subheadline.weight(.semibold))
                             .frame(maxWidth: .infinity, minHeight: 32)
                     }
@@ -287,7 +288,7 @@ struct DayDeck: View {
             }
             if !items.isEmpty {
                 GroupedRows(items) { item in
-                    DayItemRow(item: item, now: now)
+                    DayItemRow(item: item, now: now, day: day, isMissed: missedToday.contains(item.id))
                 }
             }
         }
@@ -298,10 +299,7 @@ struct DayDeck: View {
         ViewThatFits(in: .horizontal) {
             HStack(spacing: 8) { quickActionButtons }
             VStack(spacing: 8) {
-                HStack(spacing: 8) {
-                    addEventButton
-                    pasteButton
-                }
+                addEventButton
                 HStack(spacing: 8) {
                     timetableButton
                     tripButton
@@ -315,7 +313,6 @@ struct DayDeck: View {
     @ViewBuilder
     private var quickActionButtons: some View {
         addEventButton
-        pasteButton
         timetableButton
         tripButton
     }
@@ -327,16 +324,6 @@ struct DayDeck: View {
             QuickActionLabel(title: "Add event", symbol: "calendar.badge.plus")
         }
         .pathPrimaryAction()
-    }
-
-    private var pasteButton: some View {
-        Button {
-            state.eventSheet = EventSheetRequest(editing: nil, text: UIPasteboard.general.string, day: day)
-        } label: {
-            QuickActionLabel(title: "Paste", symbol: "doc.on.clipboard")
-        }
-        .pathSecondaryAction()
-        .accessibilityLabel("Paste a message")
     }
 
     private var timetableButton: some View {
@@ -451,8 +438,8 @@ struct DayDeck: View {
     private var daySummary: DaySummary {
         DaySummary(
             distanceMeters: dayLog?.distanceMeters ?? 0,
-            eventCount: events.count + calendarItems(on: day).count,
-            classCount: classSessions.count,
+            eventCount: eventsAttended,
+            classCount: sessionsAttended,
             legCount: legs.count,
             memoryCount: memoriesSaved,
             tripName: tripForDay?.name,
@@ -469,6 +456,21 @@ struct DayDeck: View {
         timetableExceptions.contains { $0.entryID == nil && Calendar.current.isDate($0.dayStart, inSameDayAs: day) }
     }
 
+
+    /// What PathOS saw you miss on this day. Anything it never saw counts as attended.
+    private var missedToday: Set<String> {
+        Set(dayLog?.missedIDs ?? [])
+    }
+
+    /// The day's events, less the ones you were seen to miss.
+    private var eventsAttended: Int {
+        Attendance.count(events.map { "event:\($0.id.uuidString)" }
+                         + calendarItems(on: day).map { "calendar:\($0.id)" }, missed: missedToday)
+    }
+
+    private var sessionsAttended: Int {
+        Attendance.count(classSessions.map { "class:\($0.id)" }, missed: missedToday)
+    }
 
     private var dayLog: DayLog? {
         dayLogs.first { Calendar.current.isDate($0.dayStart, inSameDayAs: day) }
@@ -627,6 +629,10 @@ enum DayItem: Identifiable {
 private struct DayItemRow: View {
     let item: DayItem
     let now: Date
+    /// The day it's on, so "I was there" is written against the right one.
+    let day: Date
+    /// PathOS saw you somewhere else while this was on.
+    let isMissed: Bool
 
     @Environment(AppState.self) private var state
 
@@ -672,6 +678,11 @@ private struct DayItemRow: View {
                 Text("Now")
                     .font(.caption.weight(.bold))
                     .foregroundStyle(.amber)
+            } else if isMissed {
+                // Why the day's count is lower than the list is long.
+                Text("Missed")
+                    .font(.caption.weight(.bold))
+                    .foregroundStyle(.mist)
             }
         }
         .padding(.horizontal, 14)
@@ -692,8 +703,21 @@ private struct DayItemRow: View {
         }
         .contextMenu {
             if let coordinate = item.coordinate, !state.isAt(coordinate, within: LeaveOnTime.arrivalRadius) {
-                Button("Point me there", systemImage: "location.north.line.fill") {
-                    state.startCompass(to: CompassTarget(id: item.id, name: item.title, latitude: coordinate.latitude, longitude: coordinate.longitude))
+                Button("Take me there", systemImage: "arrow.triangle.turn.up.right.diamond.fill") {
+                    state.showWays(to: item.placeName ?? item.title, at: coordinate, id: item.id, arriveBy: item.start)
+                }
+                if state.pointerIsUseful(to: coordinate) {
+                    Button("Point me there", systemImage: "location.north.line.fill") {
+                        state.startCompass(to: CompassTarget(id: item.id, name: item.title,
+                                                             latitude: coordinate.latitude, longitude: coordinate.longitude))
+                    }
+                }
+            }
+            // PathOS only ever glimpses where you were, so its guess can always be put right.
+            if item.coordinate != nil, item.start < now {
+                Button(isMissed ? "I was there" : "I didn't go",
+                       systemImage: isMissed ? "checkmark.circle" : "xmark.circle") {
+                    state.setAttendance(item.id, attended: isMissed, on: day)
                 }
             }
             if case .event(let event) = item {

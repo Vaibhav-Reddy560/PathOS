@@ -43,16 +43,52 @@ struct ControlRail: View {
 
     private var layersMenu: some View {
         Menu {
-            Toggle("Walk rings", systemImage: "circle.dotted", isOn: layer(.rings))
-            Toggle("Places", systemImage: "mappin", isOn: layer(.places))
-            Toggle("Events", systemImage: "ticket", isOn: layer(.events))
-            Toggle("Your memories", systemImage: "bookmark", isOn: layer(.memories))
-            Toggle("Bus stops & metro", systemImage: "bus", isOn: layer(.transit))
+            // Apple's own map, under PathOS's: off by default, and as much of it as you want.
+            Menu("Apple Maps places", systemImage: "mappin.circle") {
+                Toggle("Everything", systemImage: "globe.asia.australia", isOn: everything)
+                Section("Or just these") {
+                    ForEach(POIGroups.each, id: \.rawValue) { group in
+                        Toggle(group.label, systemImage: group.symbol, isOn: places(group))
+                            .disabled(state.poiDisplay.showsEverything)
+                    }
+                }
+            }
+            Section("What PathOS shows") {
+                Toggle("Walk rings", systemImage: "circle.dotted", isOn: layer(.rings))
+                Toggle("Places", systemImage: "mappin", isOn: layer(.places))
+                Toggle("Events", systemImage: "ticket", isOn: layer(.events))
+                Toggle("Your memories", systemImage: "bookmark", isOn: layer(.memories))
+                Toggle("Bus stops & metro", systemImage: "bus", isOn: layer(.transit))
+            }
         } label: {
             RailGlyph(symbol: "square.3.layers.3d", role: .world)
         }
         .glassEffect(.regular.interactive(), in: .circle)
         .accessibilityLabel("Map layers")
+    }
+
+    /// Everything Apple knows, which replaces any chosen kinds rather than adding to them.
+    private var everything: Binding<Bool> {
+        Binding {
+            state.poiDisplay.showsEverything
+        } set: { isOn in
+            state.poiDisplay.showsEverything = isOn
+            if isOn {
+                state.poiDisplay.groups = []
+            }
+        }
+    }
+
+    private func places(_ group: POIGroups) -> Binding<Bool> {
+        Binding {
+            state.poiDisplay.groups.contains(group)
+        } set: { isOn in
+            if isOn {
+                state.poiDisplay.groups.insert(group)
+            } else {
+                state.poiDisplay.groups.remove(group)
+            }
+        }
     }
 
     private func layer(_ layer: MapLayers) -> Binding<Bool> {

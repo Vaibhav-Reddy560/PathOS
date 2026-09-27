@@ -105,6 +105,10 @@ final class DayLog {
     var placeVisits: Int = 0
     var firstSeenAt: Date?
     var lastSeenAt: Date?
+    /// What PathOS saw of the day's plans: where you were seen, and what you were seen to miss.
+    /// Anything in neither list counts as attended — see `Attendance`.
+    var attendedIDs: [String] = []
+    var missedIDs: [String] = []
 
     init(dayStart: Date) {
         self.dayStart = dayStart

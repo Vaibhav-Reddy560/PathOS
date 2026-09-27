@@ -41,7 +41,8 @@ struct AmbientAlertTests {
         let alert = AmbientAlerts.prioritized(snapshot(event: soon)).first
         #expect(alert?.role == .attention)
         #expect(alert?.metric == "12 min")
-        #expect(alert?.buttons.first?.action == .pointTo(CompassTarget(id: "e", name: "Jazz", latitude: 12.97, longitude: 77.59)))
+        // The way there, not a compass: an event twelve minutes away is somewhere to get to.
+        #expect(alert?.buttons.first?.action == .waysTo(CompassTarget(id: "e", name: "Jazz", latitude: 12.97, longitude: 77.59)))
     }
 
     @Test func laterEventsTodayAreWorldInformation() {
@@ -130,7 +131,7 @@ struct AmbientAlertTests {
     @Test func timeToGoAndRunningLateAskForAttention() {
         let go = AmbientAlerts.departureAlert(departure(.leaveNow(leaveBy: now)))
         #expect(go?.role == .attention)
-        #expect(go?.buttons.map(\.title) == ["Point me there", "Book a cab"])
+        #expect(go?.buttons.map(\.title) == ["Take me there", "Book a cab"])
 
         let late = AmbientAlerts.departureAlert(departure(.late(arrival: now.addingTimeInterval(4_320), minutes: 12)))
         #expect(late?.metric == "+12 min")
@@ -155,16 +156,15 @@ struct AmbientAlertTests {
         #expect(alert?.buttons.map(\.action) == [.dropDeparture("class:1"), .keepDeparture("class:1")])
     }
 
-    /// Something from your mail you haven't added, or anything else already at hand, gets no
-    /// "Point me there": an event you're standing at has nothing to point to.
-    @Test func noPointerToWhereYouAlreadyAre() {
+    /// An event you're standing at has nowhere to take you; one across town does.
+    @Test func nothingToOfferWhereYouAlreadyAre() {
         let soon = now.addingTimeInterval(600)
         let here = AmbientAlerts.prioritized(snapshot(event: AlertSnapshot.Event(
             id: "event:1", title: "Episode 6", start: soon, latitude: 12.9, longitude: 77.5, distanceMeters: 20)))
         #expect(here.first { $0.id == "event.soon.event:1" }?.buttons.isEmpty == true)
         let away = AmbientAlerts.prioritized(snapshot(event: AlertSnapshot.Event(
             id: "event:1", title: "Episode 6", start: soon, latitude: 12.9, longitude: 77.5, distanceMeters: 4_000)))
-        #expect(away.first { $0.id == "event.soon.event:1" }?.buttons.map(\.title) == ["Point me there"])
+        #expect(away.first { $0.id == "event.soon.event:1" }?.buttons.map(\.title) == ["Take me there"])
     }
 
     /// The way you're making leads the island: quietly while it's going to plan, and for

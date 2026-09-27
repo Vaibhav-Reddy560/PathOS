@@ -32,6 +32,20 @@ nonisolated struct TripTraffic: Equatable, Sendable {
     static let worthSaying = 4
 }
 
+/// How the traffic runs along the route you're on, in stretches of it.
+nonisolated struct TripFlow: Equatable, Sendable {
+    /// The route these stretches were measured on.
+    var routeID: UUID
+    var bands: [RouteTraffic.Band]
+    var at: Date
+
+    /// The stretches, but only while they still belong to the route on screen. A re-route brings
+    /// a new route with a new id, so old colours can't survive it.
+    func shown(on route: NavRoute?) -> [RouteTraffic.Band] {
+        route?.id == routeID ? bands : []
+    }
+}
+
 extension AppState {
 
     // MARK: Making a journey
@@ -39,8 +53,14 @@ extension AppState {
     /// Starts following a way to get somewhere: the Lock Screen carries the leg you're on, and
     /// PathOS says so when you fall behind it.
     func startTrip(_ option: DoorToDoor.Option, to name: String, at destination: CLLocationCoordinate2D, arriveBy: Date? = nil) {
-        trip = ActiveTrip(option: option, destinationName: name, startedAt: Date(), arriveBy: arriveBy,
+        let startedAt = Date()
+        trip = ActiveTrip(option: option, destinationName: name, startedAt: startedAt, arriveBy: arriveBy,
                           latitude: destination.latitude, longitude: destination.longitude)
+        // The map that leads you needs both of these, and both used to arrive a frame or two later:
+        // the browsing map showed instead, with its own marker and rings, and then vanished.
+        tripStatus = TripGuide.status(for: option, startedAt: startedAt, now: startedAt,
+                                      location: location.location?.coordinate)
+        deckStop = .collapsed
         announcedTripLeg = nil
         announcedTripDelay = 0
         spokenMoments = []
@@ -48,6 +68,8 @@ extension AppState {
         Task { await notifications.removePending(withPrefix: "pathos.leave.") }
         location.startUpdates()
         location.beginHeadingUpdates()
+        // A road can't be drawn from a position given to the nearest few kilometres.
+        Task { await location.requestFullAccuracy() }
         refreshBackgroundSession()
         startNavigationLoop()
         // A metro leg inside the journey needs the travel loop too, or its stops never advance.
@@ -119,7 +141,9 @@ extension AppState {
         tripNav = nil
         tripStep = nil
         tripMatch = nil
+        tripTrim = nil
         tripTraffic = nil
+        tripFlow = nil
         isRerouting = false
         navLegID = nil
         lastTripActivityStep = nil
@@ -157,6 +181,10 @@ extension AppState {
     /// in your pocket for a wake that came minutes later.
     func updateNavigationPosition(now: Date = Date()) {
         guard let trip, let here = location.location else { return }
+        // Fixes and the loop both ask. Coalesced, so a fix landing just after a tick doesn't repeat
+        // the work, and the background keeps its slower pace.
+        guard now.timeIntervalSince(lastNavigationUpdate) >= (isForeground ? 0.2 : 5) else { return }
+        lastNavigationUpdate = now
         guard var status = TripGuide.status(for: trip.option, startedAt: trip.startedAt, now: now,
                                             location: here.coordinate) else { return }
         let leg = trip.option.legs[min(status.legIndex, trip.option.legs.count - 1)]
@@ -166,6 +194,8 @@ extension AppState {
         if isRoad, !status.hasArrived, let nav = tripNav, navLegID == leg.id {
             let match = RouteProgress.match(nav.coordinates, at: here.coordinate, after: tripMatch)
             tripMatch = match
+            tripTrim = match.map { RouteTrim.Anchor(fraction: $0.fraction, at: here.timestamp,
+                                                    metresPerSecond: max(0, here.speed), routeMetres: $0.total) }
             tripStep = StepGuide.position(in: nav.steps, at: here.coordinate, near: tripStep?.stepIndex)
             if let match {
                 status = liveAdjusted(status, trip: trip, now: now)
@@ -178,6 +208,7 @@ extension AppState {
         } else if !isRoad {
             tripStep = nil
             tripMatch = nil
+            tripTrim = nil
         }
 
         let previous = tripStatus
@@ -243,11 +274,13 @@ extension AppState {
         let found = await places.directions(to: leg.endCoordinate, from: here, byRoad: leg.mode != .walk)
         // Still on the same leg of the same way when it comes back.
         guard self.trip?.option.id == trip.option.id, tripStatus?.legIndex == status.legIndex else { return }
+        // Where you are *now*, not where you were when the request left: at road speed a couple of
+        // seconds of fetching is tens of metres, and the new line would start that far behind you.
+        let arrived = location.location ?? here
         if let found {
             tripNav = found
             navLegID = leg.id
-            tripMatch = RouteProgress.match(found.coordinates, at: here.coordinate)
-            tripStep = StepGuide.position(in: found.steps, at: here.coordinate)
+            place(on: found, at: arrived)
             if isRerouting, !isNewLeg {
                 // The next turn is a different one now.
                 spokenMoments = spokenMoments.filter { if case .handover = $0 { true } else { false } }
@@ -255,7 +288,9 @@ extension AppState {
         }
         offRouteSamples = 0
         isRerouting = false
-        lastTrafficCheck = now
+        // A fresh leg is asked about at once; a re-route waits ten seconds so the two fetches
+        // don't land together.
+        lastTrafficCheck = isNewLeg ? .distantPast : now.addingTimeInterval(-Self.trafficCheckInterval + 10)
     }
 
     /// Asks Apple Maps again, every minute or so, how long the rest of the leg takes in the
@@ -263,8 +298,13 @@ extension AppState {
     /// as navigation apps do; otherwise the times on screen follow the traffic.
     private func checkTraffic(for leg: DoorToDoor.Leg, now: Date = Date()) async {
         guard let trip, let nav = tripNav, let match = tripMatch, let here = location.location else { return }
+        // Where the next stretch of road ends, worked out before anything is awaited.
+        let ahead = RouteProgress.point(nav.coordinates, from: match, after: RouteTraffic.probeMetres)
         isFetchingRoute = true
-        let routes = await places.routes(to: leg.endCoordinate, from: here, byRoad: true)
+        // One round trip for both: the whole of what's left, and the stretch right in front of you.
+        async let whole = places.routes(to: leg.endCoordinate, from: here, byRoad: true)
+        async let stretch = probe(ahead, from: here)
+        let (routes, probe) = await (whole, stretch)
         isFetchingRoute = false
         guard self.trip?.option.id == trip.option.id, navLegID == leg.id, let fastest = routes.first else { return }
 
@@ -280,8 +320,7 @@ extension AppState {
         if same?.name != fastest.name, saving >= max(180, yours * 0.1) {
             // Quicker by enough to be worth a different road.
             tripNav = fastest
-            tripMatch = RouteProgress.match(fastest.coordinates, at: here.coordinate)
-            tripStep = StepGuide.position(in: fastest.steps, at: here.coordinate)
+            place(on: fastest, at: location.location ?? here)
             let minutes = Int((saving / 60).rounded())
             tripTraffic = TripTraffic(delayMinutes: tripTraffic?.delayMinutes ?? 0,
                                       note: "Faster route · saves \(minutes) min", at: now)
@@ -312,6 +351,39 @@ extension AppState {
         if tripTraffic?.isSlow == true, !wasSlow, speaksDirections {
             say("Heavy traffic ahead. About \(delay) minutes longer than planned.")
         }
+
+        // Where the traffic is, as stretches of the line: the kilometre in front of you, and what
+        // comes after it. A probe that came back down a different road than the one being followed
+        // is thrown away rather than used to colour it.
+        let measured = ahead.flatMap { target -> (seconds: TimeInterval, metres: Double)? in
+            guard let probe, abs(probe.metres - target.metres) < max(200, target.metres * 0.25) else { return nil }
+            return probe
+        }
+        tripFlow = TripFlow(
+            routeID: nav.id,
+            bands: RouteTraffic.bands(routeMetres: match.total, travelledMetres: match.travelled,
+                                      probeMetres: measured?.metres, probeSeconds: measured?.seconds,
+                                      remainingMetres: same?.distanceMeters ?? match.remaining,
+                                      remainingSeconds: yours),
+            at: now
+        )
+    }
+
+    /// Puts you on a route just fetched: where you are along it, which turn that makes next, and
+    /// the anchor the line's head is drawn from.
+    private func place(on route: NavRoute, at here: CLLocation) {
+        let match = RouteProgress.match(route.coordinates, at: here.coordinate)
+        tripMatch = match
+        tripTrim = match.map { RouteTrim.Anchor(fraction: $0.fraction, at: here.timestamp,
+                                                metresPerSecond: max(0, here.speed), routeMetres: $0.total) }
+        tripStep = StepGuide.position(in: route.steps, at: here.coordinate)
+    }
+
+    /// How long the stretch in front of you takes, when there is one to ask about.
+    private func probe(_ target: (coordinate: CLLocationCoordinate2D, metres: Double)?,
+                       from here: CLLocation) async -> (seconds: TimeInterval, metres: Double)? {
+        guard let target else { return nil }
+        return await places.roadProbe(to: target.coordinate, from: here)
     }
 
     /// The plan's status, timed instead by what's left of the route you're on in today's traffic,

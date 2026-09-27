@@ -192,6 +192,9 @@ nonisolated struct BackupArchive: Codable, Equatable {
         var placeVisits: Int
         var firstSeenAt: Date?
         var lastSeenAt: Date?
+        /// Added after the first backups, which simply don't have them.
+        var attendedIDs: [String] = []
+        var missedIDs: [String] = []
     }
 
     // MARK: Reading and writing

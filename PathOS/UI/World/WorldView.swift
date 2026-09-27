@@ -32,8 +32,9 @@ struct WorldView: View {
             // the phone does. Everything else — browsing, picking places, a metro ride — is the
             // usual map.
             if isDrivingALeg {
-                NavigationMapView(route: state.tripNav?.coordinates ?? [], travelled: state.tripMatch?.fraction ?? 0,
-                                  isFollowing: $isFollowingRoute)
+                NavigationMapView(route: state.tripNav?.coordinates ?? [], trim: state.tripTrim,
+                                  bands: state.tripFlow?.shown(on: state.tripNav) ?? [],
+                                  places: state.poiDisplay, isFollowing: $isFollowingRoute)
                     .ignoresSafeArea()
             } else {
                 WorldMapView(signals: signals, scope: mapScope, bottomInset: mapBottomInset)
@@ -138,7 +139,11 @@ struct WorldView: View {
         .onGeometryChange(for: CGFloat.self) { $0.safeAreaInsets.top } action: { topSafeArea = $0 }
         // The whole screen, the keyboard included: the safe areas grow as the view shrinks.
         .onGeometryChange(for: CGFloat.self) { $0.size.height + $0.safeAreaInsets.top + $0.safeAreaInsets.bottom } action: { screenHeight = $0 }
-        .task(id: RadarRefreshKey(category: radar.category, location: state.location.location?.coordinate)) {
+        // Not while you're travelling: crossing a cell every few hundred metres would scan Apple
+        // Maps and re-rank everything once every twenty seconds for the whole drive.
+        .task(id: RadarRefreshKey(category: radar.category,
+                                  location: state.trip == nil ? state.location.location?.coordinate : nil)) {
+            guard state.trip == nil else { return }
             await radar.refresh(state: state)
         }
         .onChange(of: state.focusedNoteID) { _, id in
