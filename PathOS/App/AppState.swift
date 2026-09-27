@@ -1075,9 +1075,19 @@ final class AppState {
 
     /// Whether pointing at a place would tell you anything a route wouldn't tell you better.
     func pointerIsUseful(to coordinate: CLLocationCoordinate2D) -> Bool {
-        guard let here = location.location else { return false }
-        let away = here.distance(from: CLLocation(latitude: coordinate.latitude, longitude: coordinate.longitude))
+        guard let away = metres(to: coordinate) else { return false }
         return away > WorldSignalBuilder.hereRadius && away <= Self.pointerRange
+    }
+
+    /// Whether there is a journey to plan at all. Closer than this, `DoorToDoor` has nothing to
+    /// offer and the ways sheet would open on "no way of getting there could be worked out".
+    func routeIsWorthIt(to coordinate: CLLocationCoordinate2D) -> Bool {
+        guard let away = metres(to: coordinate) else { return true }
+        return away > DoorToDoor.tooCloseToRoute
+    }
+
+    private func metres(to coordinate: CLLocationCoordinate2D) -> Double? {
+        location.location.map { $0.distance(from: CLLocation(latitude: coordinate.latitude, longitude: coordinate.longitude)) }
     }
 
     /// A way, a metro journey or a trip leg is being followed: you've set off.

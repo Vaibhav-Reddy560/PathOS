@@ -119,6 +119,9 @@ nonisolated enum DoorToDoor {
     typealias RoadTimes = @Sendable (CLLocationCoordinate2D, CLLocationCoordinate2D, Bool) async -> RoadHop?
 
     /// Far enough that you'd take something to the station rather than walk.
+    /// Nearer than this and there is no journey to plan: you can see it from where you stand, and
+    /// what helps is a pointer, not a route.
+    static let tooCloseToRoute = 120.0
     static let walkToStation = 1_100.0
     /// Getting in, buying a token and reaching the platform.
     static let stationEntryMinutes = 4
@@ -143,7 +146,7 @@ nonisolated enum DoorToDoor {
         road: RoadTimes
     ) async -> [Option] {
         let straight = GeoMath.distance(from: origin, to: destination)
-        guard straight > 120 else { return [] }
+        guard straight > tooCloseToRoute else { return [] }
 
         var options: [Option] = []
         if let byRoad = await roadOption(from: origin, to: destination, name: destinationName, now: now, calendar: calendar, road: road) {

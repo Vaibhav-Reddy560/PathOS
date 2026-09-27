@@ -170,7 +170,7 @@ struct SignalDetailView: View {
         // following a way somewhere, planning another only muddles it.
         let isHere = state.isAt(coordinate, within: signal.start == nil ? AppState.atPlaceRadius : LeaveOnTime.arrivalRadius)
         return VStack(spacing: 10) {
-            if !isHere, !state.isTravelling {
+            if !isHere, !state.isTravelling, state.routeIsWorthIt(to: coordinate) {
                 Button {
                     state.showWays(to: signal.title, at: coordinate, id: "signal:\(signal.id)", arriveBy: signal.start)
                 } label: {

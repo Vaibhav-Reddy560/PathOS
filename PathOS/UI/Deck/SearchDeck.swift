@@ -405,11 +405,21 @@ private struct SearchResultRow: View {
                     .font(.subheadline.weight(.semibold))
             }
             .pathSecondaryAction()
-        } else {
+        } else if state.routeIsWorthIt(to: place.coordinate) {
             Button {
                 state.showWays(to: place.name, at: place.coordinate, id: "place:\(place.id)")
             } label: {
                 OneLineButtonLabel(title: "Take me there", symbol: "arrow.triangle.turn.up.right.diamond.fill")
+                    .font(.subheadline.weight(.semibold))
+            }
+            .pathPrimaryAction()
+        } else {
+            // Close enough to see: a route would come back empty, a pointer finds the door.
+            Button {
+                state.startCompass(to: CompassTarget(id: "place:\(place.id)", name: place.name,
+                                                     latitude: place.latitude, longitude: place.longitude))
+            } label: {
+                OneLineButtonLabel(title: "Point me there", symbol: "location.north.line.fill")
                     .font(.subheadline.weight(.semibold))
             }
             .pathPrimaryAction()

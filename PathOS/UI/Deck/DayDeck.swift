@@ -258,7 +258,8 @@ struct DayDeck: View {
                 .accessibilityElement(children: .combine)
 
                 // Not when you're already there: pointing at the building you're in helps nobody.
-                if let coordinate = next.coordinate, !state.isAt(coordinate, within: LeaveOnTime.arrivalRadius) {
+                if let coordinate = next.coordinate, !state.isAt(coordinate, within: LeaveOnTime.arrivalRadius),
+                   state.routeIsWorthIt(to: coordinate) {
                     Button {
                         state.showWays(to: next.placeName ?? next.title, at: coordinate, id: next.id, arriveBy: next.start)
                     } label: {

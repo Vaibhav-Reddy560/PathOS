@@ -144,10 +144,16 @@ private struct RadarRow: View {
             Spacer(minLength: 0)
 
             if let target {
+                // Close enough to see from here: a route has nothing to say, so the arrow points.
+                let canRoute = state.routeIsWorthIt(to: target.coordinate)
                 Button {
-                    state.showWays(to: item.title, at: target.coordinate, id: item.id, arriveBy: item.start)
+                    if canRoute {
+                        state.showWays(to: item.title, at: target.coordinate, id: item.id, arriveBy: item.start)
+                    } else {
+                        state.startCompass(to: target)
+                    }
                 } label: {
-                    Image(systemName: "arrow.triangle.turn.up.right.diamond.fill")
+                    Image(systemName: canRoute ? "arrow.triangle.turn.up.right.diamond.fill" : "location.north.line.fill")
                         .font(.system(size: 15, weight: .semibold))
                         .foregroundStyle(.aurora)
                         .frame(width: 44, height: 44)
@@ -155,7 +161,7 @@ private struct RadarRow: View {
                 }
                 .buttonStyle(.plain)
                 .glassEffect(.regular.interactive(), in: .circle)
-                .accessibilityLabel("Ways to \(item.title)")
+                .accessibilityLabel(canRoute ? "Ways to \(item.title)" : "Point me to \(item.title)")
             }
         }
         .padding(.horizontal, 14)

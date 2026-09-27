@@ -241,7 +241,7 @@ private struct MemoryRow: View {
             // Near enough to walk to and find: the pointer does what a map can't. Further away,
             // what you want is the way there.
             let spot = CLLocationCoordinate2D(latitude: note.latitude, longitude: note.longitude)
-            let isNear = state.pointerIsUseful(to: spot)
+            let isNear = !state.routeIsWorthIt(to: spot)
             Button {
                 if isNear {
                     state.startCompass(to: CompassTarget(id: note.geofenceID, name: note.title,

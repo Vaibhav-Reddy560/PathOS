@@ -35,7 +35,9 @@ struct WaysToGetThereView: View {
                     if isLoading && options.isEmpty {
                         loading
                     } else if options.isEmpty {
-                        Text("No way of getting there could be worked out. Apple Maps may not have a route from where you are.")
+                        Text(state.routeIsWorthIt(to: request.coordinate)
+                             ? "No way of getting there could be worked out. Apple Maps may not have a route from where you are."
+                             : "You're almost there — too close for a route to mean anything. Point me there instead.")
                             .font(.subheadline)
                             .foregroundStyle(.mist)
                     } else {
