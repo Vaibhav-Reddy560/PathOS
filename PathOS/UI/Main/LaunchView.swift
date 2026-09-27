@@ -121,28 +121,40 @@ private struct LaunchStage: View {
             // The route draws itself, dashed like the one in the icon. The middle of a PathOS
             // journey is the part you're carried rather than the part you travel, and it's drawn
             // in the palette's red so the three legs read as three legs.
+            //
+            // Each leg is stroked over its own stretch rather than the red being laid over a green
+            // line running underneath: laid over, the green showed through every gap in the red
+            // dashes. Only the dark casing runs the whole way, so every gap is the same dark.
             let drawn = ease(t, from: Self.routeStart, over: Self.routeEnd - Self.routeStart, curve: .inOut)
             if drawn > 0 {
-                let whole = route.trimmedPath(from: 0, to: drawn)
-                context.stroke(whole, with: .color(Color.void.opacity(0.9)),
+                let dashes = StrokeStyle(lineWidth: 4, lineCap: .round, lineJoin: .round, dash: [9, 7])
+                context.stroke(route.trimmedPath(from: 0, to: drawn), with: .color(Color.void.opacity(0.9)),
                                style: StrokeStyle(lineWidth: 8, lineCap: .round, lineJoin: .round))
-                context.stroke(whole, with: .color(.aurora),
-                               style: StrokeStyle(lineWidth: 4, lineCap: .round, lineJoin: .round, dash: [9, 7]))
+                // Out of your door.
+                context.stroke(route.trimmedPath(from: 0, to: min(drawn, Self.ride.lowerBound)),
+                               with: .color(.aurora), style: dashes)
+                // The ride across the middle.
                 if drawn > Self.ride.lowerBound {
-                    let ride = route.trimmedPath(from: Self.ride.lowerBound, to: min(drawn, Self.ride.upperBound))
-                    context.stroke(ride, with: .color(.coral),
-                                   style: StrokeStyle(lineWidth: 4, lineCap: .round, lineJoin: .round, dash: [9, 7]))
+                    context.stroke(route.trimmedPath(from: Self.ride.lowerBound, to: min(drawn, Self.ride.upperBound)),
+                                   with: .color(.coral), style: dashes)
+                }
+                // And the last stretch to the door you wanted.
+                if drawn > Self.ride.upperBound {
+                    context.stroke(route.trimmedPath(from: Self.ride.upperBound, to: drawn),
+                                   with: .color(.aurora), style: dashes)
                 }
             }
 
-            // While PathOS finishes starting, light runs along the route: the loader.
+            // While PathOS finishes starting, light runs along the route: the loader. It takes the
+            // colour of the leg it's on, so it never lays green over the red stretch either.
             if pulses, t > Self.pinLands {
                 let phase = ((t - Self.pinLands) / Self.pulseLength).truncatingRemainder(dividingBy: 1)
                 let head = phase * 1.15
                 let segment = route.trimmedPath(from: max(0, head - 0.12), to: min(1, head))
-                context.stroke(segment, with: .color(Color.aurora.opacity(0.35)),
+                let light: Color = Self.ride.contains(min(head, 1)) ? .coral : .aurora
+                context.stroke(segment, with: .color(light.opacity(0.35)),
                                style: StrokeStyle(lineWidth: 10, lineCap: .round, lineJoin: .round))
-                context.stroke(segment, with: .color(.aurora),
+                context.stroke(segment, with: .color(light),
                                style: StrokeStyle(lineWidth: 4, lineCap: .round, lineJoin: .round))
             }
 
