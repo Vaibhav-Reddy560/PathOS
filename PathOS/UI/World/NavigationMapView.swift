@@ -22,6 +22,8 @@ struct NavigationMapView: UIViewRepresentable {
     var bands: [RouteTraffic.Band] = []
     /// Apple's own places, when you've asked to see them.
     var places = POIDisplay()
+    /// The last fix, so the first frame opens on the road rather than on nothing.
+    var here: CLLocationCoordinate2D?
     /// False once the map has been moved by hand; set back by Recentre.
     @Binding var isFollowing: Bool
 
@@ -38,21 +40,11 @@ struct NavigationMapView: UIViewRepresentable {
         map.showsScale = false
         map.isPitchEnabled = true
         map.overrideUserInterfaceStyle = .dark
-
-        // Holds street level however MapKit moves the camera while it follows: a region set once
-        // is overridden the moment tracking takes over.
-        map.cameraZoomRange = MKMapView.CameraZoomRange(
-            minCenterCoordinateDistance: Self.metresAcross * 0.6,
-            maxCenterCoordinateDistance: Self.metresAcross * 1.6
-        )
         context.coordinator.apply(places, to: map)
 
         // Tracking is switched on in the coordinator, once there's a fix to zoom to. Asking for
         // it here instead makes MapKit pick its own region on the first fix, which is city-wide.
-        if let first = route.first {
-            map.setRegion(MKCoordinateRegion(center: first, latitudinalMeters: Self.metresAcross,
-                                             longitudinalMeters: Self.metresAcross), animated: false)
-        }
+        context.coordinator.frame(on: route.first ?? here, in: map)
         context.coordinator.startDisplayLink()
         return map
     }
@@ -61,6 +53,9 @@ struct NavigationMapView: UIViewRepresentable {
         let coordinator = context.coordinator
         coordinator.isFollowing = $isFollowing
         coordinator.apply(places, to: map)
+        // The route is fetched over the network, so the first frames of a trip have none. Keep
+        // the camera on wherever we do know about until MapKit has a fix of its own to follow.
+        coordinator.frame(on: route.first ?? here, in: map)
 
         // Set before the route is laid out, so a new line starts where you are on it rather than
         // where you were on the old one.
@@ -105,6 +100,9 @@ struct NavigationMapView: UIViewRepresentable {
         var anchor: RouteTrim.Anchor?
         var hasStartedFollowing = false
         var isSettingUp = false
+        /// Whether the camera has ever been put somewhere real. Until it has, the zoom range is
+        /// left alone.
+        private var hasFramed = false
 
         /// The dark line under the coloured ones, and one line per stretch. All of them run over
         /// the same coordinates: which part each draws is a fraction of the line's length, so the
@@ -121,6 +119,32 @@ struct NavigationMapView: UIViewRepresentable {
 
         init(isFollowing: Binding<Bool>) {
             self.isFollowing = isFollowing
+        }
+
+        // MARK: The camera
+
+        /// Puts the camera on the road at street level, and only then narrows how far it may zoom.
+        ///
+        /// The order matters. `cameraZoomRange` clamps whatever region the map is showing, and the
+        /// region a fresh `MKMapView` shows is the whole world centred on nothing — so setting the
+        /// range first zooms the map to a few hundred metres of the Gulf of Guinea and leaves it
+        /// there until the first fix arrives. That is the flat blue map with no route on it.
+        func frame(on coordinate: CLLocationCoordinate2D?, in map: MKMapView) {
+            // Once MapKit is following, the camera is its business.
+            guard !hasStartedFollowing, let coordinate, CLLocationCoordinate2DIsValid(coordinate) else { return }
+            map.setRegion(
+                MKCoordinateRegion(center: coordinate, latitudinalMeters: NavigationMapView.metresAcross,
+                                   longitudinalMeters: NavigationMapView.metresAcross),
+                animated: false
+            )
+            guard !hasFramed else { return }
+            hasFramed = true
+            // Holds street level however MapKit moves the camera while it follows: a region set
+            // once is overridden the moment tracking takes over.
+            map.cameraZoomRange = MKMapView.CameraZoomRange(
+                minCenterCoordinateDistance: NavigationMapView.metresAcross * 0.6,
+                maxCenterCoordinateDistance: NavigationMapView.metresAcross * 1.6
+            )
         }
 
         // MARK: The route
@@ -246,13 +270,9 @@ struct NavigationMapView: UIViewRepresentable {
         /// keeps whatever zoom it is handed, and the one it picks for itself is city-wide.
         func mapView(_ mapView: MKMapView, didUpdate userLocation: MKUserLocation) {
             guard !hasStartedFollowing, let here = userLocation.location?.coordinate else { return }
+            frame(on: here, in: mapView)
             hasStartedFollowing = true
             isSettingUp = true
-            mapView.setRegion(
-                MKCoordinateRegion(center: here, latitudinalMeters: NavigationMapView.metresAcross,
-                                   longitudinalMeters: NavigationMapView.metresAcross),
-                animated: false
-            )
             mapView.setUserTrackingMode(NavigationMapView.trackingMode, animated: true)
             isSettingUp = false
         }

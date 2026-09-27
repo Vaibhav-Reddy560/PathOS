@@ -34,7 +34,8 @@ struct WorldView: View {
             if isDrivingALeg {
                 NavigationMapView(route: state.tripNav?.coordinates ?? [], trim: state.tripTrim,
                                   bands: state.tripFlow?.shown(on: state.tripNav) ?? [],
-                                  places: state.poiDisplay, isFollowing: $isFollowingRoute)
+                                  places: state.poiDisplay, here: state.location.location?.coordinate,
+                                  isFollowing: $isFollowingRoute)
                     .ignoresSafeArea()
             } else {
                 WorldMapView(signals: signals, scope: mapScope, bottomInset: mapBottomInset)
