@@ -7,11 +7,11 @@
   </text>
   
   <g>
-    <rect x="140" y="108" width="330" height="14" rx="7" fill="#8E9B98" opacity="0.28"/>
-    <rect x="140" y="108" width="330" height="14" rx="7" fill="#8E9B98">
+    <rect x="140" y="108" width="330" height="14" rx="7" fill="#B8F36B" opacity="0.12"/>
+    <rect x="140" y="108" width="330" height="14" rx="7" fill="#B8F36B" opacity="0.45">
       <animate attributeName="width" values="0;330" dur="0.8s" begin="0.3s" fill="freeze"/>
     </rect>
-    <text x="305" y="152" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Text', system-ui, sans-serif" font-size="15" fill="#8E9B98">in good time</text>
+    <text x="305" y="152" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Text', system-ui, sans-serif" font-size="15" fill="#B8F36B" opacity="0.7">in good time</text>
   </g>
   <g>
     <rect x="470" y="108" width="330" height="14" rx="7" fill="#B8F36B" opacity="0.28"/>
@@ -29,24 +29,24 @@
   </g>
   
   <g>
-    <circle cx="140" cy="115" r="9" fill="#0C1114" stroke="#8E9B98" stroke-width="2"/>
+    <circle cx="140" cy="115" r="9" fill="#0C1114" stroke="#B8F36B" stroke-opacity="0.5" stroke-width="2"/>
     <text x="140" y="88" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Text', system-ui, sans-serif" font-size="16" font-weight="600" fill="#E8F0ED">8:00</text>
-    <text x="140" y="196" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Text', system-ui, sans-serif" font-size="14" fill="#8E9B98">Quiet</text>
+    <text x="140" y="196" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Text', system-ui, sans-serif" font-size="14" fill="#B8F36B" opacity="0.7">Quiet</text>
   </g>
   <g>
-    <circle cx="470" cy="115" r="9" fill="#0C1114" stroke="#8E9B98" stroke-width="2"/>
+    <circle cx="470" cy="115" r="9" fill="#0C1114" stroke="#B8F36B" stroke-width="2"/>
     <text x="470" y="88" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Text', system-ui, sans-serif" font-size="16" font-weight="600" fill="#E8F0ED">8:35</text>
-    <text x="470" y="196" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Text', system-ui, sans-serif" font-size="14" fill="#8E9B98">Leave by 8:35</text>
+    <text x="470" y="196" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Text', system-ui, sans-serif" font-size="14" fill="#B8F36B">Leave by 8:35</text>
   </g>
   <g>
-    <circle cx="800" cy="115" r="9" fill="#0C1114" stroke="#8E9B98" stroke-width="2"/>
+    <circle cx="800" cy="115" r="9" fill="#0C1114" stroke="#FFBF69" stroke-width="2"/>
     <text x="800" y="88" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Text', system-ui, sans-serif" font-size="16" font-weight="600" fill="#E8F0ED">8:50</text>
-    <text x="800" y="196" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Text', system-ui, sans-serif" font-size="14" fill="#8E9B98">Leave now</text>
+    <text x="800" y="196" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Text', system-ui, sans-serif" font-size="14" fill="#FFBF69">Leave now</text>
   </g>
   <g>
-    <circle cx="1060" cy="115" r="9" fill="#0C1114" stroke="#8E9B98" stroke-width="2"/>
+    <circle cx="1060" cy="115" r="9" fill="#0C1114" stroke="#FF4438" stroke-width="2"/>
     <text x="1060" y="88" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Text', system-ui, sans-serif" font-size="16" font-weight="600" fill="#E8F0ED">9:00</text>
-    <text x="1060" y="196" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Text', system-ui, sans-serif" font-size="14" fill="#8E9B98">Starts</text>
+    <text x="1060" y="196" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Text', system-ui, sans-serif" font-size="14" fill="#FF4438">Starts</text>
   </g>
   <g>
     <circle cx="140" cy="115" r="13" fill="#E8F0ED" opacity="0.95">
