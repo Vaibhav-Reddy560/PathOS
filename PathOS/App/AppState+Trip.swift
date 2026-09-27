@@ -301,10 +301,14 @@ extension AppState {
         // Where the next stretch of road ends, worked out before anything is awaited.
         let ahead = RouteProgress.point(nav.coordinates, from: match, after: RouteTraffic.probeMetres)
         isFetchingRoute = true
-        // One round trip for both: the whole of what's left, and the stretch right in front of you.
+        // One round trip for all of it: the whole of what's left, the stretch right in front of
+        // you, and what that whole stretch takes with nothing in the way, which is what says
+        // whether the road is held up or simply narrow.
         async let whole = places.routes(to: leg.endCoordinate, from: here, byRoad: true)
-        async let stretch = probe(ahead, from: here)
-        let (routes, probe) = await (whole, stretch)
+        async let stretch = probe(ahead, from: here, now: now)
+        async let quiet = places.roadTime(to: leg.endCoordinate, from: here,
+                                          departingAt: RouteTraffic.quietHour(after: now))
+        let (routes, probe, wholeFreeFlow) = await (whole, stretch, quiet)
         isFetchingRoute = false
         guard self.trip?.option.id == trip.option.id, navLegID == leg.id, let fastest = routes.first else { return }
 
@@ -355,16 +359,23 @@ extension AppState {
         // Where the traffic is, as stretches of the line: the kilometre in front of you, and what
         // comes after it. A probe that came back down a different road than the one being followed
         // is thrown away rather than used to colour it.
-        let measured = ahead.flatMap { target -> (seconds: TimeInterval, metres: Double)? in
+        let measured = ahead.flatMap { target -> RouteTraffic.Measure? in
             guard let probe, abs(probe.metres - target.metres) < max(200, target.metres * 0.25) else { return nil }
             return probe
         }
+        let remainingMetres = same?.distanceMeters ?? match.remaining
+        // The whole of what's left, without the traffic: same guard, since a quiet-hour route
+        // that took a different road can't be subtracted from this one.
+        let remainingFreeFlow = wholeFreeFlow.flatMap { quiet -> TimeInterval? in
+            abs(quiet.metres - remainingMetres) < max(200, remainingMetres * 0.15) ? quiet.seconds : nil
+        }
         tripFlow = TripFlow(
             routeID: nav.id,
-            bands: RouteTraffic.bands(routeMetres: match.total, travelledMetres: match.travelled,
-                                      probeMetres: measured?.metres, probeSeconds: measured?.seconds,
-                                      remainingMetres: same?.distanceMeters ?? match.remaining,
-                                      remainingSeconds: yours),
+            bands: RouteTraffic.bands(
+                routeMetres: match.total, travelledMetres: match.travelled, probe: measured,
+                remaining: RouteTraffic.Measure(metres: remainingMetres, seconds: yours,
+                                                freeFlowSeconds: remainingFreeFlow)
+            ),
             at: now
         )
     }
@@ -381,9 +392,9 @@ extension AppState {
 
     /// How long the stretch in front of you takes, when there is one to ask about.
     private func probe(_ target: (coordinate: CLLocationCoordinate2D, metres: Double)?,
-                       from here: CLLocation) async -> (seconds: TimeInterval, metres: Double)? {
+                       from here: CLLocation, now: Date) async -> RouteTraffic.Measure? {
         guard let target else { return nil }
-        return await places.roadProbe(to: target.coordinate, from: here)
+        return await places.roadProbe(to: target.coordinate, from: here, now: now)
     }
 
     /// The plan's status, timed instead by what's left of the route you're on in today's traffic,

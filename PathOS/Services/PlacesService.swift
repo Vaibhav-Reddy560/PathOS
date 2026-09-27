@@ -204,17 +204,38 @@ final class PlacesService {
         return CLLocation(latitude: ahead.latitude, longitude: ahead.longitude)
     }
 
-    /// How long the next stretch of road takes in the traffic on it now, and how long that stretch
-    /// turned out to be. Unrounded, unlike `hop`: a kilometre in 60 seconds and one in 119 both
-    /// round to "2 min", and they are 60 km/h and 30 km/h.
-    func roadProbe(to destination: CLLocationCoordinate2D, from origin: CLLocation) async -> (seconds: TimeInterval, metres: Double)? {
+    /// How long a stretch of road takes, and how long that stretch turned out to be. Unrounded,
+    /// unlike `hop`: a kilometre in 60 seconds and one in 119 both round to "2 min", and they are
+    /// 60 km/h and 30 km/h.
+    ///
+    /// `departingAt` is what makes it a traffic measurement. Apple Maps predicts the traffic for
+    /// whatever departure it's given, so the same stretch asked about for now and for a quiet
+    /// hour comes back as the road with the traffic on it and the road without.
+    func roadTime(to destination: CLLocationCoordinate2D, from origin: CLLocation,
+                  departingAt departure: Date) async -> (seconds: TimeInterval, metres: Double)? {
         let request = MKDirections.Request()
         request.source = MKMapItem(location: Self.launchPoint(from: origin, byRoad: true), address: nil)
         request.destination = MKMapItem(location: CLLocation(latitude: destination.latitude, longitude: destination.longitude), address: nil)
         request.transportType = .automobile
-        request.departureDate = Date()
+        request.departureDate = departure
         guard let response = try? await MKDirections(request: request).calculateETA() else { return nil }
         return (response.expectedTravelTime, response.distance)
+    }
+
+    /// A stretch of road measured both ways at once: as it is now, and as it is when nothing is
+    /// in the way. The free-flow half is allowed to fail on its own — a stretch whose ordinary
+    /// self is unknown is shown as flowing, never guessed at.
+    func roadProbe(to destination: CLLocationCoordinate2D, from origin: CLLocation,
+                   now: Date = Date()) async -> RouteTraffic.Measure? {
+        async let live = roadTime(to: destination, from: origin, departingAt: now)
+        async let quiet = roadTime(to: destination, from: origin,
+                                   departingAt: RouteTraffic.quietHour(after: now))
+        guard let measured = await live else { return nil }
+        let freeFlow = await quiet
+        // Two requests can be routed down different roads; only times for the same road subtract.
+        let sameRoad = freeFlow.map { abs($0.metres - measured.metres) < max(50, measured.metres * 0.1) } ?? false
+        return RouteTraffic.Measure(metres: measured.metres, seconds: measured.seconds,
+                                    freeFlowSeconds: sameRoad ? freeFlow?.seconds : nil)
     }
 
     /// A route with its turns, for following a leg on the map. Apple Maps has no two-wheeler

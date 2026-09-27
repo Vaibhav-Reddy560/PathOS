@@ -59,7 +59,7 @@ struct NavigationMapView: UIViewRepresentable {
 
         // Set before the route is laid out, so a new line starts where you are on it rather than
         // where you were on the old one.
-        coordinator.bands = bands.isEmpty ? [RouteTraffic.Band(start: 0, end: 1, flow: .clear)] : bands
+        coordinator.bands = bands.isEmpty ? [RouteTraffic.Band(start: 0, end: 1, severity: 0)] : bands
         coordinator.anchor = trim
 
         // Coordinates aren't comparable; the count and the ends say whether it's a new route.
@@ -188,7 +188,7 @@ struct NavigationMapView: UIViewRepresentable {
                     hide(renderer)
                     continue
                 }
-                renderer.strokeColor = UIColor(band.flow.role.color)
+                renderer.strokeColor = UIColor(PathOSPalette.color(PathOSPalette.traffic(severity: band.severity)))
                 set(renderer, start: max(band.start, shown), end: band.end, force: force)
             }
         }

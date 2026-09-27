@@ -31,6 +31,31 @@ nonisolated enum PathOSPalette {
         return 0.2126 * linear(hex >> 16) + 0.7152 * linear(hex >> 8) + 0.0722 * linear(hex)
     }
 
+    /// A colour part of the way from one of the palette's to another.
+    ///
+    /// The only place PathOS mixes its own colours, and only where a signal is a degree rather
+    /// than a kind: how badly a road is held up has no natural number of steps.
+    static func blend(_ from: UInt32, _ to: UInt32, _ amount: Double) -> UInt32 {
+        let towards = min(1, max(0, amount))
+        func channel(_ shift: UInt32) -> UInt32 {
+            let start = Double((from >> shift) & 0xFF)
+            let end = Double((to >> shift) & 0xFF)
+            return UInt32((start + (end - start) * towards).rounded())
+        }
+        return channel(16) << 16 | channel(8) << 8 | channel(0)
+    }
+
+    /// How a stretch of road is running, as a colour: aurora while it flows, then amber through
+    /// to coral as it clogs.
+    ///
+    /// The step from green to amber is deliberate. A road is either held up or it isn't, and a
+    /// road that is simply slow — a lane with speed humps and a junction every hundred metres —
+    /// is not held up at all. Above that the scale is continuous, because how bad a jam is is a
+    /// matter of degree and reads better as one.
+    static func traffic(severity: Double) -> UInt32 {
+        severity <= 0 ? aurora : blend(amber, coral, severity)
+    }
+
     static func contrastRatio(_ first: UInt32, _ second: UInt32) -> Double {
         let (lighter, darker) = (max(relativeLuminance(first), relativeLuminance(second)), min(relativeLuminance(first), relativeLuminance(second)))
         return (lighter + 0.05) / (darker + 0.05)
