@@ -273,7 +273,7 @@ final class AppState {
     /// Legs you ended by hand, so opening the app doesn't start following them again.
     @ObservationIgnored private var declinedLegIDs: Set<UUID> = []
     @ObservationIgnored private var lastGeofenceSyncLocation: CLLocation?
-    @ObservationIgnored private var lastCommuteCheck: (location: CLLocation, at: Date)?
+    @ObservationIgnored private var lastCommuteCheck: (location: CLLocation, at: Date, destination: UUID?)?
     @ObservationIgnored private var departureETA: (id: String, from: CLLocation, at: Date, minutes: Int, byRoad: Bool)?
     /// The leg of the trip last announced, and how many five-minute slips have been mentioned.
     /// The leg the route on the map belongs to, so it's fetched once per leg.
@@ -1441,19 +1441,32 @@ final class AppState {
     /// Travel time to Work, or Home from work: for Now, and for the pinned context around when
     /// you usually leave. Apple Maps is only asked again once you've moved or
     /// a while has passed.
+    ///
+    /// Which place it's to goes by where you are as well as by what PathOS last decided you were
+    /// at, which lags arriving by a fix or two — and it's asked again the moment the answer
+    /// changes. Timed 200 m short of the college gate and then kept for ten minutes, it told
+    /// someone standing in BMS College that BMS College was three minutes' walk away.
     func refreshCommute(force: Bool = false) async {
         guard let here = location.location else { return }
-        if !force, let last = lastCommuteCheck,
+        let work = vault.place(ofKind: .work)
+        let home = vault.place(ofKind: .home)
+        func isAt(_ place: SavedPlace?, _ kind: VenueKind) -> Bool {
+            if context.venue.kind == kind { return true }
+            guard let place else { return false }
+            return here.distance(from: CLLocation(latitude: place.latitude, longitude: place.longitude)) <= LeaveOnTime.arrivalRadius
+        }
+        let toward = TravelTimes.destination(atWork: isAt(work, .work), atHome: isAt(home, .home),
+                                             hasWork: work != nil, hasHome: home != nil)
+        let destination: SavedPlace? = switch toward {
+        case .work: work
+        case .home: home
+        case nil: nil
+        }
+        if !force, let last = lastCommuteCheck, last.destination == destination?.id,
            here.distance(from: last.location) < 300, Date().timeIntervalSince(last.at) < 10 * 60 {
             return
         }
-        lastCommuteCheck = (here, Date())
-
-        let destination: SavedPlace? = switch context.venue.kind {
-        case .home: vault.place(ofKind: .work)
-        case .work: vault.place(ofKind: .home)
-        default: vault.place(ofKind: .work) ?? vault.place(ofKind: .home)
-        }
+        lastCommuteCheck = (here, Date(), destination?.id)
         var car: Int?
         var transit: Int?
         var walk: Int?

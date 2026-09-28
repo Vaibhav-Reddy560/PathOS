@@ -38,7 +38,8 @@ struct NowDeck: View {
         }
         .scrollIndicators(.hidden)
         .deckScroll()
-        .task {
+        // Again on arriving somewhere: at Work the times are to Home.
+        .task(id: state.context.venue.kind) {
             await state.refreshCommute()
         }
         .task(id: state.departure?.id) {
@@ -279,6 +280,13 @@ struct NowDeck: View {
         return departure
     }
 
+    /// Already there: until the times are worked out again for the other place, there's nothing
+    /// to say about getting to this one.
+    private func isStandingIn(_ commute: CommuteInfo) -> Bool {
+        guard let destination = commute.destination else { return false }
+        return state.isAt(destination, within: LeaveOnTime.arrivalRadius)
+    }
+
     /// Whether the commute tile would only repeat the card above it.
     private var commuteIsTheSamePlace: Bool {
         guard let next = nextToGetTo, let destination = state.commute?.destination else { return false }
@@ -327,7 +335,8 @@ struct NowDeck: View {
     @ViewBuilder
     private var travelTimes: some View {
         VStack(alignment: .leading, spacing: 14) {
-            if let commute = state.commute, let name = commute.destinationName, !commuteIsTheSamePlace {
+            if let commute = state.commute, let name = commute.destinationName, !commuteIsTheSamePlace,
+               !isStandingIn(commute) {
                 VStack(alignment: .leading, spacing: 10) {
                     Text(nextToGetTo == nil ? "To \(name)" : "Also to \(name)")
                         .font(.headline)

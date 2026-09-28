@@ -35,4 +35,15 @@ struct TravelTimesTests {
         #expect(TravelTimes.headline(car: 4, transit: nil, walk: 9)?.mode == .walk)
         #expect(TravelTimes.headline(car: nil, transit: 50, walk: nil)?.mode == .transit)
     }
+
+    /// The times are to the other place from the one you're in — never to the one you're in.
+    @Test func timesAreToTheOtherPlace() {
+        #expect(TravelTimes.destination(atWork: true, atHome: false, hasWork: true, hasHome: true) == .home)
+        #expect(TravelTimes.destination(atWork: false, atHome: true, hasWork: true, hasHome: true) == .work)
+        #expect(TravelTimes.destination(atWork: false, atHome: false, hasWork: true, hasHome: true) == .work)
+        #expect(TravelTimes.destination(atWork: false, atHome: false, hasWork: false, hasHome: true) == .home)
+        // At work with no home set, there is nowhere to time: not the college you're standing in.
+        #expect(TravelTimes.destination(atWork: true, atHome: false, hasWork: true, hasHome: false) == nil)
+        #expect(TravelTimes.destination(atWork: false, atHome: true, hasWork: false, hasHome: true) == nil)
+    }
 }

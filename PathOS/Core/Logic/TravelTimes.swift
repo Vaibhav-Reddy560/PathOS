@@ -43,6 +43,21 @@ nonisolated enum TravelTimes {
     /// the car's time, less a fifth: about what two-wheeler routing gives across Indian cities.
     static let twoWheelerShare = 0.8
 
+    /// Which of your two places the times are to.
+    nonisolated enum Toward: Equatable, Sendable {
+        case work
+        case home
+    }
+
+    /// The other place from the one you're at, and Work when you're at neither. Never the place
+    /// you're standing in: with nowhere else set, there's nothing to time.
+    static func destination(atWork: Bool, atHome: Bool, hasWork: Bool, hasHome: Bool) -> Toward? {
+        if atWork { return hasHome ? .home : nil }
+        if atHome { return hasWork ? .work : nil }
+        if hasWork { return .work }
+        return hasHome ? .home : nil
+    }
+
     static func twoWheelerMinutes(car: Int) -> Int {
         max(1, Int((Double(car) * twoWheelerShare).rounded()))
     }
