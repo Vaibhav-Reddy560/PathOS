@@ -529,14 +529,6 @@
     <path d="M 860 330 L 948 330 L 948 346 L 1010 346 L 1010 244 L 994 244 L 994 166 L 1010 166 L 1010 120" fill="none" stroke="#B8F36B" stroke-width="9" stroke-linecap="round"
           stroke-linejoin="round" stroke-dasharray="16 11" mask="url(#drawc)"/>
 
-    <!-- Where the legs change over. -->
-    <circle cx="420" cy="346" r="7" fill="#090B0D" stroke="#FF4438" stroke-width="3" opacity="1">
-      <animate attributeName="opacity" values="0;0;1" keyTimes="0;0.74;1" dur="1.5s" begin="0s" fill="freeze"/>
-    </circle>
-    <circle cx="860" cy="330" r="7" fill="#090B0D" stroke="#FF4438" stroke-width="3" opacity="1">
-      <animate attributeName="opacity" values="0;0;1" keyTimes="0;0.84;1" dur="2.3s" begin="0s" fill="freeze"/>
-    </circle>
-
     <!-- You, at your own door. -->
     <circle cx="96" cy="344" r="16" fill="#090B0D"/>
     <circle cx="96" cy="344" r="9.5" fill="#B8F36B">
