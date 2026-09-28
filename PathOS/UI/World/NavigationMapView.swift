@@ -75,6 +75,12 @@ struct NavigationMapView: UIViewRepresentable {
             coordinator.layOutRoute(route, on: map)
         }
         coordinator.draw(force: true)
+
+        // Recentre: WorldView's button sets this back to true, and following starts again. Before
+        // the first fix there's nothing to follow, so it waits.
+        if isFollowing, coordinator.hasStartedFollowing, map.userTrackingMode == .none {
+            coordinator.recentre(map)
+        }
     }
 
     static func dismantleUIView(_ map: MKMapView, coordinator: Coordinator) {
@@ -151,10 +157,7 @@ struct NavigationMapView: UIViewRepresentable {
             hasFramed = true
             // Holds street level however MapKit moves the camera while it follows: a region set
             // once is overridden the moment tracking takes over.
-            map.cameraZoomRange = MKMapView.CameraZoomRange(
-                minCenterCoordinateDistance: NavigationMapView.metresAcross * 0.6,
-                maxCenterCoordinateDistance: NavigationMapView.metresAcross * 1.6
-            )
+            map.cameraZoomRange = Self.streetRange
         }
 
         // MARK: The route
@@ -320,6 +323,31 @@ struct NavigationMapView: UIViewRepresentable {
             mapView.setUserTrackingMode(NavigationMapView.trackingMode, animated: true)
             isSettingUp = false
         }
+
+        /// Back on you, at street level, and following again — however far the map was dragged
+        /// or pinched away.
+        ///
+        /// Following alone, not a camera move first: a camera move cancels following, so the map
+        /// swung back towards you and then sat there with Recentre still showing. The zoom comes
+        /// back through the zoom range instead — narrowed to street level for a moment, which
+        /// MapKit animates to without letting go of you, then opened out again.
+        func recentre(_ map: MKMapView) {
+            isSettingUp = true
+            map.setUserTrackingMode(NavigationMapView.trackingMode, animated: true)
+            isSettingUp = false
+            let street = NavigationMapView.metresAcross
+            map.setCameraZoomRange(MKMapView.CameraZoomRange(minCenterCoordinateDistance: street,
+                                                             maxCenterCoordinateDistance: street), animated: true)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { [weak map] in
+                map?.cameraZoomRange = Self.streetRange
+            }
+        }
+
+        /// Street level, give or take: the range the camera is held to while it follows you.
+        static let streetRange = MKMapView.CameraZoomRange(
+            minCenterCoordinateDistance: NavigationMapView.metresAcross * 0.6,
+            maxCenterCoordinateDistance: NavigationMapView.metresAcross * 1.6
+        )
 
         /// MapKit reports when it stops following because the map was moved by hand.
         func mapView(_ mapView: MKMapView, didChange mode: MKUserTrackingMode, animated: Bool) {

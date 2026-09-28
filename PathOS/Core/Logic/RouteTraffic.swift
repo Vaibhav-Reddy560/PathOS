@@ -93,7 +93,10 @@ nonisolated enum RouteTraffic {
 
     /// Never more pieces than this: each costs a request to keep fresh.
     static let pieceLimit = 12
-    /// Nor shorter than this. Below it the time for a piece is mostly the junctions at its ends.
+    /// Nor shorter than this. Below it the time for a piece is mostly the junctions at its ends,
+    /// and a route shorter than this is one piece that is never measured at all: a hundred metres
+    /// to the corner shop timed at 40 s against 25 s is a red light, not a jam, and it drew the
+    /// lane outside your door amber.
     static let shortestPiece = 500.0
 
     /// The route cut into equal pieces. The same route always cuts the same way, so the map and
@@ -157,7 +160,7 @@ nonisolated enum RouteTraffic {
     static func due(_ pieces: [Piece], readings: [Int: Reading], travelledMetres: Double,
                     now: Date, limit: Int = batchSize) -> [Request] {
         var asks: [Request] = []
-        for (index, piece) in pieces.enumerated() where piece.endMetres > travelledMetres {
+        for (index, piece) in pieces.enumerated() where piece.endMetres > travelledMetres && piece.metres >= shortestPiece {
             let reading = readings[index] ?? Reading()
             guard !reading.isUnmeasurable else { continue }
             if reading.freeFlowSeconds == nil {

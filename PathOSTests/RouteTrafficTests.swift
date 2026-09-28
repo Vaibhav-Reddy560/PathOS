@@ -124,6 +124,15 @@ struct RouteTrafficTests {
         #expect(asks.allSatisfy { $0.piece <= 1 })
     }
 
+    /// A route shorter than a piece is never timed: over a hundred metres the time is the junction
+    /// at the end, and colouring it by that drew an empty lane amber.
+    @Test func aShortRouteIsNeverMeasured() {
+        let pieces = RouteTraffic.pieces(routeMetres: 100)
+        #expect(pieces.count == 1)
+        #expect(RouteTraffic.due(pieces, readings: [:], travelledMetres: 0, now: now).isEmpty)
+        #expect(RouteTraffic.severities([:], count: 1) == [0])
+    }
+
     @Test func piecesBehindYouAreLeftAlone() {
         let pieces = RouteTraffic.pieces(routeMetres: 6_000)
         let asks = RouteTraffic.due(pieces, readings: [:], travelledMetres: 2_100, now: now)

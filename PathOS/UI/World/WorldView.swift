@@ -34,7 +34,7 @@ struct WorldView: View {
             if isDrivingALeg {
                 NavigationMapView(route: state.tripNav?.coordinates ?? [], trim: state.tripTrim,
                                   traffic: state.tripFlow?.shown(on: state.tripNav) ?? [],
-                                  destination: legEnd,
+                                  destination: state.tripNav?.coordinates.last ?? legEnd,
                                   places: state.poiDisplay, here: state.location.location?.coordinate,
                                   isFollowing: $isFollowingRoute)
                     .ignoresSafeArea()
@@ -181,7 +181,9 @@ struct WorldView: View {
     }
 
     /// Where the leg you're on ends: the destination, or the station a first leg takes you to.
-    /// The pin goes where the line goes.
+    /// Only until the route arrives — then the pin sits on the line's last point, since a place's
+    /// own pin is often inside it (the middle of a campus) and a pin off the end of the line
+    /// reads as a different place.
     private var legEnd: CLLocationCoordinate2D? {
         guard let trip = state.trip, let status = state.tripStatus else { return nil }
         return trip.option.legs[safe: status.legIndex]?.endCoordinate
