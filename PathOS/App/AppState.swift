@@ -1823,6 +1823,15 @@ final class AppState {
         try? modelContainer.mainContext.save()
         setAttendance(id, attended: true, on: day)
         haptics.success()
+        // The Lock Screen card was counting down what's left of it; it moves on now.
+        Task { await refreshPinnedContext() }
+    }
+
+    /// Everything marked done on a day.
+    func completedIDs(on day: Date) -> Set<String> {
+        let dayStart = Calendar.current.startOfDay(for: day)
+        let descriptor = FetchDescriptor<DayLog>(predicate: #Predicate { $0.dayStart == dayStart })
+        return Set((try? modelContainer.mainContext.fetch(descriptor).first)?.completions.map(\.id) ?? [])
     }
 
     /// When an item was marked done, without making a day's log just to find out.
@@ -1836,6 +1845,7 @@ final class AppState {
         let log = todaysLog(for: day)
         log.completions.removeAll { $0.id == id }
         try? modelContainer.mainContext.save()
+        Task { await refreshPinnedContext() }
     }
 
     /// Today's classes, events and calendar entries, as the Day shows them.
@@ -1860,7 +1870,9 @@ final class AppState {
                                                symbol: place.map(MailTriage.isOnline) == true ? "video.fill" : "calendar",
                                                role: .world)
             }
-        return classes + own + calendar
+        // Something you've said is done is over: no card counting down the rest of it.
+        let done = completedIDs(on: day)
+        return (classes + own + calendar).filter { !done.contains($0.id) }
     }
 
     // MARK: Assistant

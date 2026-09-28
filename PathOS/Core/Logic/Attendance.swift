@@ -50,4 +50,12 @@ nonisolated enum Attendance {
     static func count(_ ids: [String], missed: Set<String>) -> Int {
         ids.filter { !missed.contains($0) }.count
     }
+
+    /// How many of a day's things are behind you: marked done, or over and not seen missed.
+    ///
+    /// Not what's still to come. Counting the whole day's list from the morning on meant marking
+    /// something done changed nothing — it was already in the number.
+    static func finished(_ items: [(id: String, end: Date)], done: Set<String>, missed: Set<String>, now: Date) -> Int {
+        items.filter { done.contains($0.id) || ($0.end <= now && !missed.contains($0.id)) }.count
+    }
 }

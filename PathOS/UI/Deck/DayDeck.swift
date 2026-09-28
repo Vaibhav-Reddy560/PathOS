@@ -259,7 +259,7 @@ struct DayDeck: View {
     }
 
     private var eventsMetric: some View {
-        MetricView(label: "Events", value: "\(eventsAttended)", role: .world)
+        MetricView(label: "Events", value: "\(eventsAttended + sessionsAttended)", role: .world)
     }
 
     private var tasksMetric: some View {
@@ -324,18 +324,16 @@ struct DayDeck: View {
                     }
                     .pathPrimaryAction()
                 }
-                // Finished before its time: say so, and it moves on to what's next.
-                if next.isUnderway(now: now), next.isFinishable {
-                    Button {
-                        withAnimation(PathMotion.control) {
-                            state.markDone(next.id, start: next.start, plannedEnd: next.end, on: day, now: now)
-                        }
-                    } label: {
-                        Label("Mark as done", systemImage: "checkmark.circle")
-                            .font(.subheadline.weight(.semibold))
-                            .frame(maxWidth: .infinity, minHeight: 32)
+            }
+        }
+        // Finished before its time: said from its long-press menu, as on its row, and the tile
+        // moves on to what's next.
+        .contextMenu {
+            if next.isUnderway(now: now), next.isFinishable {
+                Button("Mark as done", systemImage: "checkmark.circle") {
+                    withAnimation(PathMotion.control) {
+                        state.markDone(next.id, start: next.start, plannedEnd: next.end, on: day, now: now)
                     }
-                    .pathSecondaryAction()
                 }
             }
         }
@@ -571,13 +569,21 @@ struct DayDeck: View {
     }
 
     /// The day's events, less the ones you were seen to miss.
+    /// The day's events that are behind you: done, or over and not missed.
     private var eventsAttended: Int {
-        Attendance.count(events.map { "event:\($0.id.uuidString)" }
-                         + calendarItems(on: day).map { "calendar:\($0.id)" }, missed: missedToday)
+        Attendance.finished(events.map { (id: "event:\($0.id.uuidString)", end: $0.end) }
+                            + calendarItems(on: day).map { (id: "calendar:\($0.id)", end: $0.end) },
+                            done: doneOnDay, missed: missedToday, now: now)
     }
 
     private var sessionsAttended: Int {
-        Attendance.count(classSessions.map { "class:\($0.id)" }, missed: missedToday)
+        Attendance.finished(classSessions.map { (id: "class:\($0.id)", end: $0.end) },
+                            done: doneOnDay, missed: missedToday, now: now)
+    }
+
+    /// What you marked done on this day.
+    private var doneOnDay: Set<String> {
+        Set(dayLog?.completions.map(\.id) ?? [])
     }
 
     private var dayLog: DayLog? {
@@ -801,26 +807,9 @@ private struct DayItemRow: View {
             Spacer(minLength: 0)
 
             if isNow {
-                VStack(alignment: .trailing, spacing: 8) {
-                    Text("Now")
-                        .font(.caption.weight(.bold))
-                        .foregroundStyle(.amber)
-                    if item.isFinishable {
-                        Button {
-                            withAnimation(PathMotion.resolve(PathMotion.control, reduceMotion: reduceMotion)) {
-                                state.markDone(item.id, start: item.start, plannedEnd: item.end, on: day, now: now)
-                            }
-                        } label: {
-                            Label("Done", systemImage: "checkmark")
-                                .font(.caption.weight(.semibold))
-                                .padding(.horizontal, 4)
-                                .frame(minHeight: 30)
-                        }
-                        .buttonStyle(.glass)
-                        .tint(.aurora)
-                        .accessibilityLabel("Mark \(item.title) as done")
-                    }
-                }
+                Text("Now")
+                    .font(.caption.weight(.bold))
+                    .foregroundStyle(.amber)
             } else if isMissed {
                 // Why the day's count is lower than the list is long.
                 Text("Missed")
@@ -859,7 +848,9 @@ private struct DayItemRow: View {
             if item.isFinishable, Completion.canFinish(start: item.start, now: now) {
                 if completion == nil {
                     Button("Mark as done", systemImage: "checkmark.circle") {
-                        state.markDone(item.id, start: item.start, plannedEnd: item.end, on: day, now: now)
+                        withAnimation(PathMotion.resolve(PathMotion.control, reduceMotion: reduceMotion)) {
+                            state.markDone(item.id, start: item.start, plannedEnd: item.end, on: day, now: now)
+                        }
                     }
                 } else {
                     Button("Not done yet", systemImage: "arrow.uturn.backward") {

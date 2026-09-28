@@ -42,4 +42,21 @@ struct AttendanceTests {
     @Test func droppingItCounts() {
         #expect(Attendance.verdict(sawThere: false, sawAway: false, wasDropped: true) == .missed)
     }
+
+    /// What's behind you counts; what's still to come doesn't yet. Marking something done while
+    /// it's on counts it at once — before, the whole day counted from the morning, so marking one
+    /// done changed nothing.
+    @Test func finishedIsDoneOrOver() {
+        let now = Date(timeIntervalSince1970: 1_790_000_000)
+        let items: [(id: String, end: Date)] = [
+            ("class:past", now.addingTimeInterval(-600)),
+            ("class:now", now.addingTimeInterval(1_800)),
+            ("class:later", now.addingTimeInterval(7_200)),
+            ("event:missed", now.addingTimeInterval(-60)),
+        ]
+        #expect(Attendance.finished(items, done: [], missed: ["event:missed"], now: now) == 1)
+        #expect(Attendance.finished(items, done: ["class:now"], missed: ["event:missed"], now: now) == 2)
+        // A day that's over counts everything but what was missed.
+        #expect(Attendance.finished(items, done: [], missed: ["event:missed"], now: now.addingTimeInterval(86_400)) == 3)
+    }
 }
