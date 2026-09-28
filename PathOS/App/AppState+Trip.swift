@@ -1,5 +1,6 @@
 import CoreLocation
 import Foundation
+import UIKit
 
 /// A journey you said you'd make, and when you set off.
 nonisolated struct ActiveTrip: Sendable {
@@ -51,6 +52,10 @@ extension AppState {
         tripStatus = TripGuide.status(for: option, startedAt: startedAt, now: startedAt,
                                       location: origin, origin: origin)
         deckStop = .collapsed
+        // A search field that still thinks it's being typed in keeps the keyboard's room held
+        // open under the map that leads you, and lifts the deck and your speed halfway up the
+        // screen with nothing below them. Setting off, nothing is being typed.
+        UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
         announcedTripLeg = nil
         announcedTripDelay = 0
         spokenMoments = []
