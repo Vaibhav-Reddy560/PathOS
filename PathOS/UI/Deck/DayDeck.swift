@@ -215,31 +215,36 @@ struct DayDeck: View {
         }
     }
 
-    /// How the day added up: four across while each label fits on one line, two by two when the
-    /// text is too large for that. A label that wraps drops its number below the others'.
+    /// How the day added up, in equal columns across the whole tile: four across while each
+    /// label fits on one line, two by two when the text is too large for that. A label that
+    /// wraps drops its number below the others', and figures bunched to the left leave half the
+    /// tile empty.
     private var summary: some View {
         ContentTile {
             ViewThatFits(in: .horizontal) {
-                HStack(alignment: .top, spacing: 20) {
-                    travelledMetric.fixedSize()
-                    eventsMetric.fixedSize()
-                    tasksMetric.fixedSize()
-                    savedMetric.fixedSize()
-                    Spacer(minLength: 0)
+                HStack(alignment: .top, spacing: 12) {
+                    column(travelledMetric.fixedSize())
+                    column(eventsMetric.fixedSize())
+                    column(tasksMetric.fixedSize())
+                    column(savedMetric.fixedSize())
                 }
-                Grid(alignment: .leading, horizontalSpacing: 28, verticalSpacing: 14) {
+                Grid(alignment: .leading, horizontalSpacing: 16, verticalSpacing: 14) {
                     GridRow {
-                        travelledMetric
-                        eventsMetric
+                        column(travelledMetric)
+                        column(eventsMetric)
                     }
                     GridRow {
-                        tasksMetric
-                        savedMetric
+                        column(tasksMetric)
+                        column(savedMetric)
                     }
                 }
-                .frame(maxWidth: .infinity, alignment: .leading)
             }
         }
+    }
+
+    /// An equal share of the width, the figure at its left edge.
+    private func column(_ metric: some View) -> some View {
+        metric.frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private var travelledMetric: some View {
@@ -915,8 +920,10 @@ private struct QuickActionLabel: View {
 
     var body: some View {
         VStack(spacing: 4) {
+            // Every symbol in the same box, or a tall suitcase pushes "Trip" below the others.
             Image(systemName: symbol)
                 .font(.body.weight(.semibold))
+                .frame(height: 24)
             Text(title)
                 .font(.caption.weight(.semibold))
                 .lineLimit(1)
