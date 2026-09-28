@@ -27,6 +27,16 @@ struct WorldMapView: View {
     }
     static let walkRingMinutes = [5, 10, 15]
 
+    /// Names under the markers, the way Apple Maps names its own places: MapKit shows each one
+    /// where there's room and drops the ones that would collide, so a few read at a glance from
+    /// far out and the rest appear as you zoom in — no tapping each marker to find out what it is.
+    /// Not for bus stops, whose long names would bury the places; and not for the one selected,
+    /// which carries its own name tag.
+    static func titles(for signal: WorldSignal, isSelected: Bool) -> Visibility {
+        if isSelected || signal.kind == .transitStop { return .hidden }
+        return .automatic
+    }
+
     var body: some View {
         @Bindable var state = state
         let here = state.location.location?.coordinate
@@ -116,7 +126,7 @@ struct WorldMapView: View {
                         state.selectedSignalID = signal.id
                     }
                 }
-                .annotationTitles(.hidden)
+                .annotationTitles(Self.titles(for: signal, isSelected: state.selectedSignalID == signal.id))
                 .tag(signal.id)
             }
 
