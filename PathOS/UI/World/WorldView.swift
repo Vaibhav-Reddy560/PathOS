@@ -32,8 +32,7 @@ struct WorldView: View {
             // the phone does. Everything else — browsing, picking places, a metro ride — is the
             // usual map.
             if isDrivingALeg {
-                NavigationMapView(route: state.tripNav?.coordinates ?? [], trim: state.tripTrim,
-                                  traffic: state.tripFlow?.shown(on: state.tripNav) ?? [],
+                NavigationMapView(route: state.tripNav?.coordinates ?? [], fix: state.tripFix,
                                   destination: state.tripNav?.coordinates.last ?? legEnd,
                                   places: state.poiDisplay, here: state.location.location?.coordinate,
                                   isFollowing: $isFollowingRoute)
@@ -82,6 +81,15 @@ struct WorldView: View {
             if isDeckShowing, screenHeight > 0 {
                 DeckPanel(signals: signals, screenCornerRadius: screenCornerRadius, screenHeight: screenHeight, topSafeArea: topSafeArea)
                     .transition(.move(edge: .bottom))
+            }
+        }
+        .overlay(alignment: .bottomLeading) {
+            // How fast you're going, where a glance down finds it, as in any navigation app.
+            if isDrivingALeg, let fix = state.tripFix {
+                SpeedReadout(metresPerSecond: fix.speed)
+                    .padding(.leading, 12)
+                    .padding(.bottom, mapBottomInset + 12)
+                    .transition(.opacity)
             }
         }
         .overlay(alignment: .bottomTrailing) {
@@ -261,5 +269,32 @@ private struct PlacePickBar: View {
         }
         .padding(16)
         .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 24, style: .continuous))
+    }
+}
+
+/// Your speed, in a small glass disc: the number large, the unit under it.
+private struct SpeedReadout: View {
+    let metresPerSecond: Double
+
+    private var kilometresPerHour: Int {
+        Int((max(0, metresPerSecond) * 3.6).rounded())
+    }
+
+    var body: some View {
+        VStack(spacing: -2) {
+            Text("\(kilometresPerHour)")
+                .font(.title2.weight(.bold).monospacedDigit())
+                .foregroundStyle(.ice)
+                .contentTransition(.numericText())
+                .lineLimit(1)
+                .minimumScaleFactor(0.7)
+            Text("km/h")
+                .font(.caption2.weight(.semibold))
+                .foregroundStyle(.aurora)
+        }
+        .frame(width: 64, height: 64)
+        .glassEffect(.regular, in: .circle)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("\(kilometresPerHour) kilometres an hour")
     }
 }

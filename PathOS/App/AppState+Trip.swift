@@ -35,21 +35,6 @@ nonisolated struct TripTraffic: Equatable, Sendable {
     static let worthSaying = 4
 }
 
-/// How the traffic runs along the route you're on, piece by piece.
-nonisolated struct TripFlow: Equatable, Sendable {
-    /// The route these pieces were measured on.
-    var routeID: UUID
-    /// How held up each piece is, 0…1, in the order `RouteTraffic.pieces` cuts the route.
-    var severities: [Double]
-    var at: Date
-
-    /// The pieces, but only while they still belong to the route on screen. A re-route brings
-    /// a new route with a new id, so old colours can't survive it.
-    func shown(on route: NavRoute?) -> [Double] {
-        route?.id == routeID ? severities : []
-    }
-}
-
 extension AppState {
 
     // MARK: Making a journey
@@ -69,6 +54,7 @@ extension AppState {
         announcedTripLeg = nil
         announcedTripDelay = 0
         spokenMoments = []
+        tripPace = TripPace()
         // Set off: any "time to leave" still waiting would only arrive on the way.
         Task { await notifications.removePending(withPrefix: "pathos.leave.") }
         location.startUpdates()
@@ -146,11 +132,9 @@ extension AppState {
         tripNav = nil
         tripStep = nil
         tripMatch = nil
-        tripTrim = nil
+        tripFix = nil
         tripTraffic = nil
-        tripFlow = nil
-        trafficReadings = [:]
-        trafficRouteID = nil
+        tripPace = TripPace()
         isRerouting = false
         navLegID = nil
         lastTripActivityStep = nil
@@ -201,21 +185,24 @@ extension AppState {
         if isRoad, !status.hasArrived, let nav = tripNav, navLegID == leg.id {
             let match = RouteProgress.match(nav.coordinates, at: here.coordinate, after: tripMatch)
             tripMatch = match
-            tripTrim = match.map { RouteTrim.Anchor(fraction: $0.fraction, at: here.timestamp,
-                                                    metresPerSecond: max(0, here.speed), routeMetres: $0.total) }
+            tripFix = fix(here, on: match)
             tripStep = StepGuide.position(in: nav.steps, at: here.coordinate, near: tripStep?.stepIndex)
             if let match {
                 status = liveAdjusted(status, trip: trip, now: now)
                 // A wrong turn, or heading the wrong way down the route: seen within a couple of
-                // fixes, not after a minute.
-                let isOff = match.offset > RouteProgress.offRouteMetres(accuracy: here.horizontalAccuracy)
+                // fixes, not after a minute — and within one when it's plainly a wrong turn.
+                let limit = RouteProgress.offRouteMetres(accuracy: here.horizontalAccuracy)
+                let isOff = match.offset > limit
                     || RouteProgress.isHeadingAway(course: location.courseDegrees, speed: here.speed, along: nav.coordinates, at: match)
                 offRouteSamples = isOff ? offRouteSamples + 1 : 0
+                if match.offset > limit * 2 {
+                    offRouteSamples = max(offRouteSamples, Self.offRouteSamplesBeforeReroute)
+                }
             }
         } else if !isRoad {
             tripStep = nil
             tripMatch = nil
-            tripTrim = nil
+            tripFix = nil
         }
 
         let previous = tripStatus
@@ -229,7 +216,17 @@ extension AppState {
         }
         guard isRoad, !status.hasArrived else { return }
 
-        if tripNav == nil || navLegID != leg.id || offRouteSamples >= Self.offRouteSamplesBeforeReroute {
+        // "Finding a new route" only while one is actually being looked for: back on the line,
+        // it goes at once. It used to be cleared only by a new route arriving, so a wobble off
+        // and back — or a fetch held back by the cooldown — left it up long after it meant anything.
+        if offRouteSamples == 0, isRerouting {
+            isRerouting = false
+        }
+
+        // The new way is asked for at the first sign of leaving the line, before it's certain:
+        // Apple Maps takes a second or two to answer, and by the time a second fix confirms the
+        // wrong turn the answer is nearly here. The banner waits for the confirmation.
+        if tripNav == nil || navLegID != leg.id || offRouteSamples > 0 {
             if offRouteSamples >= Self.offRouteSamplesBeforeReroute { isRerouting = true }
             if !isFetchingRoute, now.timeIntervalSince(lastRouteFetch) >= Self.rerouteCooldown || navLegID != leg.id {
                 Task { await refreshRoute(force: true) }
@@ -237,15 +234,6 @@ extension AppState {
         } else if now.timeIntervalSince(lastTrafficCheck) >= Self.trafficCheckInterval, !isFetchingRoute, leg.mode != .walk {
             lastTrafficCheck = now
             Task { await checkTraffic(for: leg) }
-        }
-
-        // The colours along the line, a few pieces at a time while it's on screen. Not on foot:
-        // a pavement has no traffic.
-        if isForeground, leg.mode != .walk, let nav = tripNav, navLegID == leg.id, !isRerouting,
-           !isMeasuringTraffic, now.timeIntervalSince(lastTrafficBatch) >= Self.trafficBatchInterval {
-            lastTrafficBatch = now
-            let travelled = tripMatch?.travelled ?? 0
-            Task { await measureTraffic(on: nav, travelled: travelled, now: now) }
         }
 
         speakNextTurn(status: status, leg: leg)
@@ -287,9 +275,16 @@ extension AppState {
         isFetchingRoute = true
         defer { isFetchingRoute = false }
         lastRouteFetch = now
-        let found = await places.directions(to: leg.endCoordinate, from: here, byRoad: leg.mode != .walk)
+        let found = await places.directions(to: leg.endCoordinate, from: here, byRoad: leg.mode != .walk,
+                                            alternates: isNewLeg)
         // Still on the same leg of the same way when it comes back.
         guard self.trip?.option.id == trip.option.id, tripStatus?.legIndex == status.legIndex else { return }
+        // Asked for at the first sign of leaving the line, and you're back on it: a wobble, not a
+        // wrong turn. The line you're following stays.
+        if !isNewLeg, offRouteSamples == 0 {
+            isRerouting = false
+            return
+        }
         // Where you are *now*, not where you were when the request left: at road speed a couple of
         // seconds of fetching is tens of metres, and the new line would start that far behind you.
         let arrived = location.location ?? here
@@ -326,6 +321,9 @@ extension AppState {
             route.name == nav.name && abs(route.distanceMeters - match.remaining) < max(300, match.remaining * 0.15)
         }
         let yours = same?.seconds ?? current
+        if same != nil {
+            tripPace.record(remaining: yours, at: now, routeID: nav.id)
+        }
         let saving = yours - fastest.seconds
 
         if same?.name != fastest.name, saving >= max(180, yours * 0.1) {
@@ -369,53 +367,20 @@ extension AppState {
     private func place(on route: NavRoute, at here: CLLocation) {
         let match = RouteProgress.match(route.coordinates, at: here.coordinate)
         tripMatch = match
-        tripTrim = match.map { RouteTrim.Anchor(fraction: $0.fraction, at: here.timestamp,
-                                                metresPerSecond: max(0, here.speed), routeMetres: $0.total) }
+        tripFix = fix(here, on: match)
         tripStep = StepGuide.position(in: route.steps, at: here.coordinate)
     }
 
-    /// Measures the next few pieces of the route that are due, and recolours the line.
-    ///
-    /// Each piece is asked about for now and, once, for a quiet hour, and drawn by how much longer
-    /// it's taking than the same road takes empty. A few at a time, nearest first: the stretch
-    /// you're about to drive is coloured within seconds of setting off and the far end within a
-    /// minute, without asking Apple Maps for more than it will answer.
-    private func measureTraffic(on nav: NavRoute, travelled: Double, now: Date) async {
-        if trafficRouteID != nav.id {
-            trafficRouteID = nav.id
-            trafficReadings = [:]
-        }
-        let pieces = RouteTraffic.pieces(routeMetres: RouteProgress.length(nav.coordinates))
-        let asks = RouteTraffic.due(pieces, readings: trafficReadings, travelledMetres: travelled, now: now)
-        guard !asks.isEmpty else { return }
-        isMeasuringTraffic = true
-        defer { isMeasuringTraffic = false }
-
-        let quiet = RouteTraffic.quietHour(after: now)
-        var answers: [(RouteTraffic.Request, (seconds: TimeInterval, metres: Double)?)] = []
-        await withTaskGroup(of: (RouteTraffic.Request, (seconds: TimeInterval, metres: Double)?).self) { group in
-            for ask in asks {
-                let piece = pieces[ask.piece]
-                let ends = RouteProgress.slice(nav.coordinates, from: piece.startMetres, to: piece.endMetres)
-                guard let from = ends.first, let to = ends.last else { continue }
-                group.addTask { [places] in
-                    let origin = CLLocation(latitude: from.latitude, longitude: from.longitude)
-                    let time = await places.roadTime(to: to, from: origin, departingAt: ask.ask == .now ? now : quiet)
-                    return (ask, time)
-                }
-            }
-            for await answer in group {
-                answers.append(answer)
-            }
-        }
-        // Re-routed while these were out: they belong to a line that's no longer on screen.
-        guard trafficRouteID == nav.id, tripNav?.id == nav.id else { return }
-        for (ask, time) in answers {
-            trafficReadings[ask.piece] = RouteTraffic.record(time, for: ask.ask, on: pieces[ask.piece],
-                                                             into: trafficReadings[ask.piece] ?? .init(), at: now)
-        }
-        tripFlow = TripFlow(routeID: nav.id,
-                            severities: RouteTraffic.severities(trafficReadings, count: pieces.count), at: now)
+    /// A fix as the driving map draws from it. The course is GPS's own, only when it knows one.
+    private func fix(_ here: CLLocation, on match: RouteProgress.Match?) -> NavigationPose.Fix {
+        NavigationPose.Fix(
+            coordinate: here.coordinate,
+            course: here.course >= 0 && here.speed >= NavigationPose.moving ? here.course : nil,
+            speed: max(0, here.speed),
+            at: here.timestamp,
+            travelled: match?.travelled,
+            offset: match?.offset
+        )
     }
 
     /// The plan's status, timed instead by what's left of the route you're on in today's traffic,
@@ -423,17 +388,17 @@ extension AppState {
     func liveAdjusted(_ status: TripGuide.Status, trip: ActiveTrip, now: Date) -> TripGuide.Status {
         guard !status.hasArrived, let nav = tripNav, let match = tripMatch,
               navLegID == trip.option.legs[safe: status.legIndex]?.id else { return status }
+        // Apple Maps' time for what's left, at your pace rather than its average driver's.
         return TripGuide.adjusting(status, in: trip.option, startedAt: trip.startedAt, now: now,
-                                   legMinutesLeft: nav.secondsRemaining(from: match) / 60)
+                                   legMinutesLeft: nav.secondsRemaining(from: match) * tripPace.factor / 60)
     }
 
-    /// Two fixes off the route, a second apart, and it re-routes: a wrong turn, not a wobble.
-    static let rerouteCooldown: TimeInterval = 6
+    /// Two fixes off the route, a second apart — or one well off it — and it re-routes: a wrong
+    /// turn, not a wobble. Asked again no sooner than this after the last ask.
+    static let rerouteCooldown: TimeInterval = 3
     static let offRouteSamplesBeforeReroute = 2
     /// How often the traffic on the route is asked about.
     static let trafficCheckInterval: TimeInterval = 60
-    /// How often the next few pieces of the line are measured for their colour.
-    static let trafficBatchInterval: TimeInterval = 8
 
     /// Where you've got to, what to do next, and whether the plan is slipping. Called on the
     /// foreground loop and on every background wake, so it keeps working in your pocket.

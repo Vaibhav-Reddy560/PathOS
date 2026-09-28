@@ -1,56 +1,68 @@
 import CoreLocation
 import MapKit
+import os
 import SwiftUI
 
-/// The map while you're being led somewhere: MapKit's own, doing its own following.
+/// The map while you're being led somewhere.
 ///
-/// Deliberately plain. The camera, the rotation and the smoothing of your position between fixes
-/// are `MKMapView`'s, through `userTrackingMode = .followWithHeading` — the same thing every other
-/// app on the phone uses. Hand-rolled versions of those (a look-ahead camera, a heading dead band,
-/// an animation per location update) are what made it drift and lag.
+/// Everything on it is drawn, every frame, from one `NavigationPose`: where you are — on the
+/// route when you're on it — and which way the road is taking you. The camera sits a little ahead
+/// of that and turns to it; your arrow sits on it; the line is cut off at it. Nothing can lag
+/// anything else, because nothing is worked out twice.
 ///
-/// The rest is PathOS's own. The line is drawn only ahead of you, piece by piece, each piece in the
-/// colour of the traffic on it, and its head is carried forward between fixes so it keeps up with
-/// a puck MapKit is moving smoothly. The puck is drawn here, because MapKit's own comes with a wide
-/// pale halo whenever the fix is poor, which reads on a dark map as a hole in the glass. And the
-/// end of the line has the pin, so you can see where it's taking you.
+/// It used to be MapKit's own following, with the map turned by the phone's compass. The compass
+/// in a car points wherever the phone faces, not where the car is going, so on a winding road
+/// the map stayed put while the road turned under it; MapKit's dot sat at the raw GPS position,
+/// beside the line more often than on it; and the line, trimmed by a separate clock, trailed
+/// behind the dot.
+///
+/// The route is drawn with a clear middle. Apple's own traffic — the orange and red Apple Maps
+/// shows — is drawn on the road beneath it, and shows through where there is any.
 struct NavigationMapView: UIViewRepresentable {
     /// The leg's route, drawn as the line to follow.
     var route: [CLLocationCoordinate2D]
-    /// Where you were on it at the last fix, and how fast: the line's head is drawn from this.
-    var trim: RouteTrim.Anchor?
-    /// How held up each piece of it is, in `RouteTraffic.pieces` order. Missing pieces draw aurora,
-    /// which is what the line is until anything has been measured.
-    var traffic: [Double] = []
+    /// The last fix: where, which way, how fast, and where that is on the route.
+    var fix: NavigationPose.Fix?
     /// Where the line ends: the pin.
     var destination: CLLocationCoordinate2D?
     /// Apple's own places, when you've asked to see them.
     var places = POIDisplay()
-    /// The last fix, so the first frame opens on the road rather than on nothing.
+    /// Where you last were, so the first frame opens on the road rather than on nothing.
     var here: CLLocationCoordinate2D?
     /// False once the map has been moved by hand; set back by Recentre.
     @Binding var isFollowing: Bool
 
     /// How much road is in view, in metres: close enough to see the turn you're taking.
     static let metresAcross = 420.0
-    /// Drawn a little larger than on the launch screen: it has to be found among the streets at a
-    /// glance while driving.
+    /// The camera's distance from the road at street level, and how far a pinch may take it.
+    /// Fixed numbers, not read back from the map: read while the map has no size yet, the
+    /// distance came back as nothing, and every frame after drew black.
+    static let streetDistance = 680.0
+    static let zoomRange = MKMapView.CameraZoomRange(minCenterCoordinateDistance: 250,
+                                                     maxCenterCoordinateDistance: 1_300)
+    /// The middle of the screen is this far ahead of you, so more of the road is in front than
+    /// behind.
+    static let lookAhead = 50.0
+    /// How long the map takes to turn to a new direction: quick enough for a zigzag, slow enough
+    /// not to jerk at every kink in the line.
+    static let turnTime = 0.35
+    /// Drawn a little larger than on the launch screen: it has to be found at a glance.
     static let pinScale = 1.3
 
     func makeUIView(context: Context) -> MKMapView {
         let map = MKMapView()
-        map.delegate = context.coordinator
-        map.showsUserLocation = true
+        let coordinator = context.coordinator
+        map.delegate = coordinator
+        // You're drawn here, on the route: MapKit's own dot can only sit where GPS says.
+        map.showsUserLocation = false
         map.showsCompass = false
         map.showsScale = false
-        map.isPitchEnabled = true
+        map.isPitchEnabled = false
         map.overrideUserInterfaceStyle = .dark
-        context.coordinator.apply(places, to: map)
-
-        // Tracking is switched on in the coordinator, once there's a fix to zoom to. Asking for
-        // it here instead makes MapKit pick its own region on the first fix, which is city-wide.
-        context.coordinator.frame(on: route.first ?? here, in: map)
-        context.coordinator.startDisplayLink()
+        coordinator.attach(to: map)
+        coordinator.apply(places, to: map)
+        coordinator.frame(on: route.first ?? here, in: map)
+        coordinator.startDisplayLink()
         return map
     }
 
@@ -58,15 +70,11 @@ struct NavigationMapView: UIViewRepresentable {
         let coordinator = context.coordinator
         coordinator.isFollowing = $isFollowing
         coordinator.apply(places, to: map)
-        // The route is fetched over the network, so the first frames of a trip have none. Keep
-        // the camera on wherever we do know about until MapKit has a fix of its own to follow.
-        coordinator.frame(on: route.first ?? here, in: map)
-
-        // Set before the route is laid out, so a new line starts where you are on it rather than
-        // where you were on the old one.
-        coordinator.severities = traffic
-        coordinator.anchor = trim
-        coordinator.place(destination, on: map)
+        // The route comes over the network, so the first frames of a trip have none.
+        if fix == nil {
+            coordinator.frame(on: route.first ?? here, in: map)
+        }
+        coordinator.fix = fix
 
         // Coordinates aren't comparable; the count and the ends say whether it's a new route.
         let fingerprint = Self.fingerprint(of: route)
@@ -74,24 +82,16 @@ struct NavigationMapView: UIViewRepresentable {
             coordinator.routeFingerprint = fingerprint
             coordinator.layOutRoute(route, on: map)
         }
-        coordinator.draw(force: true)
-
-        // Recentre: WorldView's button sets this back to true, and following starts again. Before
-        // the first fix there's nothing to follow, so it waits.
-        if isFollowing, coordinator.hasStartedFollowing, map.userTrackingMode == .none {
-            coordinator.recentre(map)
+        coordinator.place(destination, on: map)
+        // Recentre.
+        if isFollowing, !coordinator.isDriving {
+            coordinator.resumeFollowing()
         }
+        coordinator.tick(force: true)
     }
 
     static func dismantleUIView(_ map: MKMapView, coordinator: Coordinator) {
         coordinator.stopDisplayLink()
-    }
-
-    /// Turned to the way you're facing where there's a compass to know it; simply centred where
-    /// there isn't, as on a simulator — asking for a heading that can't be had leaves MapKit
-    /// refusing to follow at all.
-    static var trackingMode: MKUserTrackingMode {
-        CLLocationManager.headingAvailable() ? .followWithHeading : .follow
     }
 
     /// Enough of the route to tell one from another: how many points, and where it starts and ends.
@@ -105,94 +105,160 @@ struct NavigationMapView: UIViewRepresentable {
         Coordinator(isFollowing: $isFollowing)
     }
 
-    final class Coordinator: NSObject, MKMapViewDelegate {
+    final class Coordinator: NSObject, MKMapViewDelegate, UIGestureRecognizerDelegate {
         var isFollowing: Binding<Bool>
+        var fix: NavigationPose.Fix?
         var routeFingerprint = ""
-        var severities: [Double] = []
-        var anchor: RouteTrim.Anchor?
-        var hasStartedFollowing = false
-        var isSettingUp = false
-        /// Whether the camera has ever been put somewhere real. Until it has, the zoom range is
-        /// left alone.
-        private var hasFramed = false
+        /// Following: the camera is this coordinator's, and moves with you every frame.
+        private(set) var isDriving = true
 
-        /// The dark line under the coloured ones, run end to end, and a line for each piece of the
-        /// route over it. The pieces are cut the way `RouteTraffic` cuts them, so the colour a piece
-        /// is measured at is the colour its own stretch of road is drawn in.
-        private var casing: MKPolyline?
-        private var casingRenderer: MKPolylineRenderer?
-        private var pieceLines: [PieceLine] = []
-        private var pieceRenderers: [Int: MKPolylineRenderer] = [:]
-        /// The degree each piece's renderer was last coloured at, so the colour is only set when
-        /// it changes and not thirty times a second.
-        private var drawnSeverity: [Int: Double] = [:]
+        private weak var map: MKMapView?
+        private var line: NavigationPose.Line?
+        private var routeRenderer: RouteRenderer?
+        private var you: YouAnnotation?
+        private weak var youView: ArrowView?
         private var destinationPin: DestinationPin?
-        /// Where the head is drawn now, and the length it's measured against.
-        private var shown = 0.0
-        private var routeMetres = 0.0
         private var displayLink: CADisplayLink?
         private var poiFingerprint = ""
+        private var hasFramed = false
+
+        /// What was drawn last frame: how far along, which way, where the camera pointed.
+        private var along: Double?
+        private var heading = 0.0
+        private var cameraHeading: Double?
+        private var drawnHead = -1.0
+        private var lastTick: CFTimeInterval?
+        /// A Recentre is gliding back; the frames leave the camera alone until it lands.
+        private var glidingUntil: CFTimeInterval = 0
 
         init(isFollowing: Binding<Bool>) {
             self.isFollowing = isFollowing
         }
 
+        func attach(to map: MKMapView) {
+            self.map = map
+            // Your own hand on the map stops it following you. Recognisers of our own, alongside
+            // MapKit's: they see a drag or a pinch begin, and change nothing about how it feels.
+            let recognisers: [UIGestureRecognizer] = [
+                UIPanGestureRecognizer(target: self, action: #selector(handGesture(_:))),
+                UIPinchGestureRecognizer(target: self, action: #selector(handGesture(_:))),
+                UIRotationGestureRecognizer(target: self, action: #selector(handGesture(_:))),
+            ]
+            for recogniser in recognisers {
+                recogniser.delegate = self
+                recogniser.cancelsTouchesInView = false
+                map.addGestureRecognizer(recogniser)
+            }
+        }
+
         // MARK: The camera
 
-        /// Puts the camera on the road at street level, and only then narrows how far it may zoom.
-        ///
-        /// The order matters. `cameraZoomRange` clamps whatever region the map is showing, and the
-        /// region a fresh `MKMapView` shows is the whole world centred on nothing — so setting the
-        /// range first zooms the map to a few hundred metres of the Gulf of Guinea and leaves it
-        /// there until the first fix arrives. That is the flat blue map with no route on it.
+        /// Before the first fix: street level on the route's start, or where you last were. Only
+        /// then is the zoom range narrowed — set first, it clamps the whole-world region a fresh
+        /// map opens on to a few hundred metres of the ocean.
         func frame(on coordinate: CLLocationCoordinate2D?, in map: MKMapView) {
-            // Once MapKit is following, the camera is its business.
-            guard !hasStartedFollowing, let coordinate, CLLocationCoordinate2DIsValid(coordinate) else { return }
+            guard !hasFramed, let coordinate, CLLocationCoordinate2DIsValid(coordinate) else { return }
             map.setRegion(
                 MKCoordinateRegion(center: coordinate, latitudinalMeters: NavigationMapView.metresAcross,
                                    longitudinalMeters: NavigationMapView.metresAcross),
                 animated: false
             )
-            guard !hasFramed else { return }
             hasFramed = true
-            // Holds street level however MapKit moves the camera while it follows: a region set
-            // once is overridden the moment tracking takes over.
-            map.cameraZoomRange = Self.streetRange
+            map.cameraZoomRange = NavigationMapView.zoomRange
+        }
+
+        @objc private func handGesture(_ recogniser: UIGestureRecognizer) {
+            guard recogniser.state == .began, isDriving else { return }
+            isDriving = false
+            // Outside SwiftUI's update, or the write is dropped.
+            DispatchQueue.main.async { [isFollowing] in
+                if isFollowing.wrappedValue { isFollowing.wrappedValue = false }
+            }
+        }
+
+        func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer,
+                               shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer) -> Bool {
+            true
+        }
+
+        /// Back to you, at street level, turning with the road again — gliding there rather than
+        /// jumping, then frame by frame as before.
+        func resumeFollowing() {
+            isDriving = true
+            guard let map, let fix else { return }
+            let pose = NavigationPose.pose(fix, on: line, lastAlong: along, lastHeading: heading, now: Date())
+            guard let camera = Self.camera(on: pose.coordinate, heading: pose.heading) else { return }
+            map.setCamera(camera, animated: true)
+            cameraHeading = pose.heading
+            glidingUntil = CACurrentMediaTime() + 0.45
+        }
+
+        /// One frame: where you are, the line's head, your arrow, and the camera.
+        func tick(force: Bool = false) {
+            guard let map, let fix else { return }
+            let clock = CACurrentMediaTime()
+            let dt = lastTick.map { clock - $0 } ?? 0
+            lastTick = clock
+
+            let pose = NavigationPose.pose(fix, on: line, lastAlong: along, lastHeading: heading, now: Date())
+            along = pose.along ?? along
+            heading = pose.heading
+
+            // The line starts where your arrow is. Off the route it stays where you left it.
+            if let at = pose.along, force || abs(at - drawnHead) >= 0.5, let line, let head = line.point(at: at) {
+                drawnHead = at
+                routeRenderer?.setHead(segment: head.segment, point: MKMapPoint(head.coordinate))
+            }
+
+            if isDriving, clock >= glidingUntil {
+                let turned = cameraHeading.map {
+                    NavigationPose.turn(from: $0, toward: pose.heading, dt: dt, timeConstant: NavigationMapView.turnTime)
+                } ?? pose.heading
+                if let camera = Self.camera(on: pose.coordinate, heading: turned) {
+                    cameraHeading = turned
+                    map.camera = camera
+                }
+            }
+
+            placeYou(at: pose.coordinate, on: map)
+            // The arrow points the way you're going, on a map that may be turned.
+            youView?.point(at: pose.heading - map.camera.heading)
+        }
+
+        /// Street level, looking the way you're going, with you a little below the middle. Nil
+        /// rather than a camera made of a number that isn't one — which draws nothing at all.
+        private static func camera(on coordinate: CLLocationCoordinate2D, heading: Double) -> MKMapCamera? {
+            guard heading.isFinite, CLLocationCoordinate2DIsValid(coordinate) else { return nil }
+            let centre = GeoMath.coordinate(coordinate, metres: NavigationMapView.lookAhead, bearing: heading)
+            guard CLLocationCoordinate2DIsValid(centre) else { return nil }
+            return MKMapCamera(lookingAtCenter: centre, fromDistance: NavigationMapView.streetDistance,
+                               pitch: 0, heading: heading)
+        }
+
+        private func placeYou(at coordinate: CLLocationCoordinate2D, on map: MKMapView) {
+            if let you {
+                you.coordinate = coordinate
+            } else {
+                let annotation = YouAnnotation()
+                annotation.coordinate = coordinate
+                map.addAnnotation(annotation)
+                you = annotation
+            }
         }
 
         // MARK: The route
 
         func layOutRoute(_ route: [CLLocationCoordinate2D], on map: MKMapView) {
             map.removeOverlays(map.overlays)
-            pieceRenderers = [:]
-            drawnSeverity = [:]
-            casingRenderer = nil
-            pieceLines = []
-            casing = nil
-            shown = anchor?.fraction ?? 0
+            routeRenderer = nil
+            along = nil
+            drawnHead = -1
             guard route.count > 1 else {
-                routeMetres = 0
+                line = nil
                 return
             }
-            // Measured the same way the trip measures it, so the fraction you've travelled lands
-            // on the same metre of the same piece.
-            routeMetres = RouteProgress.length(route)
-
-            let dark = MKPolyline(coordinates: route, count: route.count)
-            casing = dark
-            map.addOverlay(dark, level: .aboveRoads)
-            // Added furthest-first so the piece you're on is drawn last and sits on top: where two
-            // meet, its round cap overshoots into the one beyond rather than the other way round.
-            for (index, piece) in RouteTraffic.pieces(routeMetres: routeMetres).enumerated().reversed() {
-                let shape = RouteProgress.slice(route, from: piece.startMetres, to: piece.endMetres)
-                guard shape.count > 1 else { continue }
-                let line = PieceLine(coordinates: shape, count: shape.count)
-                line.index = index
-                line.startMetres = piece.startMetres
-                line.metres = piece.metres
-                pieceLines.append(line)
-                map.addOverlay(line, level: .aboveRoads)
-            }
+            line = NavigationPose.Line(route)
+            map.addOverlay(MKPolyline(coordinates: route, count: route.count), level: .aboveRoads)
         }
 
         /// The pin at the end of the line: moved when the leg's end moves, gone when there's none.
@@ -216,63 +282,15 @@ struct NavigationMapView: UIViewRepresentable {
             }
         }
 
-        /// Where the head of the line is now, and what each piece should draw.
-        func draw(force: Bool = false, now: Date = Date()) {
-            if let anchor {
-                shown = RouteTrim.shown(anchor, lastShown: shown, sinceFix: now.timeIntervalSince(anchor.at))
-            }
-            if let casingRenderer {
-                set(casingRenderer, start: shown, end: 1, metres: routeMetres, force: force)
-            }
-            let head = shown * routeMetres
-            for line in pieceLines {
-                guard let renderer = pieceRenderers[line.index] else { continue }
-                let severity = severities[safe: line.index] ?? 0
-                if drawnSeverity[line.index] != severity {
-                    drawnSeverity[line.index] = severity
-                    renderer.strokeColor = UIColor(PathOSPalette.color(PathOSPalette.traffic(severity: severity)))
-                    renderer.setNeedsDisplay()
-                }
-                // The head, as a fraction of this piece: below zero it hasn't reached it yet, and
-                // past one the piece is behind you and hidden.
-                let start = (head - line.startMetres) / max(line.metres, 0.001)
-                set(renderer, start: max(0, start), end: 1, metres: line.metres, force: force)
-            }
-        }
-
-        /// Half a metre of real road — below that nothing on screen would move, and a redraw walks
-        /// the whole line. The old fixed fraction was 7 m on a long leg, which stepped visibly.
-        private func set(_ renderer: MKPolylineRenderer, start: Double, end: Double, metres: Double, force: Bool) {
-            guard start < end else {
-                hide(renderer)
-                return
-            }
-            let moved = abs(Double(renderer.strokeStart) - start) * max(metres, 1)
-            let wasHidden = renderer.alpha < 1
-            guard force || wasHidden || moved > 0.5 else { return }
-            renderer.alpha = 1
-            renderer.strokeStart = CGFloat(min(0.999, max(0, start)))
-            renderer.strokeEnd = CGFloat(min(1, max(0, end)))
-            renderer.setNeedsDisplay()
-        }
-
-        /// Alpha rather than a zero-length stretch: a round cap still paints a dot at zero length.
-        private func hide(_ renderer: MKPolylineRenderer) {
-            guard renderer.alpha > 0 else { return }
-            renderer.alpha = 0
-            renderer.setNeedsDisplay()
-        }
-
-        // MARK: Keeping up between fixes
+        // MARK: Every frame
 
         func startDisplayLink() {
             guard displayLink == nil else { return }
             let proxy = DisplayLinkProxy()
             proxy.coordinator = self
             let link = CADisplayLink(target: proxy, selector: #selector(DisplayLinkProxy.tick))
-            // A line's head needs nothing like the screen's full rate, and asking for it would
-            // hold ProMotion at 120 for the whole drive.
-            link.preferredFrameRateRange = CAFrameRateRange(minimum: 15, maximum: 60, preferred: 30)
+            // Smooth enough for a map that moves with you, without holding ProMotion at 120.
+            link.preferredFrameRateRange = CAFrameRateRange(minimum: 20, maximum: 60, preferred: 30)
             link.add(to: .main, forMode: .common)
             displayLink = link
         }
@@ -282,20 +300,11 @@ struct NavigationMapView: UIViewRepresentable {
             displayLink = nil
         }
 
-        /// Nothing to carry forward: stopped at a light, or a fix so old that reckoning from it
-        /// would be invention.
-        private var isWorthReckoning: Bool {
-            guard let anchor, !pieceLines.isEmpty else { return false }
-            guard anchor.metresPerSecond >= RouteTrim.stopped else { return false }
-            return Date().timeIntervalSince(anchor.at) < 5
+        fileprivate func frameTick() {
+            tick()
         }
 
-        fileprivate func tick() {
-            guard isWorthReckoning else { return }
-            draw()
-        }
-
-        // MARK: Apple's own places
+        // MARK: Apple's own map
 
         func apply(_ places: POIDisplay, to map: MKMapView) {
             // Reassigning the configuration makes MapKit reload its tiles, so it happens only when
@@ -303,118 +312,170 @@ struct NavigationMapView: UIViewRepresentable {
             let fingerprint = places.fingerprint
             guard fingerprint != poiFingerprint else { return }
             poiFingerprint = fingerprint
-            let configuration = MKStandardMapConfiguration(elevationStyle: .flat, emphasisStyle: .muted)
+            // Not muted: in every test, the muted style left Apple's traffic off the roads, and
+            // that traffic is the only traffic this map shows.
+            let configuration = MKStandardMapConfiguration(elevationStyle: .flat, emphasisStyle: .default)
             configuration.pointOfInterestFilter = places.filter
-            // Apple's own traffic on every other road. Set here, not on the map: the configuration
-            // carries its own value and replaces whatever the map was told.
+            // Set on the configuration, not the map: the configuration replaces what the map was told.
             configuration.showsTraffic = true
             map.preferredConfiguration = configuration
         }
 
         // MARK: MapKit's own reports
 
-        /// The first fix sets street-level zoom, and only then is MapKit asked to follow: it
-        /// keeps whatever zoom it is handed, and the one it picks for itself is city-wide.
-        func mapView(_ mapView: MKMapView, didUpdate userLocation: MKUserLocation) {
-            guard !hasStartedFollowing, let here = userLocation.location?.coordinate else { return }
-            frame(on: here, in: mapView)
-            hasStartedFollowing = true
-            isSettingUp = true
-            mapView.setUserTrackingMode(NavigationMapView.trackingMode, animated: true)
-            isSettingUp = false
-        }
-
-        /// Back on you, at street level, and following again — however far the map was dragged
-        /// or pinched away.
-        ///
-        /// Following alone, not a camera move first: a camera move cancels following, so the map
-        /// swung back towards you and then sat there with Recentre still showing. The zoom comes
-        /// back through the zoom range instead — narrowed to street level for a moment, which
-        /// MapKit animates to without letting go of you, then opened out again.
-        func recentre(_ map: MKMapView) {
-            isSettingUp = true
-            map.setUserTrackingMode(NavigationMapView.trackingMode, animated: true)
-            isSettingUp = false
-            let street = NavigationMapView.metresAcross
-            map.setCameraZoomRange(MKMapView.CameraZoomRange(minCenterCoordinateDistance: street,
-                                                             maxCenterCoordinateDistance: street), animated: true)
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { [weak map] in
-                map?.cameraZoomRange = Self.streetRange
-            }
-        }
-
-        /// Street level, give or take: the range the camera is held to while it follows you.
-        static let streetRange = MKMapView.CameraZoomRange(
-            minCenterCoordinateDistance: NavigationMapView.metresAcross * 0.6,
-            maxCenterCoordinateDistance: NavigationMapView.metresAcross * 1.6
-        )
-
-        /// MapKit reports when it stops following because the map was moved by hand.
-        func mapView(_ mapView: MKMapView, didChange mode: MKUserTrackingMode, animated: Bool) {
-            // Zooming to the first fix drops tracking for an instant on its way to turning it on;
-            // that isn't you moving the map.
-            guard !isSettingUp else { return }
-            let following = mode != .none
-            // Reported from inside MapKit's own layout pass, so the write waits for the next turn
-            // of the run loop: changing SwiftUI state during an update is dropped.
-            DispatchQueue.main.async { [isFollowing] in
-                if isFollowing.wrappedValue != following {
-                    isFollowing.wrappedValue = following
-                }
-            }
-        }
-
-        /// Our own puck. MapKit's draws a wide pale circle around itself whenever the fix is poor
-        /// or the position is being rounded, which on a dark map reads as a hole in the glass. The
-        /// heading cone goes with it and isn't missed: the map turns to your heading, so a cone
-        /// that always points up the screen says nothing.
         func mapView(_ mapView: MKMapView, viewFor annotation: any MKAnnotation) -> MKAnnotationView? {
+            if annotation is YouAnnotation {
+                let view = mapView.dequeueReusableAnnotationView(withIdentifier: ArrowView.reuseID) as? ArrowView
+                    ?? ArrowView(annotation: annotation, reuseIdentifier: ArrowView.reuseID)
+                view.annotation = annotation
+                youView = view
+                return view
+            }
             if annotation is DestinationPin {
                 let view = mapView.dequeueReusableAnnotationView(withIdentifier: PinView.reuseID) as? PinView
                     ?? PinView(annotation: annotation, reuseIdentifier: PinView.reuseID)
                 view.annotation = annotation
                 return view
             }
-            guard annotation is MKUserLocation else { return nil }
-            let view = mapView.dequeueReusableAnnotationView(withIdentifier: PuckView.reuseID) as? PuckView
-                ?? PuckView(annotation: annotation, reuseIdentifier: PuckView.reuseID)
-            view.annotation = annotation
-            return view
+            return nil
         }
 
         func mapView(_ mapView: MKMapView, rendererFor overlay: any MKOverlay) -> MKOverlayRenderer {
-            guard let line = overlay as? MKPolyline else { return MKOverlayRenderer(overlay: overlay) }
-            let renderer = MKPolylineRenderer(polyline: line)
-            renderer.lineCap = .round
-            renderer.lineJoin = .round
-            if let piece = line as? PieceLine {
-                renderer.lineWidth = 9
-                let severity = severities[safe: piece.index] ?? 0
-                renderer.strokeColor = UIColor(PathOSPalette.color(PathOSPalette.traffic(severity: severity)))
-                drawnSeverity[piece.index] = severity
-                pieceRenderers[piece.index] = renderer
-            } else {
-                renderer.lineWidth = 15
-                renderer.strokeColor = UIColor(Color.void).withAlphaComponent(0.9)
-                casingRenderer = renderer
+            guard let polyline = overlay as? MKPolyline else { return MKOverlayRenderer(overlay: overlay) }
+            // MapKit can ask more than once for the same line, and goes on drawing with the first
+            // renderer it was given. Two of them meant the head was moved on one while the other,
+            // never told, drew the whole route — the line behind you that wouldn't go away.
+            if let routeRenderer, routeRenderer.polyline === polyline {
+                return routeRenderer
             }
-            // MapKit can ask for a renderer again at any time, so it starts where the line is now.
-            draw(force: true)
+            let renderer = RouteRenderer(polyline: polyline)
+            routeRenderer = renderer
+            drawnHead = -1
+            tick(force: true)
             return renderer
         }
     }
 }
 
-/// One piece of the route, and where it sits along the whole of it. A subclass only so the
-/// renderer can tell them apart. Not a view and not on any actor: MapKit makes and keeps these.
-private nonisolated final class PieceLine: MKPolyline {
-    var index = 0
-    var startMetres = 0.0
-    var metres = 0.0
+// MARK: - Drawing
+
+/// The route: a dark edge, the aurora line, and a clear middle where Apple's traffic colour on the
+/// road beneath shows through. Drawn only from your arrow onwards — what's behind you is gone.
+///
+/// MapKit draws overlays in tiles, on its own threads, so where the head is sits behind a lock.
+private nonisolated final class RouteRenderer: MKPolylineRenderer {
+    private struct Head: Sendable {
+        var segment: Int
+        var x: Double
+        var y: Double
+    }
+
+    private let head = OSAllocatedUnfairLock<Head?>(initialState: nil)
+    private let casing = UIColor(PathOSPalette.color(PathOSPalette.void)).withAlphaComponent(0.9).cgColor
+    private let aurora = UIColor(PathOSPalette.color(PathOSPalette.aurora)).cgColor
+
+    /// Widths in points: the edge, the line, and the clear middle.
+    static let casingWidth: CGFloat = 16
+    static let lineWidth: CGFloat = 11
+    static let clearWidth: CGFloat = 5
+
+    func setHead(segment: Int, point: MKMapPoint) {
+        head.withLock { $0 = Head(segment: segment, x: point.x, y: point.y) }
+        setNeedsDisplay()
+    }
+
+    override func draw(_ mapRect: MKMapRect, zoomScale: MKZoomScale, in context: CGContext) {
+        let count = polyline.pointCount
+        guard count > 1 else { return }
+        let points = polyline.points()
+        let start = head.withLock { $0 }
+
+        let path = CGMutablePath()
+        if let start {
+            guard start.segment + 1 < count else { return }
+            path.move(to: point(for: MKMapPoint(x: start.x, y: start.y)))
+            for index in (start.segment + 1)..<count {
+                path.addLine(to: point(for: points[index]))
+            }
+        } else {
+            path.move(to: point(for: points[0]))
+            for index in 1..<count {
+                path.addLine(to: point(for: points[index]))
+            }
+        }
+
+        context.setLineCap(.round)
+        context.setLineJoin(.round)
+        func stroke(_ width: CGFloat, _ color: CGColor?) {
+            context.addPath(path)
+            if let color { context.setStrokeColor(color) }
+            context.setLineWidth(width / zoomScale)
+            context.strokePath()
+        }
+        stroke(Self.casingWidth, casing)
+        stroke(Self.lineWidth, aurora)
+        // The middle, cut out of both: the road, and any traffic on it, show through.
+        context.setBlendMode(.clear)
+        stroke(Self.clearWidth, nil)
+    }
 }
+
+/// You, on the map that leads you.
+private nonisolated final class YouAnnotation: MKPointAnnotation {}
 
 /// Where the line ends.
 private nonisolated final class DestinationPin: MKPointAnnotation {}
+
+/// You, as an arrowhead: pointed at the front, swept back on both sides, notched behind — the way
+/// every navigation app draws the car, so which way you're heading is never a question. Aurora,
+/// since it's you, edged in Ice so it holds up on any road.
+private final class ArrowView: MKAnnotationView {
+    static let reuseID = "pathos.you"
+    static let size: CGFloat = 34
+
+    override init(annotation: (any MKAnnotation)?, reuseIdentifier: String?) {
+        super.init(annotation: annotation, reuseIdentifier: reuseIdentifier)
+        let side = Self.size
+        frame = CGRect(x: 0, y: 0, width: side, height: side)
+        canShowCallout = false
+        isEnabled = false
+        displayPriority = .required
+        zPriority = .max
+
+        let shape = UIBezierPath()
+        shape.move(to: CGPoint(x: side * 0.5, y: side * 0.08))
+        shape.addLine(to: CGPoint(x: side * 0.86, y: side * 0.88))
+        shape.addLine(to: CGPoint(x: side * 0.5, y: side * 0.68))
+        shape.addLine(to: CGPoint(x: side * 0.14, y: side * 0.88))
+        shape.close()
+
+        let arrow = CAShapeLayer()
+        arrow.path = shape.cgPath
+        arrow.fillColor = UIColor(Color.aurora).cgColor
+        arrow.strokeColor = UIColor(Color.ice).cgColor
+        arrow.lineWidth = 2.5
+        arrow.lineJoin = .round
+        arrow.shadowColor = UIColor(Color.void).cgColor
+        arrow.shadowOpacity = 0.55
+        arrow.shadowRadius = 4
+        arrow.shadowOffset = .zero
+        arrow.actions = ["position": NSNull(), "bounds": NSNull(), "path": NSNull(), "transform": NSNull()]
+        layer.addSublayer(arrow)
+    }
+
+    required init?(coder: NSCoder) {
+        super.init(coder: coder)
+    }
+
+    /// Turned to a bearing relative to the screen's up, without Core Animation easing it too.
+    func point(at degrees: Double) {
+        let angle = CGFloat(degrees * .pi / 180)
+        guard abs(atan2(transform.b, transform.a) - angle) > 0.002 else { return }
+        UIView.performWithoutAnimation {
+            transform = CGAffineTransform(rotationAngle: angle)
+        }
+    }
+}
 
 /// Weak, because `CADisplayLink` keeps its target alive and the run loop keeps the link: a
 /// coordinator as its own target would outlive the map and go on firing.
@@ -427,41 +488,7 @@ private final class DisplayLinkProxy: NSObject {
     }
 
     @objc func tick() {
-        coordinator?.tick()
-    }
-}
-
-/// You, on the navigation map: the same dot the browsing map draws, without MapKit's halo.
-private final class PuckView: MKAnnotationView {
-    static let reuseID = "pathos.puck"
-
-    override init(annotation: (any MKAnnotation)?, reuseIdentifier: String?) {
-        super.init(annotation: annotation, reuseIdentifier: reuseIdentifier)
-        frame = CGRect(x: 0, y: 0, width: 22, height: 22)
-        canShowCallout = false
-        isEnabled = false
-        zPriority = .max
-
-        let ring = CAShapeLayer()
-        ring.path = UIBezierPath(ovalIn: bounds).cgPath
-        ring.fillColor = UIColor(Color.ice).cgColor
-        ring.shadowColor = UIColor(Color.void).cgColor
-        ring.shadowOpacity = 0.5
-        ring.shadowRadius = 4
-        ring.shadowOffset = .zero
-        let dot = CAShapeLayer()
-        dot.path = UIBezierPath(ovalIn: bounds.insetBy(dx: 3.5, dy: 3.5)).cgPath
-        dot.fillColor = UIColor(Color.aurora).cgColor
-        // MapKit moves this view itself; Core Animation must not animate it as well.
-        for layer in [ring, dot] {
-            layer.actions = ["position": NSNull(), "bounds": NSNull(), "path": NSNull()]
-        }
-        layer.addSublayer(ring)
-        layer.addSublayer(dot)
-    }
-
-    required init?(coder: NSCoder) {
-        super.init(coder: coder)
+        coordinator?.frameTick()
     }
 }
 

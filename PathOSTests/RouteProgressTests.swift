@@ -49,16 +49,16 @@ struct RouteProgressTests {
         #expect(next.travelled > 500)
     }
 
-    /// Forty metres off is a wrong turn; ten is the width of the road.
+    /// Thirty metres off is a wrong turn; ten is the width of the road.
     @Test func leavingTheRouteIsSeenWithinAStreet() throws {
         let limit = RouteProgress.offRouteMetres(accuracy: 10)
-        #expect(limit == 40)
+        #expect(limit == 30)
         let onIt = try #require(RouteProgress.match(route, at: point(north: 200, east: 10)))
         #expect(onIt.offset < limit)
         let offIt = try #require(RouteProgress.match(route, at: point(north: 200, east: 60)))
         #expect(offIt.offset > limit)
         // A poor fix earns more room, but never the old 120 m.
-        #expect(RouteProgress.offRouteMetres(accuracy: 200) == 90)
+        #expect(RouteProgress.offRouteMetres(accuracy: 200) == 75)
     }
 
     @Test func goingTheWrongWayIsNoticed() throws {

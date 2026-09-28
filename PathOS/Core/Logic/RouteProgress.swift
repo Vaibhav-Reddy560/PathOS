@@ -74,53 +74,17 @@ nonisolated enum RouteProgress {
         return Match(segment: found.segment, point: point, travelled: travelled, total: total, offset: found.offset)
     }
 
-    /// How long the route is, in the same metres every other measure along it uses.
-    static func length(_ route: [CLLocationCoordinate2D]) -> Double {
-        zip(route, route.dropFirst()).reduce(0) { $0 + GeoMath.distance(from: $1.0, to: $1.1) }
-    }
-
-    /// The part of the route between two distances along it, cut exactly at both ends. How the
-    /// route is split into pieces that are each measured, and drawn, on their own.
-    static func slice(_ route: [CLLocationCoordinate2D], from start: Double, to end: Double) -> [CLLocationCoordinate2D] {
-        guard route.count > 1, end > start else { return [] }
-        func between(_ a: CLLocationCoordinate2D, _ b: CLLocationCoordinate2D, _ t: Double) -> CLLocationCoordinate2D {
-            let t = min(1, max(0, t))
-            return CLLocationCoordinate2D(latitude: a.latitude + (b.latitude - a.latitude) * t,
-                                          longitude: a.longitude + (b.longitude - a.longitude) * t)
-        }
-        var slice: [CLLocationCoordinate2D] = []
-        var walked = 0.0
-        for index in 0..<(route.count - 1) {
-            let a = route[index], b = route[index + 1]
-            let step = GeoMath.distance(from: a, to: b)
-            let from = walked
-            walked += step
-            // Wholly before the start.
-            guard walked > start else { continue }
-            if slice.isEmpty {
-                slice.append(between(a, b, step > 0 ? (start - from) / step : 0))
-            }
-            if walked >= end {
-                slice.append(between(a, b, step > 0 ? (end - from) / step : 1))
-                return slice
-            }
-            slice.append(b)
-        }
-        // The route ended first: the slice runs to its end.
-        return slice
-    }
-
     /// The line still ahead of you, starting where you are on it — which is all the map draws.
     static func ahead(of route: [CLLocationCoordinate2D], from match: Match) -> [CLLocationCoordinate2D] {
         guard match.segment + 1 < route.count else { return [] }
         return [match.point] + route[(match.segment + 1)...]
     }
 
-    /// Off the route: further from it than the fix's own uncertainty explains. A street's width
-    /// and some GPS error, not the two hundred metres of a parallel road, which is how far the
-    /// old fixed 120 m let you go before anything happened.
+    /// Off the route: further from it than the fix's own uncertainty explains. A wide road and
+    /// good GPS's error, and no more: forty metres, as it was, is most of a city block, and a
+    /// wrong turn wasn't noticed until you were well down the wrong street.
     static func offRouteMetres(accuracy: Double) -> Double {
-        min(90, max(40, accuracy * 1.5))
+        min(75, max(30, accuracy * 1.5))
     }
 
     /// Going the wrong way along the route: moving, and heading well away from the way the line

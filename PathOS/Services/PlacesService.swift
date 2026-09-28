@@ -204,29 +204,14 @@ final class PlacesService {
         return CLLocation(latitude: ahead.latitude, longitude: ahead.longitude)
     }
 
-    /// How long a stretch of road takes, and how long that stretch turned out to be. Unrounded,
-    /// unlike `hop`: a kilometre in 60 seconds and one in 119 both round to "2 min", and they are
-    /// 60 km/h and 30 km/h.
-    ///
-    /// `departingAt` is what makes it a traffic measurement. Apple Maps predicts the traffic for
-    /// whatever departure it's given, so the same stretch asked about for now and for a quiet
-    /// hour comes back as the road with the traffic on it and the road without.
-    func roadTime(to destination: CLLocationCoordinate2D, from origin: CLLocation,
-                  departingAt departure: Date) async -> (seconds: TimeInterval, metres: Double)? {
-        let request = MKDirections.Request()
-        request.source = MKMapItem(location: Self.launchPoint(from: origin, byRoad: true), address: nil)
-        request.destination = MKMapItem(location: CLLocation(latitude: destination.latitude, longitude: destination.longitude), address: nil)
-        request.transportType = .automobile
-        request.departureDate = departure
-        guard let response = try? await MKDirections(request: request).calculateETA() else { return nil }
-        return (response.expectedTravelTime, response.distance)
-    }
-
     /// A route with its turns, for following a leg on the map. Apple Maps has no two-wheeler
     /// mode, so a scooter or a bike taxi follows the car's route, which is the same road.
+    ///
+    /// `alternates` is off for a re-route: Apple Maps answers noticeably quicker for one way than
+    /// for three, and after a wrong turn the quickest answer is the one that matters.
     func directions(to destination: CLLocationCoordinate2D, from origin: CLLocation,
-                    byRoad: Bool) async -> NavRoute? {
-        await routes(to: destination, from: origin, byRoad: byRoad).first
+                    byRoad: Bool, alternates: Bool = true) async -> NavRoute? {
+        await routes(to: destination, from: origin, byRoad: byRoad, alternates: alternates).first
     }
 
     /// Every way Apple Maps offers, quickest first, timed for the traffic right now.
@@ -234,7 +219,8 @@ final class PlacesService {
     /// Moving, the route is asked for from a little ahead of you in the direction you're going,
     /// then joined back to where you are: Apple Maps knows nothing of which way you face, and a
     /// route from exactly where you stand on a divided road often began with a U-turn.
-    func routes(to destination: CLLocationCoordinate2D, from origin: CLLocation, byRoad: Bool) async -> [NavRoute] {
+    func routes(to destination: CLLocationCoordinate2D, from origin: CLLocation, byRoad: Bool,
+                alternates: Bool = true) async -> [NavRoute] {
         let request = MKDirections.Request()
         let start = Self.launchPoint(from: origin, byRoad: byRoad)
         request.source = MKMapItem(location: start, address: nil)
@@ -242,7 +228,7 @@ final class PlacesService {
         request.transportType = byRoad ? .automobile : .walking
         // Now, so the times are for the traffic on the roads now, and the other ways too.
         request.departureDate = Date()
-        request.requestsAlternateRoutes = byRoad
+        request.requestsAlternateRoutes = byRoad && alternates
         guard let found = try? await MKDirections(request: request).calculate().routes else { return [] }
         let joined = start.coordinate.latitude == origin.coordinate.latitude ? nil : origin.coordinate
         return found

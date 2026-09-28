@@ -160,14 +160,13 @@ final class AppState {
     var tripStep: StepGuide.Position?
     /// Where you are on that route: what's behind you stops being drawn, and what's left is timed.
     var tripMatch: RouteProgress.Match?
-    /// The last known position on the route, for drawing the line's head between fixes.
-    var tripTrim: RouteTrim.Anchor?
+    /// The last fix, as the map that leads you draws from it: where, which way, how fast, and
+    /// where that is on the route.
+    var tripFix: NavigationPose.Fix?
     /// Off the route and fetching a new one.
     var isRerouting = false
     /// What the traffic is doing to this leg, from Apple Maps' live times.
     var tripTraffic: TripTraffic?
-    /// Where along the route the traffic is, for colouring the line.
-    var tripFlow: TripFlow?
     /// Where the map is centred, once it stops moving.
     @ObservationIgnored var mapCenter: CLLocationCoordinate2D?
     /// Presents the event sheet: nil id means a new event.
@@ -290,12 +289,8 @@ final class AppState {
     @ObservationIgnored var lastNavigationUpdate = Date.distantPast
     /// When the traffic on the route was last asked about, and the Lock Screen last redrawn.
     @ObservationIgnored var lastTrafficCheck = Date.distantPast
-    /// What's been measured of each piece of the route, for colouring it; which route that was;
-    /// and when the last few pieces were asked about.
-    @ObservationIgnored var trafficReadings: [Int: RouteTraffic.Reading] = [:]
-    @ObservationIgnored var trafficRouteID: UUID?
-    @ObservationIgnored var isMeasuringTraffic = false
-    @ObservationIgnored var lastTrafficBatch = Date.distantPast
+    /// How your driving compares with Apple Maps' pace, for the arrival time.
+    @ObservationIgnored var tripPace = TripPace()
     @ObservationIgnored var lastTripActivityUpdate = Date.distantPast
     @ObservationIgnored var lastTripActivityStep: Int?
     /// Today's log, kept to hand: distance is added on every fix.
