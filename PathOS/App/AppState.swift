@@ -119,6 +119,8 @@ final class AppState {
     let events: EventsService
     let eventStore: EventStore
     let reminders: ReminderStore
+    /// TomTom's traffic on the route you're driving, when you've given PathOS a key.
+    let routeTraffic: TrafficService
     let timetable: TimetableService
     let transit: TransitService
     let trips: TripStore
@@ -167,6 +169,8 @@ final class AppState {
     var isRerouting = false
     /// What the traffic is doing to this leg, from Apple Maps' live times.
     var tripTraffic: TripTraffic?
+    /// Where along the route it's slow, from TomTom, for colouring the line.
+    var tripJams: TripJams?
     /// Where the map is centred, once it stops moving.
     @ObservationIgnored var mapCenter: CLLocationCoordinate2D?
     /// Presents the event sheet: nil id means a new event.
@@ -291,6 +295,9 @@ final class AppState {
     @ObservationIgnored var lastTrafficCheck = Date.distantPast
     /// How your driving compares with Apple Maps' pace, for the arrival time.
     @ObservationIgnored var tripPace = TripPace()
+    /// When TomTom was last asked about the route's traffic, and whether it's being asked now.
+    @ObservationIgnored var lastJamCheck = Date.distantPast
+    @ObservationIgnored var isCheckingJams = false
     @ObservationIgnored var lastTripActivityUpdate = Date.distantPast
     @ObservationIgnored var lastTripActivityStep: Int?
     /// Today's log, kept to hand: distance is added on every fix.
@@ -355,6 +362,7 @@ final class AppState {
         let eventStore = EventStore(context: modelContext, notifications: notifications)
         self.eventStore = eventStore
         reminders = ReminderStore(context: modelContext, notifications: notifications)
+        routeTraffic = TrafficService()
         let timetable = TimetableService(context: modelContext, ai: ai, notifications: notifications)
         self.timetable = timetable
         transit = TransitService(notifications: notifications)

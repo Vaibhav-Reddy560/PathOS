@@ -15,6 +15,10 @@ struct SettingsView: View {
     @State private var backupToShare: URL?
     @State private var backupNote: String?
     @State private var isImportingBackup = false
+    /// The TomTom key being typed, and what trying it said.
+    @State private var trafficKey = ""
+    @State private var trafficNote: String?
+    @State private var isCheckingTrafficKey = false
 
     var body: some View {
         @Bindable var state = state
@@ -143,6 +147,8 @@ struct SettingsView: View {
                     InstrumentLabel("Commute")
                 }
 
+                liveTrafficSection
+
                 Section {
                     ForEach(MetroNetwork.data.sources, id: \.what) { source in
                         VStack(alignment: .leading, spacing: 2) {
@@ -245,6 +251,56 @@ struct SettingsView: View {
     }
 
     /// Keeping the data: what survives, what doesn't, and the file that always does.
+    /// A TomTom key, for colouring the route you drive by the traffic on it.
+    private var liveTrafficSection: some View {
+        Section {
+            if state.routeTraffic.hasKey {
+                Label("On: the route you drive shows its traffic", systemImage: "checkmark.circle.fill")
+                    .foregroundStyle(.aurora)
+                if let problem = state.routeTraffic.problem {
+                    Text(problem)
+                        .font(.footnote)
+                        .foregroundStyle(.amber)
+                }
+                Button("Turn off and forget the key", role: .destructive) {
+                    state.routeTraffic.forgetKey()
+                    trafficNote = nil
+                }
+            } else {
+                SecureField("Paste your TomTom key", text: $trafficKey)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                    .textContentType(.password)
+                Button {
+                    isCheckingTrafficKey = true
+                    Task {
+                        trafficNote = await state.routeTraffic.save(key: trafficKey)
+                        isCheckingTrafficKey = false
+                        if state.routeTraffic.hasKey { trafficKey = "" }
+                    }
+                } label: {
+                    HStack(spacing: 8) {
+                        if isCheckingTrafficKey { ProgressView().controlSize(.small) }
+                        Text(isCheckingTrafficKey ? "Checking…" : "Save and check")
+                    }
+                }
+                .disabled(trafficKey.trimmingCharacters(in: .whitespaces).isEmpty || isCheckingTrafficKey)
+                if let url = URL(string: "https://developer.tomtom.com/user/register") {
+                    Link("Get a free key from TomTom", destination: url)
+                }
+            }
+            if let trafficNote {
+                Text(trafficNote)
+                    .font(.footnote)
+                    .foregroundStyle(.mist)
+            }
+        } header: {
+            InstrumentLabel("Live traffic")
+        } footer: {
+            Text("Colours the route you're driving amber to red where it's slow. Apple doesn't give apps its traffic for a street, so this asks TomTom: sign up free, copy the key from your dashboard, paste it here. The free plan is 2,500 requests a day with no card, and past that TomTom refuses rather than charges; PathOS uses about 30 an hour of driving. The route ahead is sent to TomTom to be checked. The key stays in this phone's Keychain.")
+        }
+    }
+
     private var dataSection: some View {
         Section {
             LabeledContent("On this iPhone", value: state.backups.archive().summary)

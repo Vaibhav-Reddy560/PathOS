@@ -17,15 +17,17 @@ import SwiftUI
 /// behind the dot.
 ///
 /// The route is one solid Aurora line on a dark edge, over everything, so it can't be mistaken for
-/// anything else on the map. Apple's own traffic — the orange and red Apple Maps shows — is on the
-/// roads around it. Apple gives apps no traffic figures for a street, only the painting of them,
-/// so the route itself can't be coloured by it; a line drawn hollow to let the painting show
-/// through read as grey road between two green threads, and nobody could follow it.
+/// anything else, and it's the only traffic on the map: its slow stretches, by TomTom's reading,
+/// are painted amber to coral along it (`RouteTraffic`). Apple's own traffic layer is off. It
+/// draws each direction beside the road rather than on it, and every other road besides, and on
+/// a phone that read as orange and red scattered near the route but never on it.
 struct NavigationMapView: UIViewRepresentable {
     /// The leg's route, drawn as the line to follow.
     var route: [CLLocationCoordinate2D]
     /// The last fix: where, which way, how fast, and where that is on the route.
     var fix: NavigationPose.Fix?
+    /// Where the route is slow, in metres along it.
+    var jams: [RouteTraffic.Stretch] = []
     /// Where the line ends: the pin.
     var destination: CLLocationCoordinate2D?
     /// Apple's own places, when you've asked to see them.
@@ -85,6 +87,7 @@ struct NavigationMapView: UIViewRepresentable {
             coordinator.routeFingerprint = fingerprint
             coordinator.layOutRoute(route, on: map)
         }
+        coordinator.paint(jams)
         coordinator.place(destination, on: map)
         // Recentre.
         if isFollowing, !coordinator.isDriving {
@@ -121,6 +124,7 @@ struct NavigationMapView: UIViewRepresentable {
         private var you: YouAnnotation?
         private weak var youView: ArrowView?
         private var destinationPin: DestinationPin?
+        private var jams: [RouteTraffic.Stretch] = []
         private var displayLink: CADisplayLink?
         private var poiFingerprint = ""
         private var hasFramed = false
@@ -210,7 +214,7 @@ struct NavigationMapView: UIViewRepresentable {
             // The line starts where your arrow is. Off the route it stays where you left it.
             if let at = pose.along, force || abs(at - drawnHead) >= 0.5, let line, let head = line.point(at: at) {
                 drawnHead = at
-                routeRenderer?.setHead(segment: head.segment, point: MKMapPoint(head.coordinate))
+                routeRenderer?.setHead(segment: head.segment, point: MKMapPoint(head.coordinate), metres: at)
             }
 
             if isDriving, clock >= glidingUntil {
@@ -250,6 +254,22 @@ struct NavigationMapView: UIViewRepresentable {
         }
 
         // MARK: The route
+
+        /// The slow stretches onto the line, when they change.
+        func paint(_ stretches: [RouteTraffic.Stretch], force: Bool = false) {
+            guard force || stretches != jams else { return }
+            jams = stretches
+            guard let line, let routeRenderer else { return }
+            routeRenderer.setPaint(stretches.compactMap { stretch in
+                guard let start = line.point(at: stretch.start), let end = line.point(at: stretch.end) else { return nil }
+                let startPoint = MKMapPoint(start.coordinate)
+                let endPoint = MKMapPoint(end.coordinate)
+                return RouteRenderer.Painted(start: stretch.start, end: stretch.end,
+                                             startSegment: start.segment, startX: startPoint.x, startY: startPoint.y,
+                                             endSegment: end.segment, endX: endPoint.x, endY: endPoint.y,
+                                             level: stretch.level.rawValue)
+            })
+        }
 
         func layOutRoute(_ route: [CLLocationCoordinate2D], on map: MKMapView) {
             map.removeOverlays(map.overlays)
@@ -315,12 +335,11 @@ struct NavigationMapView: UIViewRepresentable {
             let fingerprint = places.fingerprint
             guard fingerprint != poiFingerprint else { return }
             poiFingerprint = fingerprint
-            // Not muted: in every test, the muted style left Apple's traffic off the roads, and
-            // that traffic is the only traffic this map shows.
-            let configuration = MKStandardMapConfiguration(elevationStyle: .flat, emphasisStyle: .default)
+            let configuration = MKStandardMapConfiguration(elevationStyle: .flat, emphasisStyle: .muted)
             configuration.pointOfInterestFilter = places.filter
-            // Set on the configuration, not the map: the configuration replaces what the map was told.
-            configuration.showsTraffic = true
+            // The route carries its own traffic; Apple's, scattered over every road, only confused
+            // it. Set on the configuration, which replaces whatever the map itself was told.
+            configuration.showsTraffic = false
             map.preferredConfiguration = configuration
         }
 
@@ -355,6 +374,7 @@ struct NavigationMapView: UIViewRepresentable {
             routeRenderer = renderer
             drawnHead = -1
             tick(force: true)
+            paint(jams, force: true)
             return renderer
         }
     }
@@ -371,11 +391,28 @@ private nonisolated final class RouteRenderer: MKPolylineRenderer {
         var segment: Int
         var x: Double
         var y: Double
+        var metres: Double
+    }
+
+    /// A slow stretch, ready to draw: where it runs, in metres and on the line's own points.
+    struct Painted: Equatable, Sendable {
+        var start: Double
+        var end: Double
+        var startSegment: Int
+        var startX: Double
+        var startY: Double
+        var endSegment: Int
+        var endX: Double
+        var endY: Double
+        /// 1 to 3, minor to major.
+        var level: Int
     }
 
     private let head = OSAllocatedUnfairLock<Head?>(initialState: nil)
+    private let painted = OSAllocatedUnfairLock<[Painted]>(initialState: [])
     private let casing = UIColor(PathOSPalette.color(PathOSPalette.void)).withAlphaComponent(0.9).cgColor
     private let aurora = UIColor(PathOSPalette.color(PathOSPalette.aurora)).cgColor
+    private let slow = (1...3).map { UIColor(PathOSPalette.color(PathOSPalette.traffic(level: $0))).cgColor }
 
     /// Widths in points: the dark edge, and the line on it — wide enough to be the boldest thing
     /// on the map, narrow enough to sit inside a street.
@@ -386,8 +423,13 @@ private nonisolated final class RouteRenderer: MKPolylineRenderer {
     /// side by side say nothing about which way either runs; these do.
     static let chevronSpacing: CGFloat = 90
 
-    func setHead(segment: Int, point: MKMapPoint) {
-        head.withLock { $0 = Head(segment: segment, x: point.x, y: point.y) }
+    func setHead(segment: Int, point: MKMapPoint, metres: Double) {
+        head.withLock { $0 = Head(segment: segment, x: point.x, y: point.y, metres: metres) }
+        setNeedsDisplay()
+    }
+
+    func setPaint(_ stretches: [Painted]) {
+        painted.withLock { $0 = stretches }
         setNeedsDisplay()
     }
 
@@ -421,6 +463,31 @@ private nonisolated final class RouteRenderer: MKPolylineRenderer {
         }
         stroke(Self.casingWidth, casing)
         stroke(Self.lineWidth, aurora)
+
+        // The slow stretches, over the green, from the arrow on.
+        for stretch in painted.withLock({ $0 }) {
+            let headMetres = start?.metres ?? 0
+            guard stretch.end > headMetres else { continue }
+            let slowPath = CGMutablePath()
+            let from: (segment: Int, point: MKMapPoint)
+            if let start, headMetres > stretch.start {
+                from = (start.segment, MKMapPoint(x: start.x, y: start.y))
+            } else {
+                from = (stretch.startSegment, MKMapPoint(x: stretch.startX, y: stretch.startY))
+            }
+            slowPath.move(to: point(for: from.point))
+            if from.segment < stretch.endSegment {
+                for index in (from.segment + 1)...stretch.endSegment where index < count {
+                    slowPath.addLine(to: point(for: points[index]))
+                }
+            }
+            slowPath.addLine(to: point(for: MKMapPoint(x: stretch.endX, y: stretch.endY)))
+            context.addPath(slowPath)
+            context.setStrokeColor(slow[min(3, max(1, stretch.level)) - 1])
+            context.setLineWidth(Self.lineWidth / zoomScale)
+            context.strokePath()
+        }
+
         drawChevrons(points: points, count: count, start: start, zoomScale: zoomScale, in: context)
     }
 

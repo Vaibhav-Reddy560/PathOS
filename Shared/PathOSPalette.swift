@@ -31,6 +31,29 @@ nonisolated enum PathOSPalette {
         return 0.2126 * linear(hex >> 16) + 0.7152 * linear(hex >> 8) + 0.0722 * linear(hex)
     }
 
+    /// A stretch of your route by how held up it is, 1 to 3: amber when it's slow, coral when it's
+    /// stopped, and halfway between for the step between. Worth a glance to urgent, as those two
+    /// mean everywhere else.
+    static func traffic(level: Int) -> UInt32 {
+        switch level {
+        case ...1: amber
+        case 2: blend(amber, coral, 0.5)
+        default: coral
+        }
+    }
+
+    /// A colour part of the way from one of the palette's to another: only for a scale that is a
+    /// degree rather than a kind.
+    static func blend(_ from: UInt32, _ to: UInt32, _ amount: Double) -> UInt32 {
+        let towards = min(1, max(0, amount))
+        func channel(_ shift: UInt32) -> UInt32 {
+            let start = Double((from >> shift) & 0xFF)
+            let end = Double((to >> shift) & 0xFF)
+            return UInt32((start + (end - start) * towards).rounded())
+        }
+        return channel(16) << 16 | channel(8) << 8 | channel(0)
+    }
+
     static func contrastRatio(_ first: UInt32, _ second: UInt32) -> Double {
         let (lighter, darker) = (max(relativeLuminance(first), relativeLuminance(second)), min(relativeLuminance(first), relativeLuminance(second)))
         return (lighter + 0.05) / (darker + 0.05)

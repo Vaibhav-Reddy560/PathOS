@@ -33,6 +33,7 @@ struct WorldView: View {
             // usual map.
             if isDrivingALeg {
                 NavigationMapView(route: state.tripNav?.coordinates ?? [], fix: state.tripFix,
+                                  jams: state.tripJams?.shown(on: state.tripNav) ?? [],
                                   destination: state.tripNav?.coordinates.last ?? legEnd,
                                   places: state.poiDisplay, here: state.location.location?.coordinate,
                                   isFollowing: $isFollowingRoute)

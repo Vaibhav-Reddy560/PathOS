@@ -21,6 +21,19 @@ nonisolated struct ActiveTrip: Sendable {
     }
 }
 
+/// Where the route you're on is slow, by TomTom's reading, in metres along it.
+nonisolated struct TripJams: Equatable, Sendable {
+    /// The route these were read for.
+    var routeID: UUID
+    var stretches: [RouteTraffic.Stretch]
+
+    /// Only while they belong to the route on screen: a re-route has a new id, and old colours
+    /// can't survive it.
+    func shown(on route: NavRoute?) -> [RouteTraffic.Stretch] {
+        route?.id == routeID ? stretches : []
+    }
+}
+
 /// What live traffic is doing to the leg you're on.
 nonisolated struct TripTraffic: Equatable, Sendable {
     /// Minutes more than the plan allowed for this leg; negative when it's clearer than expected.
@@ -139,6 +152,7 @@ extension AppState {
         tripMatch = nil
         tripFix = nil
         tripTraffic = nil
+        tripJams = nil
         tripPace = TripPace()
         isRerouting = false
         navLegID = nil
@@ -239,6 +253,14 @@ extension AppState {
         } else if now.timeIntervalSince(lastTrafficCheck) >= Self.trafficCheckInterval, !isFetchingRoute, leg.mode != .walk {
             lastTrafficCheck = now
             Task { await checkTraffic(for: leg) }
+        }
+
+        // The line's colours: TomTom, for a new route at once and every couple of minutes after,
+        // while the map is on screen. Not on foot, and not without a key.
+        if isForeground, leg.mode != .walk, routeTraffic.hasKey, !isCheckingJams, let nav = tripNav, navLegID == leg.id,
+           tripJams?.routeID != nav.id || now.timeIntervalSince(lastJamCheck) >= Self.jamCheckInterval {
+            lastJamCheck = now
+            Task { await refreshJams(on: nav) }
         }
 
         speakNextTurn(status: status, leg: leg)
@@ -367,6 +389,22 @@ extension AppState {
         }
     }
 
+    /// Asks TomTom where what's left of the route is slow. Only what's ahead is sent; the answer
+    /// is put back in metres along the whole route.
+    private func refreshJams(on nav: NavRoute) async {
+        isCheckingJams = true
+        defer { isCheckingJams = false }
+        let match = tripMatch
+        let ahead = match.map { RouteProgress.ahead(of: nav.coordinates, from: $0) } ?? nav.coordinates
+        let travelled = match?.travelled ?? 0
+        guard let found = await routeTraffic.stretches(along: ahead) else { return }
+        // Re-routed while TomTom was being asked: these belong to a line no longer on screen.
+        guard tripNav?.id == nav.id else { return }
+        tripJams = TripJams(routeID: nav.id, stretches: found.map {
+            RouteTraffic.Stretch(start: $0.start + travelled, end: $0.end + travelled, level: $0.level)
+        })
+    }
+
     /// Puts you on a route just fetched: where you are along it, which turn that makes next, and
     /// the anchor the line's head is drawn from.
     private func place(on route: NavRoute, at here: CLLocation) {
@@ -404,6 +442,9 @@ extension AppState {
     static let offRouteSamplesBeforeReroute = 2
     /// How often the traffic on the route is asked about.
     static let trafficCheckInterval: TimeInterval = 60
+    /// How often TomTom is asked where the route is slow: about thirty times an hour of driving,
+    /// well inside the free 2,500 a day.
+    static let jamCheckInterval: TimeInterval = 120
 
     /// Where you've got to, what to do next, and whether the plan is slipping. Called on the
     /// foreground loop and on every background wake, so it keeps working in your pocket.
