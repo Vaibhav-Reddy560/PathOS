@@ -94,4 +94,38 @@ struct BackupArchiveTests {
         #expect(name.hasPrefix("PathOS-backup-2023-11-14"))
         #expect(name.hasSuffix(".json"))
     }
+
+    // MARK: Fields added later
+
+    /// A backup written before attendance, completions and reminders were kept still restores.
+    /// The generated decoder refuses a missing key even for an array with a default, which is
+    /// what made every older backup unreadable once attendance was added.
+    @Test func anOlderBackupStillRestores() throws {
+        let json = """
+        {"version": 1, "createdAt": "2026-09-01T10:00:00.000Z", "appVersion": "0.9",
+         "places": [], "notes": [], "photos": [], "events": [], "sessions": [], "exceptions": [],
+         "trips": [], "legs": [], "mail": [], "scans": [], "expenses": [], "departures": [],
+         "days": [{"dayStart": "2026-09-01T00:00:00.000Z", "distanceMeters": 4200, "placeVisits": 3}],
+         "settings": {}, "settingLists": {}}
+        """
+        let archive = try BackupArchive.decode(Data(json.utf8))
+        #expect(archive.days.count == 1)
+        #expect(archive.days[0].distanceMeters == 4_200)
+        #expect(archive.days[0].attendedIDs.isEmpty)
+        #expect(archive.days[0].completions.isEmpty)
+        #expect(archive.reminders == nil)
+    }
+
+    @Test func remindersAndCompletionsComeBack() throws {
+        var archive = filled()
+        let done = Date(timeIntervalSince1970: 1_800_003_000)
+        archive.days = [.init(dayStart: Date(timeIntervalSince1970: 1_799_971_200), distanceMeters: 1_000,
+                              placeVisits: 1, completions: [ItemCompletion(id: "event:x", at: done)])]
+        archive.reminders = [.init(id: UUID(), title: "Buy milk", notes: "", day: Date(timeIntervalSince1970: 1_799_971_200),
+                                   dueAt: nil, completedAt: done, originRaw: "captured",
+                                   createdAt: Date(timeIntervalSince1970: 1_799_990_000))]
+        let back = try BackupArchive.decode(BackupArchive.encode(archive))
+        #expect(back.reminders == archive.reminders)
+        #expect(back.days[0].completions == archive.days[0].completions)
+    }
 }

@@ -26,6 +26,14 @@ nonisolated struct EventSheetRequest: Identifiable, Hashable, Sendable {
     var day: Date?
 }
 
+/// Adding reminders, or changing one.
+nonisolated struct ReminderSheetRequest: Identifiable, Hashable, Sendable {
+    var id = UUID()
+    var editing: UUID?
+    /// The day being added to.
+    var day: Date?
+}
+
 /// A short confirmation shown at the top of the deck.
 nonisolated struct Toast: Identifiable, Equatable, Sendable {
     var id = UUID()
@@ -110,6 +118,7 @@ final class AppState {
     let context: ContextEngine
     let events: EventsService
     let eventStore: EventStore
+    let reminders: ReminderStore
     let timetable: TimetableService
     let transit: TransitService
     let trips: TripStore
@@ -163,6 +172,7 @@ final class AppState {
     @ObservationIgnored var mapCenter: CLLocationCoordinate2D?
     /// Presents the event sheet: nil id means a new event.
     var eventSheet: EventSheetRequest?
+    var reminderSheet: ReminderSheetRequest?
     /// A session of the weekly schedule being changed from the day it's on.
     var editingSession: ClassSession?
     var isScannerPresented = false
@@ -316,7 +326,7 @@ final class AppState {
             modelContainer = try ModelContainer(
                 for: SavedPlace.self, SpatialNote.self, ScanRecord.self, Expense.self, DepartureLog.self,
                 PathEvent.self, DayLog.self, NotePhoto.self, TimetableEntry.self, TimetableException.self,
-                Trip.self, TripLeg.self, MailSuggestion.self
+                Trip.self, TripLeg.self, MailSuggestion.self, Reminder.self
             )
         } catch {
             fatalError("PathOS couldn't open its storage: \(error)")
@@ -349,6 +359,7 @@ final class AppState {
         context = ContextEngine(places: places, vault: vault, barometer: barometer, weather: weather)
         let eventStore = EventStore(context: modelContext, notifications: notifications)
         self.eventStore = eventStore
+        reminders = ReminderStore(context: modelContext, notifications: notifications)
         let timetable = TimetableService(context: modelContext, ai: ai, notifications: notifications)
         self.timetable = timetable
         transit = TransitService(notifications: notifications)
@@ -547,6 +558,7 @@ final class AppState {
         await refreshPinnedContext()
         await routine.rescheduleReminders()
         eventStore.refreshReminders()
+        reminders.refreshAlerts()
         timetable.refreshReminders()
         trips.refreshReminders()
         notifyNewAlerts()
@@ -838,6 +850,7 @@ final class AppState {
         await vault.syncGeofences(userLocation: location.location)
         timetable.refreshReminders()
         eventStore.refreshReminders()
+        reminders.refreshAlerts()
         trips.refreshReminders()
         await refreshDeparture()
         await refreshPinnedContext()
@@ -1783,6 +1796,32 @@ final class AppState {
         }
         log.attendedIDs = went.sorted()
         log.missedIDs = skipped.sorted()
+        try? modelContainer.mainContext.save()
+    }
+
+    // MARK: Done
+
+    /// An item of the day marked done: when, so the row can say how long it really took, and
+    /// attended, since doing it is being there.
+    func markDone(_ id: String, start: Date, plannedEnd: Date, on day: Date, now: Date = Date()) {
+        let log = todaysLog(for: day)
+        let at = Completion.finishedAt(start: start, plannedEnd: plannedEnd, now: now)
+        log.completions = log.completions.filter { $0.id != id } + [ItemCompletion(id: id, at: at)]
+        try? modelContainer.mainContext.save()
+        setAttendance(id, attended: true, on: day)
+        haptics.success()
+    }
+
+    /// When an item was marked done, without making a day's log just to find out.
+    func completion(of id: String, on day: Date) -> ItemCompletion? {
+        let dayStart = Calendar.current.startOfDay(for: day)
+        let descriptor = FetchDescriptor<DayLog>(predicate: #Predicate { $0.dayStart == dayStart })
+        return (try? modelContainer.mainContext.fetch(descriptor).first)?.completions.first { $0.id == id }
+    }
+
+    func markNotDone(_ id: String, on day: Date) {
+        let log = todaysLog(for: day)
+        log.completions.removeAll { $0.id == id }
         try? modelContainer.mainContext.save()
     }
 

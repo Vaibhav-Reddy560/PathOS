@@ -114,6 +114,44 @@ final class SnapToActionService {
         return (read.items, read.usedAI, ocr.fullText)
     }
 
+    // MARK: Things to do
+
+    /// Reminders read out of text. A list written one to a line is read exactly by rules; a
+    /// paragraph or a conversation goes to the on-device model, which can tell "buy milk and call
+    /// mom" is two things and "Sure, see you then" is none. Rules again if the model has nothing.
+    func readTasks(text: String, on day: Date, now: Date = Date()) async -> (drafts: [Checklist.Draft], usedAI: Bool) {
+        let byRule = Checklist.drafts(in: text, on: day, now: now)
+        if Checklist.looksLikeList(text) || !ai.isAvailable {
+            return (byRule, false)
+        }
+        return await readTasksWithAI(text: text, on: day, now: now) ?? (byRule, false)
+    }
+
+    /// A photo of a list, a whiteboard or a chat: its text read the model's way first, since
+    /// photographed text is rarely a tidy list.
+    func readTasks(image: UIImage, on day: Date, now: Date = Date()) async throws -> (drafts: [Checklist.Draft], usedAI: Bool, text: String) {
+        let ocr = try await OCRParser.recognizeText(in: image)
+        guard !ocr.isEmpty else { throw SnapError.noText }
+        if ai.isAvailable, let read = await readTasksWithAI(text: ocr.fullText, on: day, now: now) {
+            return (read.drafts, read.usedAI, ocr.fullText)
+        }
+        return (Checklist.drafts(in: ocr.fullText, on: day, now: now), false, ocr.fullText)
+    }
+
+    private func readTasksWithAI(text: String, on day: Date, now: Date) async -> (drafts: [Checklist.Draft], usedAI: Bool)? {
+        guard let rows = try? await ai.extractTasks(from: text, now: now), !rows.isEmpty else { return nil }
+        let calendar = Calendar.current
+        let drafts = rows.compactMap { row -> Checklist.Draft? in
+            let title = row.title.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !title.isEmpty else { return nil }
+            let taskDay = row.date.flatMap(Self.parseLocalISO).map { calendar.startOfDay(for: $0) }
+                ?? calendar.startOfDay(for: day)
+            let dueAt = row.time.flatMap(TimetableRoutine.minutes(fromTime:)).map { taskDay.addingTimeInterval(Double($0) * 60) }
+            return Checklist.Draft(title: title, day: taskDay, dueAt: dueAt, isDone: row.isDone)
+        }
+        return drafts.isEmpty ? nil : (drafts, true)
+    }
+
     @discardableResult
     func saveRecord(_ draft: ScanDraft, at location: CLLocation?) -> ScanRecord {
         let record = ScanRecord(kind: draft.kind, title: draft.title, summary: draft.summary, rawText: draft.rawText)

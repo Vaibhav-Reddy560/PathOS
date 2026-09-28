@@ -93,7 +93,11 @@ final class BackupService {
         archive.days = fetch(DayLog.self).map {
             .init(dayStart: $0.dayStart, distanceMeters: $0.distanceMeters, placeVisits: $0.placeVisits,
                   firstSeenAt: $0.firstSeenAt, lastSeenAt: $0.lastSeenAt,
-                  attendedIDs: $0.attendedIDs, missedIDs: $0.missedIDs)
+                  attendedIDs: $0.attendedIDs, missedIDs: $0.missedIDs, completions: $0.completions)
+        }
+        archive.reminders = fetch(Reminder.self).map {
+            .init(id: $0.id, title: $0.title, notes: $0.notes, day: $0.day, dueAt: $0.dueAt,
+                  completedAt: $0.completedAt, originRaw: $0.originRaw, createdAt: $0.createdAt)
         }
         archive.settings = Self.savedSettings
         archive.settingLists = Self.savedSettingLists
@@ -294,7 +298,16 @@ final class BackupService {
             day.lastSeenAt = item.lastSeenAt
             day.attendedIDs = item.attendedIDs
             day.missedIDs = item.missedIDs
+            day.completions = item.completions
             context.insert(day)
+        }
+        for item in archive.reminders ?? [] {
+            let reminder = Reminder(title: item.title, day: item.day, dueAt: item.dueAt, notes: item.notes)
+            reminder.id = item.id
+            reminder.completedAt = item.completedAt
+            reminder.originRaw = item.originRaw
+            reminder.createdAt = item.createdAt
+            context.insert(reminder)
         }
 
         for (key, value) in archive.settings {
@@ -364,6 +377,7 @@ final class BackupService {
         try context.delete(model: Expense.self)
         try context.delete(model: DepartureLog.self)
         try context.delete(model: DayLog.self)
+        try context.delete(model: Reminder.self)
     }
 
     /// Keeps the last few and removes the rest, so backups can't fill the phone.

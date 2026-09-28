@@ -77,6 +77,27 @@ nonisolated struct EventListExtraction {
 }
 
 @Generable
+nonisolated struct TaskRow {
+    @Guide(description: "The thing to do, short and plain, starting with a verb, without its date or time: 'Call the bank', 'Buy milk'")
+    var title: String
+
+    @Guide(description: "The day it's for as yyyy-MM-dd, only if the text gives or implies one, like 'tomorrow' or 'Friday'")
+    var date: String?
+
+    @Guide(description: "The time it's due, 24-hour HH:mm, only if the text gives one")
+    var time: String?
+
+    @Guide(description: "True only if the text shows it already done, ticked or struck through")
+    var isDone: Bool
+}
+
+@Generable
+nonisolated struct TaskListExtraction {
+    @Guide(description: "Every separate thing to do in the text, one per task", .maximumCount(30))
+    var tasks: [TaskRow]
+}
+
+@Generable
 nonisolated struct VibePick {
     @Guide(description: "The item's id, copied exactly from the list")
     var itemID: String
@@ -272,6 +293,23 @@ final class AIClient {
             generating: EventListExtraction.self
         )
         return response.content.events
+    }
+
+    /// Reads notes, a message or a photographed list into separate things to do.
+    func extractTasks(from text: String, now: Date = Date()) async throws -> [TaskRow] {
+        let session = LanguageModelSession(instructions: """
+            You turn notes, messages and photographed to-do lists into separate tasks. \
+            Today is \(now.formatted(date: .complete, time: .omitted)). \
+            One task per thing to do: split "buy milk and call mom" into two, but keep \
+            "buy milk, eggs and bread" as one. Resolve "tomorrow" or a weekday to its date. \
+            Give a date or time only when the text does. Leave out greetings, sign-offs, \
+            timestamps and chat names. Never invent tasks that aren't there.
+            """)
+        let response = try await session.respond(
+            to: "Text:\n\(text.prefix(4_000))",
+            generating: TaskListExtraction.self
+        )
+        return response.content.tasks
     }
 
     /// Reads a college timetable — a photo's text or pasted text — into one row per class.

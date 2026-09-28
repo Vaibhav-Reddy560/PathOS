@@ -28,6 +28,9 @@ nonisolated struct BackupArchive: Codable, Equatable {
     var expenses: [Expense] = []
     var departures: [Departure] = []
     var days: [Day] = []
+    /// Optional because backups written before reminders existed don't have them: an array with
+    /// a default still fails to decode when its key is missing.
+    var reminders: [Reminder]?
     /// Preferences that aren't worth a model of their own: priority senders, the preferred cab.
     var settings: [String: String] = [:]
     var settingLists: [String: [String]] = [:]
@@ -192,9 +195,21 @@ nonisolated struct BackupArchive: Codable, Equatable {
         var placeVisits: Int
         var firstSeenAt: Date?
         var lastSeenAt: Date?
-        /// Added after the first backups, which simply don't have them.
+        /// Added after the first backups, which simply don't have them — see `init(from:)`.
         var attendedIDs: [String] = []
         var missedIDs: [String] = []
+        var completions: [ItemCompletion] = []
+    }
+
+    nonisolated struct Reminder: Codable, Equatable {
+        var id: UUID
+        var title: String
+        var notes: String
+        var day: Date
+        var dueAt: Date?
+        var completedAt: Date?
+        var originRaw: String
+        var createdAt: Date
     }
 
     // MARK: Reading and writing
@@ -270,5 +285,22 @@ nonisolated enum BackupError: LocalizedError {
         case .tooNew(let version):
             "This backup was written by a newer PathOS (version \(version)). Update the app, then restore it."
         }
+    }
+}
+
+nonisolated extension BackupArchive.Day {
+    /// Reads fields added after the first backups as empty when they're missing. The generated
+    /// decoder doesn't: a default value on an array still throws when its key isn't there, so a
+    /// backup made before attendance was kept could not be restored at all.
+    init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        dayStart = try container.decode(Date.self, forKey: .dayStart)
+        distanceMeters = try container.decode(Double.self, forKey: .distanceMeters)
+        placeVisits = try container.decode(Int.self, forKey: .placeVisits)
+        firstSeenAt = try container.decodeIfPresent(Date.self, forKey: .firstSeenAt)
+        lastSeenAt = try container.decodeIfPresent(Date.self, forKey: .lastSeenAt)
+        attendedIDs = try container.decodeIfPresent([String].self, forKey: .attendedIDs) ?? []
+        missedIDs = try container.decodeIfPresent([String].self, forKey: .missedIDs) ?? []
+        completions = try container.decodeIfPresent([ItemCompletion].self, forKey: .completions) ?? []
     }
 }

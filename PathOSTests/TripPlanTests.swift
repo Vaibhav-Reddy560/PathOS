@@ -143,4 +143,12 @@ struct TripPlanTests {
         #expect(trip.dayNumber(for: morning.addingTimeInterval(9 * 86_400)) == nil)
         #expect(trip.covers(morning.addingTimeInterval(86_400)))
     }
+
+    @Test func finishedTasksCountTowardTheDay() {
+        let tasks = DaySummary(distanceMeters: 0, eventCount: 1, classCount: 0, legCount: 0, memoryCount: 0, taskCount: 3)
+        #expect(!tasks.isEmpty)
+        #expect(tasks.sentence == "1 event and finished 3 tasks.")
+        let one = DaySummary(distanceMeters: 0, eventCount: 0, classCount: 0, legCount: 0, memoryCount: 0, taskCount: 1)
+        #expect(one.sentence == "Finished 1 task.")
+    }
 }

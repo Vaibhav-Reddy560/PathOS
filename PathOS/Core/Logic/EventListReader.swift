@@ -87,7 +87,8 @@ nonisolated enum EventListReader {
 
     // MARK: Times
 
-    private static func timesIn(_ line: String) -> (start: Int?, end: Int?, ranges: [Range<String.Index>]) {
+    /// The first time or time range in a line, in minutes after midnight, and where it was.
+    static func timesIn(_ line: String) -> (start: Int?, end: Int?, ranges: [Range<String.Index>]) {
         let cleaned = line.replacingOccurrences(of: #"[•·●▪◦∙]"#, with: " ", options: .regularExpression)
         let rangePattern = #/(\d{1,2}(?:[:.]\d{2})?)\s*([ap]\.?m\.?)?\s*(?:-|–|—|to)\s*(\d{1,2}(?:[:.]\d{2})?)\s*([ap]\.?m\.?)?/#
             .ignoresCase()

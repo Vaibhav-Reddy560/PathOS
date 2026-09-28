@@ -13,6 +13,7 @@ struct DayDeck: View {
     @Query private var timetableExceptions: [TimetableException]
     @Query private var trips: [Trip]
     @Query private var savedPlaces: [SavedPlace]
+    @Query(sort: \Reminder.createdAt) private var allReminders: [Reminder]
 
     /// Answered elective questions; watched so an answer takes the question away at once.
     @AppStorage(TimetableService.settledClashesKey) private var settledClashes = ""
@@ -102,6 +103,9 @@ struct DayDeck: View {
             }
         }
         schedule(title: isPast ? "What happened" : "Plan")
+        if !dayReminders.isEmpty {
+            checklist
+        }
         if !isPast {
             quickActions
         }
@@ -211,20 +215,66 @@ struct DayDeck: View {
         }
     }
 
+    /// How the day added up: four across while each label fits on one line, two by two when the
+    /// text is too large for that. A label that wraps drops its number below the others'.
     private var summary: some View {
         ContentTile {
-            HStack(spacing: 20) {
-                let distance = dayLog?.distanceMeters ?? 0
-                let parts = DayDistance.format(distance).split(separator: " ")
-                MetricView(
-                    label: "Travelled",
-                    value: distance > 0 ? String(parts.first ?? "0") : "—",
-                    unit: distance > 0 && parts.count > 1 ? String(parts[1]) : nil,
-                    role: .you
-                )
-                MetricView(label: "Events", value: "\(eventsAttended)", role: .world)
-                MetricView(label: "Saved here", value: "\(memoriesSaved)", role: .you)
-                Spacer(minLength: 0)
+            ViewThatFits(in: .horizontal) {
+                HStack(alignment: .top, spacing: 20) {
+                    travelledMetric.fixedSize()
+                    eventsMetric.fixedSize()
+                    tasksMetric.fixedSize()
+                    savedMetric.fixedSize()
+                    Spacer(minLength: 0)
+                }
+                Grid(alignment: .leading, horizontalSpacing: 28, verticalSpacing: 14) {
+                    GridRow {
+                        travelledMetric
+                        eventsMetric
+                    }
+                    GridRow {
+                        tasksMetric
+                        savedMetric
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+        }
+    }
+
+    private var travelledMetric: some View {
+        let distance = dayLog?.distanceMeters ?? 0
+        let parts = DayDistance.format(distance).split(separator: " ")
+        return MetricView(
+            label: "Travelled",
+            value: distance > 0 ? String(parts.first ?? "0") : "—",
+            unit: distance > 0 && parts.count > 1 ? String(parts[1]) : nil,
+            role: .you
+        )
+    }
+
+    private var eventsMetric: some View {
+        MetricView(label: "Events", value: "\(eventsAttended)", role: .world)
+    }
+
+    private var tasksMetric: some View {
+        MetricView(label: "Tasks done", value: "\(tasksDone)", role: .you)
+    }
+
+    private var savedMetric: some View {
+        MetricView(label: "Saved here", value: "\(memoriesSaved)", role: .you)
+    }
+
+    /// The day's reminders, ticked off here. On today, anything left undone on an earlier day is
+    /// here too, rather than lost with the day it was for — and stays here once you tick it, so
+    /// it doesn't vanish from under your finger.
+    private var checklist: some View {
+        let open = dayReminders.filter { !$0.isDone }.count
+        return VStack(alignment: .leading, spacing: 10) {
+            DeckSectionHeader(title: "To do",
+                              trailing: open == 0 ? "All done" : "\(dayReminders.count - open) of \(dayReminders.count) done")
+            GroupedRows(dayReminders) { reminder in
+                ReminderRow(reminder: reminder, shownOn: day)
             }
         }
     }
@@ -269,6 +319,19 @@ struct DayDeck: View {
                     }
                     .pathPrimaryAction()
                 }
+                // Finished before its time: say so, and it moves on to what's next.
+                if next.isUnderway(now: now), next.isFinishable {
+                    Button {
+                        withAnimation(PathMotion.control) {
+                            state.markDone(next.id, start: next.start, plannedEnd: next.end, on: day, now: now)
+                        }
+                    } label: {
+                        Label("Mark as done", systemImage: "checkmark.circle")
+                            .font(.subheadline.weight(.semibold))
+                            .frame(maxWidth: .infinity, minHeight: 32)
+                    }
+                    .pathSecondaryAction()
+                }
             }
         }
     }
@@ -289,7 +352,8 @@ struct DayDeck: View {
             }
             if !items.isEmpty {
                 GroupedRows(items) { item in
-                    DayItemRow(item: item, now: now, day: day, isMissed: missedToday.contains(item.id))
+                    DayItemRow(item: item, now: now, day: day, isMissed: missedToday.contains(item.id),
+                               completion: completion(of: item))
                 }
             }
         }
@@ -300,7 +364,10 @@ struct DayDeck: View {
         ViewThatFits(in: .horizontal) {
             HStack(spacing: 8) { quickActionButtons }
             VStack(spacing: 8) {
-                addEventButton
+                HStack(spacing: 8) {
+                    addEventButton
+                    reminderButton
+                }
                 HStack(spacing: 8) {
                     timetableButton
                     tripButton
@@ -314,8 +381,19 @@ struct DayDeck: View {
     @ViewBuilder
     private var quickActionButtons: some View {
         addEventButton
+        reminderButton
         timetableButton
         tripButton
+    }
+
+    private var reminderButton: some View {
+        Button {
+            state.reminderSheet = ReminderSheetRequest(editing: nil, day: day)
+        } label: {
+            QuickActionLabel(title: "Reminder", symbol: "checklist")
+        }
+        .pathSecondaryAction()
+        .accessibilityLabel("Add a reminder")
     }
 
     private var addEventButton: some View {
@@ -443,6 +521,7 @@ struct DayDeck: View {
             classCount: sessionsAttended,
             legCount: legs.count,
             memoryCount: memoriesSaved,
+            taskCount: tasksDone,
             tripName: tripForDay?.name,
             tripDayNumber: tripForDay?.dayNumber(for: day),
             tripDayCount: tripForDay?.dayCount
@@ -450,7 +529,30 @@ struct DayDeck: View {
     }
 
     private var nextItem: DayItem? {
-        items.filter { $0.end > now }.min { $0.start < $1.start }
+        items.filter { $0.end > now && completion(of: $0) == nil }.min { $0.start < $1.start }
+    }
+
+    /// When you marked it done, if you did.
+    private func completion(of item: DayItem) -> ItemCompletion? {
+        dayLog?.completions.first { $0.id == item.id }
+    }
+
+    private var dayReminders: [Reminder] {
+        let calendar = Calendar.current
+        let today = calendar.startOfDay(for: Date())
+        return allReminders
+            .filter { reminder in
+                if calendar.isDate(reminder.day, inSameDayAs: day) { return true }
+                guard isToday else { return false }
+                return Checklist.isCarriedOver(day: reminder.day, isDone: reminder.isDone, today: today)
+                    || reminder.completedAt.map { calendar.isDate($0, inSameDayAs: today) } == true
+            }
+            .sorted { Checklist.isBefore(($0.dueAt, $0.isDone, $0.createdAt), ($1.dueAt, $1.isDone, $1.createdAt)) }
+    }
+
+    /// Reminders ticked off on this day, whichever day they were for.
+    private var tasksDone: Int {
+        allReminders.filter { $0.completedAt.map { Calendar.current.isDate($0, inSameDayAs: day) } ?? false }.count
     }
 
     private var isDayOff: Bool {
@@ -625,6 +727,13 @@ enum DayItem: Identifiable {
     }
 
     func isUnderway(now: Date) -> Bool { start <= now && end > now }
+
+    /// Something you do and finish — not a journey leg, which PathOS follows itself, and not a
+    /// whole day.
+    var isFinishable: Bool {
+        if case .leg = self { return false }
+        return !isAllDay
+    }
 }
 
 private struct DayItemRow: View {
@@ -634,12 +743,15 @@ private struct DayItemRow: View {
     let day: Date
     /// PathOS saw you somewhere else while this was on.
     let isMissed: Bool
+    /// You said it was done, and when.
+    let completion: ItemCompletion?
 
     @Environment(AppState.self) private var state
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
-        let isDone = item.end < now
-        let isNow = item.isUnderway(now: now)
+        let isDone = item.end < now || completion != nil
+        let isNow = item.isUnderway(now: now) && completion == nil
 
         HStack(spacing: 14) {
             TimeSpan(
@@ -671,14 +783,39 @@ private struct DayItemRow: View {
                         .foregroundStyle(.ion)
                         .lineLimit(1)
                 }
+                // How long it really took, which is the point of saying it's done.
+                if let completion {
+                    Label(Completion.note(start: item.start, plannedEnd: item.end, doneAt: completion.at),
+                          systemImage: "checkmark.circle.fill")
+                        .font(.subheadline)
+                        .foregroundStyle(.aurora)
+                        .lineLimit(2)
+                }
             }
 
             Spacer(minLength: 0)
 
             if isNow {
-                Text("Now")
-                    .font(.caption.weight(.bold))
-                    .foregroundStyle(.amber)
+                VStack(alignment: .trailing, spacing: 8) {
+                    Text("Now")
+                        .font(.caption.weight(.bold))
+                        .foregroundStyle(.amber)
+                    if item.isFinishable {
+                        Button {
+                            withAnimation(PathMotion.resolve(PathMotion.control, reduceMotion: reduceMotion)) {
+                                state.markDone(item.id, start: item.start, plannedEnd: item.end, on: day, now: now)
+                            }
+                        } label: {
+                            Label("Done", systemImage: "checkmark")
+                                .font(.caption.weight(.semibold))
+                                .padding(.horizontal, 4)
+                                .frame(minHeight: 30)
+                        }
+                        .buttonStyle(.glass)
+                        .tint(.aurora)
+                        .accessibilityLabel("Mark \(item.title) as done")
+                    }
+                }
             } else if isMissed {
                 // Why the day's count is lower than the list is long.
                 Text("Missed")
@@ -711,6 +848,17 @@ private struct DayItemRow: View {
                     Button("Point me there", systemImage: "location.north.line.fill") {
                         state.startCompass(to: CompassTarget(id: item.id, name: item.title,
                                                              latitude: coordinate.latitude, longitude: coordinate.longitude))
+                    }
+                }
+            }
+            if item.isFinishable, Completion.canFinish(start: item.start, now: now) {
+                if completion == nil {
+                    Button("Mark as done", systemImage: "checkmark.circle") {
+                        state.markDone(item.id, start: item.start, plannedEnd: item.end, on: day, now: now)
+                    }
+                } else {
+                    Button("Not done yet", systemImage: "arrow.uturn.backward") {
+                        state.markNotDone(item.id, on: day)
                     }
                 }
             }
@@ -775,5 +923,100 @@ private struct QuickActionLabel: View {
                 .fixedSize()
         }
         .frame(maxWidth: .infinity, minHeight: 52)
+    }
+}
+
+/// One reminder: a box to tick, the thing, and when — its time, the day it was left undone on,
+/// or when you ticked it.
+private struct ReminderRow: View {
+    let reminder: Reminder
+    /// The day the list is showing, so a reminder brought forward can say where it came from.
+    let shownOn: Date
+
+    @Environment(AppState.self) private var state
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Button(action: toggle) {
+                Image(systemName: reminder.isDone ? "checkmark.circle.fill" : "circle")
+                    .font(.title2)
+                    .foregroundStyle(reminder.isDone ? Color.aurora : Color.mist)
+                    .contentTransition(.symbolEffect(.replace))
+                    .frame(width: 44, height: 44)
+                    .contentShape(.rect)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(reminder.isDone ? "Done: \(reminder.title)" : "Not done: \(reminder.title)")
+            .accessibilityHint(reminder.isDone ? "Marks it not done" : "Marks it done")
+
+            VStack(alignment: .leading, spacing: 3) {
+                Text(reminder.title)
+                    .font(.headline)
+                    .foregroundStyle(reminder.isDone ? .mist : .ice)
+                    .strikethrough(reminder.isDone, color: .mist)
+                    .lineLimit(2)
+                if let detail {
+                    Text(detail)
+                        .font(.subheadline)
+                        .foregroundStyle(isLate ? .amber : .mist)
+                        .lineLimit(1)
+                }
+                if !reminder.notes.isEmpty, !reminder.isDone {
+                    Text(reminder.notes)
+                        .font(.subheadline)
+                        .foregroundStyle(.mist)
+                        .lineLimit(2)
+                }
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(.leading, 4)
+        .padding(.trailing, 14)
+        .padding(.vertical, 6)
+        .contentShape(.rect)
+        .onTapGesture {
+            state.reminderSheet = ReminderSheetRequest(editing: reminder.id)
+        }
+        .contextMenu {
+            Button(reminder.isDone ? "Not done yet" : "Mark as done",
+                   systemImage: reminder.isDone ? "arrow.uturn.backward" : "checkmark.circle", action: toggle)
+            Button("Edit", systemImage: "pencil") {
+                state.reminderSheet = ReminderSheetRequest(editing: reminder.id)
+            }
+            Button("Delete", systemImage: "trash", role: .destructive) {
+                state.reminders.delete(reminder)
+            }
+        }
+    }
+
+    private func toggle() {
+        withAnimation(PathMotion.resolve(PathMotion.control, reduceMotion: reduceMotion)) {
+            state.reminders.setDone(reminder, !reminder.isDone)
+        }
+        state.haptics.tick()
+    }
+
+    /// Past its time and still not done.
+    private var isLate: Bool {
+        guard !reminder.isDone else { return false }
+        if let dueAt = reminder.dueAt { return dueAt < Date() }
+        return reminder.day < Calendar.current.startOfDay(for: Date())
+    }
+
+    private var detail: String? {
+        var parts: [String] = []
+        let calendar = Calendar.current
+        if let completedAt = reminder.completedAt {
+            parts.append("Done at \(completedAt.formatted(date: .omitted, time: .shortened))")
+        } else if let dueAt = reminder.dueAt {
+            parts.append(dueAt.formatted(date: .omitted, time: .shortened))
+        }
+        if !calendar.isDate(reminder.day, inSameDayAs: shownOn) {
+            parts.append(calendar.isDateInYesterday(reminder.day)
+                         ? "From yesterday"
+                         : "From \(reminder.day.formatted(.dateTime.weekday(.abbreviated).day().month(.abbreviated)))")
+        }
+        return parts.isEmpty ? nil : parts.joined(separator: " · ")
     }
 }

@@ -93,6 +93,7 @@ struct EventSheet: View {
                 }
 
                 if entry == .one {
+                    doneSection
                     detailsSection
                     whenSection
                     whereSection
@@ -231,6 +232,37 @@ struct EventSheet: View {
             Text(suggestion.usedAI
                  ? "Read by Apple Intelligence on your iPhone. Check the details below."
                  : "Read with on-device rules. Check the details below.")
+        }
+    }
+
+    /// Opened on one of your events that's on or over: finishing it early is said here too, and
+    /// the Day then shows how long it really took.
+    @ViewBuilder
+    private var doneSection: some View {
+        if let event = editingEvent, !event.isAllDay, Completion.canFinish(start: event.start, now: Date()) {
+            let id = "event:\(event.id.uuidString)"
+            Section {
+                if let done = state.completion(of: id, on: event.start) {
+                    Label(Completion.note(start: event.start, plannedEnd: event.end, doneAt: done.at),
+                          systemImage: "checkmark.circle.fill")
+                        .foregroundStyle(.aurora)
+                    Button("Not done yet", systemImage: "arrow.uturn.backward") {
+                        state.markNotDone(id, on: event.start)
+                        dismiss()
+                    }
+                } else {
+                    Button {
+                        state.markDone(id, start: event.start, plannedEnd: event.end, on: event.start)
+                        state.showToast("\(event.title) done", symbol: "checkmark.circle.fill")
+                        dismiss()
+                    } label: {
+                        OneLineButtonLabel(title: "Mark as done", symbol: "checkmark.circle")
+                    }
+                    .pathPrimaryAction()
+                    .listRowBackground(Color.clear)
+                    .listRowInsets(EdgeInsets())
+                }
+            }
         }
     }
 

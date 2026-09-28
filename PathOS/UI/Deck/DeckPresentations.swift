@@ -41,6 +41,9 @@ struct DeckPresentations: ViewModifier {
             .sheet(item: $state.eventSheet) { request in
                 EventSheet(request: request)
             }
+            .sheet(item: $state.reminderSheet) { request in
+                ReminderSheet(request: request)
+            }
             .sheet(isPresented: $state.isTimetablePresented) { TimetableSheet() }
             .sheet(item: $state.editingSession) { session in
                 if let entry = state.timetable.entry(id: session.slotID) {

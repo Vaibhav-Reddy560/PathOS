@@ -109,6 +109,8 @@ final class DayLog {
     /// Anything in neither list counts as attended — see `Attendance`.
     var attendedIDs: [String] = []
     var missedIDs: [String] = []
+    /// What you marked done, and when: an event finished early says how long it really took.
+    var completions: [ItemCompletion] = []
 
     init(dayStart: Date) {
         self.dayStart = dayStart

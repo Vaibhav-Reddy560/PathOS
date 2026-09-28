@@ -153,12 +153,14 @@ nonisolated struct DaySummary: Equatable, Sendable {
     var classCount: Int
     var legCount: Int
     var memoryCount: Int
+    /// Reminders ticked off that day.
+    var taskCount = 0
     var tripName: String?
     var tripDayNumber: Int?
     var tripDayCount: Int?
 
     var isEmpty: Bool {
-        distanceMeters < 1 && eventCount == 0 && classCount == 0 && legCount == 0 && memoryCount == 0
+        distanceMeters < 1 && eventCount == 0 && classCount == 0 && legCount == 0 && memoryCount == 0 && taskCount == 0
     }
 
     /// One honest sentence about the day — only what actually happened.
@@ -177,6 +179,9 @@ nonisolated struct DaySummary: Equatable, Sendable {
         }
         if eventCount > 0 {
             parts.append(eventCount == 1 ? "1 event" : "\(eventCount) events")
+        }
+        if taskCount > 0 {
+            parts.append(taskCount == 1 ? "finished 1 task" : "finished \(taskCount) tasks")
         }
         if memoryCount > 0 {
             parts.append(memoryCount == 1 ? "saved 1 spot" : "saved \(memoryCount) spots")
