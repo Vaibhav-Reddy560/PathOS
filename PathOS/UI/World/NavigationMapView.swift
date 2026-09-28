@@ -16,8 +16,11 @@ import SwiftUI
 /// beside the line more often than on it; and the line, trimmed by a separate clock, trailed
 /// behind the dot.
 ///
-/// The route is drawn with a clear middle. Apple's own traffic — the orange and red Apple Maps
-/// shows — is drawn on the road beneath it, and shows through where there is any.
+/// The route is one solid Aurora line on a dark edge, over everything, so it can't be mistaken for
+/// anything else on the map. Apple's own traffic — the orange and red Apple Maps shows — is on the
+/// roads around it. Apple gives apps no traffic figures for a street, only the painting of them,
+/// so the route itself can't be coloured by it; a line drawn hollow to let the painting show
+/// through read as grey road between two green threads, and nobody could follow it.
 struct NavigationMapView: UIViewRepresentable {
     /// The leg's route, drawn as the line to follow.
     var route: [CLLocationCoordinate2D]
@@ -359,8 +362,8 @@ struct NavigationMapView: UIViewRepresentable {
 
 // MARK: - Drawing
 
-/// The route: a dark edge, the aurora line, and a clear middle where Apple's traffic colour on the
-/// road beneath shows through. Drawn only from your arrow onwards — what's behind you is gone.
+/// The route: a dark edge and a solid Aurora line, drawn only from your arrow onwards — what's
+/// behind you is gone.
 ///
 /// MapKit draws overlays in tiles, on its own threads, so where the head is sits behind a lock.
 private nonisolated final class RouteRenderer: MKPolylineRenderer {
@@ -374,10 +377,14 @@ private nonisolated final class RouteRenderer: MKPolylineRenderer {
     private let casing = UIColor(PathOSPalette.color(PathOSPalette.void)).withAlphaComponent(0.9).cgColor
     private let aurora = UIColor(PathOSPalette.color(PathOSPalette.aurora)).cgColor
 
-    /// Widths in points: the edge, the line, and the clear middle.
-    static let casingWidth: CGFloat = 16
-    static let lineWidth: CGFloat = 11
-    static let clearWidth: CGFloat = 5
+    /// Widths in points: the dark edge, and the line on it — wide enough to be the boldest thing
+    /// on the map, narrow enough to sit inside a street.
+    static let casingWidth: CGFloat = 18
+    static let lineWidth: CGFloat = 12
+    /// A chevron every this many points along the line, pointing the way you'll drive it. Where
+    /// a route goes down one side of a divided road to a U-turn and back up the other, two lines
+    /// side by side say nothing about which way either runs; these do.
+    static let chevronSpacing: CGFloat = 90
 
     func setHead(segment: Int, point: MKMapPoint) {
         head.withLock { $0 = Head(segment: segment, x: point.x, y: point.y) }
@@ -406,17 +413,68 @@ private nonisolated final class RouteRenderer: MKPolylineRenderer {
 
         context.setLineCap(.round)
         context.setLineJoin(.round)
-        func stroke(_ width: CGFloat, _ color: CGColor?) {
+        func stroke(_ width: CGFloat, _ color: CGColor) {
             context.addPath(path)
-            if let color { context.setStrokeColor(color) }
+            context.setStrokeColor(color)
             context.setLineWidth(width / zoomScale)
             context.strokePath()
         }
         stroke(Self.casingWidth, casing)
         stroke(Self.lineWidth, aurora)
-        // The middle, cut out of both: the road, and any traffic on it, show through.
-        context.setBlendMode(.clear)
-        stroke(Self.clearWidth, nil)
+        drawChevrons(points: points, count: count, start: start, zoomScale: zoomScale, in: context)
+    }
+
+    /// Chevrons at fixed places along the route, measured from its start — so they stay put on
+    /// the road as you drive over them — and only ahead of your arrow.
+    private func drawChevrons(points: UnsafeMutablePointer<MKMapPoint>, count: Int, start: Head?,
+                              zoomScale: MKZoomScale, in context: CGContext) {
+        let spacing = Double(Self.chevronSpacing / zoomScale)
+        let half = Double(Self.lineWidth * 0.28 / zoomScale)
+        guard spacing > 0 else { return }
+
+        // How far along the head is, in the same units the chevrons are placed in.
+        var headAt = 0.0
+        if let start {
+            for index in 0..<min(start.segment, count - 1) {
+                headAt += distance(point(for: points[index]), point(for: points[index + 1]))
+            }
+            headAt += distance(point(for: points[min(start.segment, count - 1)]),
+                               point(for: MKMapPoint(x: start.x, y: start.y)))
+        }
+
+        let marks = CGMutablePath()
+        var walked = 0.0
+        var next = (floor(headAt / spacing) + 1) * spacing
+        // Not right under the arrow.
+        if next - headAt < spacing / 2 { next += spacing }
+        for index in 0..<(count - 1) {
+            let a = point(for: points[index])
+            let b = point(for: points[index + 1])
+            let length = distance(a, b)
+            guard length > 0 else { continue }
+            while next <= walked + length {
+                let t = (next - walked) / length
+                let centre = CGPoint(x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t)
+                let angle = atan2(Double(b.y - a.y), Double(b.x - a.x))
+                // A ">" pointing along the line: two arms swept back from its tip.
+                let tip = CGPoint(x: centre.x + cos(angle) * half, y: centre.y + sin(angle) * half)
+                for sweep in [0.75 * Double.pi, -0.75 * Double.pi] {
+                    marks.move(to: tip)
+                    marks.addLine(to: CGPoint(x: tip.x + cos(angle + sweep) * half * 2,
+                                              y: tip.y + sin(angle + sweep) * half * 2))
+                }
+                next += spacing
+            }
+            walked += length
+        }
+        context.addPath(marks)
+        context.setStrokeColor(casing)
+        context.setLineWidth(Self.lineWidth * 0.2 / zoomScale)
+        context.strokePath()
+    }
+
+    private func distance(_ a: CGPoint, _ b: CGPoint) -> Double {
+        hypot(Double(b.x - a.x), Double(b.y - a.y))
     }
 }
 
