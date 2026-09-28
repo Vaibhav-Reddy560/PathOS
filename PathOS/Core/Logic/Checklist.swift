@@ -202,9 +202,10 @@ nonisolated enum Completion {
         max(start, min(now, max(start, plannedEnd)))
     }
 
-    /// Only once it has begun: finishing something that hasn't started isn't finishing it.
-    static func canFinish(start: Date, now: Date) -> Bool {
-        start <= now
+    /// Only while it's on: before it starts there's nothing to finish, and once its time is up
+    /// it's over whether or not anyone said so.
+    static func canFinish(start: Date, plannedEnd: Date, now: Date) -> Bool {
+        start <= now && now < plannedEnd
     }
 
     /// "Done at 10:40 · took 40 min, 20 early", for the row. A deadline has no length, so it's

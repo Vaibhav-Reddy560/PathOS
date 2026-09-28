@@ -166,8 +166,10 @@ struct CompletionTests {
         let end = start.addingTimeInterval(3_600)
         #expect(Completion.finishedAt(start: start, plannedEnd: end, now: start.addingTimeInterval(1_200)) == start.addingTimeInterval(1_200))
         #expect(Completion.finishedAt(start: start, plannedEnd: end, now: end.addingTimeInterval(20 * 3_600)) == end)
-        #expect(!Completion.canFinish(start: start, now: start.addingTimeInterval(-60)))
-        #expect(Completion.canFinish(start: start, now: start))
+        #expect(!Completion.canFinish(start: start, plannedEnd: end, now: start.addingTimeInterval(-60)))
+        #expect(Completion.canFinish(start: start, plannedEnd: end, now: start))
+        // Once its time is up it's over, said or not.
+        #expect(!Completion.canFinish(start: start, plannedEnd: end, now: end))
     }
 
     @Test func durationsReadNaturally() {

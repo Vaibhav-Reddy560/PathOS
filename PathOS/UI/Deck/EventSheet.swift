@@ -239,29 +239,35 @@ struct EventSheet: View {
     /// the Day then shows how long it really took.
     @ViewBuilder
     private var doneSection: some View {
-        if let event = editingEvent, !event.isAllDay, Completion.canFinish(start: event.start, now: Date()) {
+        let now = Date()
+        if let event = editingEvent, !event.isAllDay,
+           let done = state.completion(of: "event:\(event.id.uuidString)", on: event.start) {
+            Section {
+                Label(Completion.note(start: event.start, plannedEnd: event.end, doneAt: done.at),
+                      systemImage: "checkmark.circle.fill")
+                    .foregroundStyle(.aurora)
+                // Taken back only before it was meant to end: after that it's over regardless.
+                if now < event.end {
+                    Button("Not done yet", systemImage: "arrow.uturn.backward") {
+                        state.markNotDone("event:\(event.id.uuidString)", on: event.start)
+                        dismiss()
+                    }
+                }
+            }
+        } else if let event = editingEvent, !event.isAllDay,
+                  Completion.canFinish(start: event.start, plannedEnd: event.end, now: now) {
             let id = "event:\(event.id.uuidString)"
             Section {
-                if let done = state.completion(of: id, on: event.start) {
-                    Label(Completion.note(start: event.start, plannedEnd: event.end, doneAt: done.at),
-                          systemImage: "checkmark.circle.fill")
-                        .foregroundStyle(.aurora)
-                    Button("Not done yet", systemImage: "arrow.uturn.backward") {
-                        state.markNotDone(id, on: event.start)
-                        dismiss()
-                    }
-                } else {
-                    Button {
-                        state.markDone(id, start: event.start, plannedEnd: event.end, on: event.start)
-                        state.showToast("\(event.title) done", symbol: "checkmark.circle.fill")
-                        dismiss()
-                    } label: {
-                        OneLineButtonLabel(title: "Mark as done", symbol: "checkmark.circle")
-                    }
-                    .pathPrimaryAction()
-                    .listRowBackground(Color.clear)
-                    .listRowInsets(EdgeInsets())
+                Button {
+                    state.markDone(id, start: event.start, plannedEnd: event.end, on: event.start)
+                    state.showToast("\(event.title) done", symbol: "checkmark.circle.fill")
+                    dismiss()
+                } label: {
+                    OneLineButtonLabel(title: "Mark as done", symbol: "checkmark.circle")
                 }
+                .pathPrimaryAction()
+                .listRowBackground(Color.clear)
+                .listRowInsets(EdgeInsets())
             }
         }
     }

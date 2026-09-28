@@ -59,3 +59,50 @@ nonisolated enum Attendance {
         items.filter { done.contains($0.id) || ($0.end <= now && !missed.contains($0.id)) }.count
     }
 }
+
+/// What a thing on your day offers from its long-press menu: only what makes sense at that moment.
+///
+/// A session you were seen at and finished offered "I didn't go", "Not done yet" and "Skip this
+/// session today" — three things that can't be true of something already done and behind you.
+nonisolated enum DayItemMenu {
+
+    nonisolated enum Action: Hashable, Sendable {
+        case takeMeThere
+        case markDone
+        case notDoneYet
+        case iWasThere
+        case iDidntGo
+        case skipToday
+    }
+
+    static func actions(start: Date, end: Date, now: Date, isDone: Bool, seenThere: Bool, isMissed: Bool,
+                        hasPlace: Bool, canBeDone: Bool, canBeSkipped: Bool) -> Set<Action> {
+        var actions: Set<Action> = []
+        let isOver = isDone || end <= now
+        let isOn = start <= now && now < end
+        // Getting there is for something still to come, or on.
+        if hasPlace, !isOver {
+            actions.insert(.takeMeThere)
+        }
+        // Done is said while it's on; taken back only before it was meant to end, since after
+        // that it's over whether or not you said so.
+        if canBeDone {
+            if !isDone, isOn { actions.insert(.markDone) }
+            if isDone, now < end { actions.insert(.notDoneYet) }
+        }
+        // PathOS's guess about where you were is put right only where it guessed: not when it
+        // saw you there, and not when you said you'd done it.
+        if hasPlace, start < now {
+            if isMissed {
+                actions.insert(.iWasThere)
+            } else if !seenThere, !isDone {
+                actions.insert(.iDidntGo)
+            }
+        }
+        // Skipping is for a session that hasn't happened, or is happening — not one that has.
+        if canBeSkipped, !isOver {
+            actions.insert(.skipToday)
+        }
+        return actions
+    }
+}

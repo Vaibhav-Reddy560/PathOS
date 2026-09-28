@@ -59,4 +59,42 @@ struct AttendanceTests {
         // A day that's over counts everything but what was missed.
         #expect(Attendance.finished(items, done: [], missed: ["event:missed"], now: now.addingTimeInterval(86_400)) == 3)
     }
+
+    // MARK: The long-press menu
+
+    private func menu(now offset: TimeInterval, isDone: Bool = false, seenThere: Bool = false,
+                      isMissed: Bool = false) -> Set<DayItemMenu.Action> {
+        let start = Date(timeIntervalSince1970: 1_790_000_000)
+        return DayItemMenu.actions(start: start, end: start.addingTimeInterval(3_300),
+                                   now: start.addingTimeInterval(offset), isDone: isDone, seenThere: seenThere,
+                                   isMissed: isMissed, hasPlace: true, canBeDone: true, canBeSkipped: true)
+    }
+
+    /// The screenshot's session: finished early, seen there. Nothing that can't be true of it.
+    @Test func aSessionDoneAndBehindYouOffersNothingItCantBe() {
+        let done = menu(now: 7_200, isDone: true, seenThere: true)
+        #expect(!done.contains(.skipToday))
+        #expect(!done.contains(.iDidntGo))
+        #expect(!done.contains(.notDoneYet))
+        #expect(!done.contains(.takeMeThere))
+        #expect(!done.contains(.markDone))
+    }
+
+    @Test func beforeItStarts() {
+        #expect(menu(now: -600) == [.takeMeThere, .skipToday])
+    }
+
+    @Test func whileItsOn() {
+        #expect(menu(now: 600) == [.takeMeThere, .markDone, .iDidntGo, .skipToday])
+        // Seen there: PathOS knows you went.
+        #expect(!menu(now: 600, seenThere: true).contains(.iDidntGo))
+        // Marked done early, still in its time: it can be taken back.
+        #expect(menu(now: 900, isDone: true, seenThere: true) == [.notDoneYet])
+    }
+
+    /// Over, and PathOS never saw you either way: its guess can still be put right.
+    @Test func overWithNothingSeen() {
+        #expect(menu(now: 7_200) == [.iDidntGo])
+        #expect(menu(now: 7_200, isMissed: true) == [.iWasThere])
+    }
 }

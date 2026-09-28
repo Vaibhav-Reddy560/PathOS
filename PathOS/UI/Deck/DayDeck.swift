@@ -356,7 +356,7 @@ struct DayDeck: View {
             if !items.isEmpty {
                 GroupedRows(items) { item in
                     DayItemRow(item: item, now: now, day: day, isMissed: missedToday.contains(item.id),
-                               completion: completion(of: item))
+                               wasSeenThere: seenThereToday.contains(item.id), completion: completion(of: item))
                 }
             }
         }
@@ -568,6 +568,11 @@ struct DayDeck: View {
         Set(dayLog?.missedIDs ?? [])
     }
 
+    /// What PathOS saw you at, or you said you'd done.
+    private var seenThereToday: Set<String> {
+        Set(dayLog?.attendedIDs ?? [])
+    }
+
     /// The day's events, less the ones you were seen to miss.
     /// The day's events that are behind you: done, or over and not missed.
     private var eventsAttended: Int {
@@ -754,6 +759,8 @@ private struct DayItemRow: View {
     let day: Date
     /// PathOS saw you somewhere else while this was on.
     let isMissed: Bool
+    /// PathOS saw you there, or you said you'd done it.
+    let wasSeenThere: Bool
     /// You said it was done, and when.
     let completion: ItemCompletion?
 
@@ -834,7 +841,9 @@ private struct DayItemRow: View {
             }
         }
         .contextMenu {
-            if let coordinate = item.coordinate, !state.isAt(coordinate, within: LeaveOnTime.arrivalRadius) {
+            let actions = menuActions
+            if actions.contains(.takeMeThere), let coordinate = item.coordinate,
+               !state.isAt(coordinate, within: LeaveOnTime.arrivalRadius) {
                 Button("Take me there", systemImage: "arrow.triangle.turn.up.right.diamond.fill") {
                     state.showWays(to: item.placeName ?? item.title, at: coordinate, id: item.id, arriveBy: item.start)
                 }
@@ -845,24 +854,27 @@ private struct DayItemRow: View {
                     }
                 }
             }
-            if item.isFinishable, Completion.canFinish(start: item.start, now: now) {
-                if completion == nil {
-                    Button("Mark as done", systemImage: "checkmark.circle") {
-                        withAnimation(PathMotion.resolve(PathMotion.control, reduceMotion: reduceMotion)) {
-                            state.markDone(item.id, start: item.start, plannedEnd: item.end, on: day, now: now)
-                        }
-                    }
-                } else {
-                    Button("Not done yet", systemImage: "arrow.uturn.backward") {
-                        state.markNotDone(item.id, on: day)
+            if actions.contains(.markDone) {
+                Button("Mark as done", systemImage: "checkmark.circle") {
+                    withAnimation(PathMotion.resolve(PathMotion.control, reduceMotion: reduceMotion)) {
+                        state.markDone(item.id, start: item.start, plannedEnd: item.end, on: day, now: now)
                     }
                 }
             }
-            // PathOS only ever glimpses where you were, so its guess can always be put right.
-            if item.coordinate != nil, item.start < now {
-                Button(isMissed ? "I was there" : "I didn't go",
-                       systemImage: isMissed ? "checkmark.circle" : "xmark.circle") {
-                    state.setAttendance(item.id, attended: isMissed, on: day)
+            if actions.contains(.notDoneYet) {
+                Button("Not done yet", systemImage: "arrow.uturn.backward") {
+                    state.markNotDone(item.id, on: day)
+                }
+            }
+            // PathOS only ever glimpses where you were, so a guess it made can be put right.
+            if actions.contains(.iWasThere) {
+                Button("I was there", systemImage: "checkmark.circle") {
+                    state.setAttendance(item.id, attended: true, on: day)
+                }
+            }
+            if actions.contains(.iDidntGo) {
+                Button("I didn't go", systemImage: "xmark.circle") {
+                    state.setAttendance(item.id, attended: false, on: day)
                 }
             }
             if case .event(let event) = item {
@@ -875,7 +887,7 @@ private struct DayItemRow: View {
                     state.trips.delete(leg)
                 }
             }
-            if case .classSession(let session) = item {
+            if case .classSession(let session) = item, actions.contains(.skipToday) {
                 Button("Skip this session today", systemImage: "xmark.circle") {
                     let context = state.modelContainer.mainContext
                     context.insert(TimetableException(dayStart: Calendar.current.startOfDay(for: session.start), reason: "Cancelled", entryID: session.slotID))
@@ -886,6 +898,13 @@ private struct DayItemRow: View {
         }
         .accessibilityElement(children: .combine)
         .accessibilityAddTraits(.isButton)
+    }
+
+    private var menuActions: Set<DayItemMenu.Action> {
+        let isSession = if case .classSession = item { true } else { false }
+        return DayItemMenu.actions(start: item.start, end: item.end, now: now, isDone: completion != nil,
+                                   seenThere: wasSeenThere, isMissed: isMissed, hasPlace: item.coordinate != nil,
+                                   canBeDone: item.isFinishable, canBeSkipped: isSession)
     }
 }
 
