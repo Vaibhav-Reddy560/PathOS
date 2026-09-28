@@ -99,4 +99,44 @@ struct TripGuideTests {
         #expect(guide?.hasArrived == true)
         #expect(guide?.headline == "You've arrived")
     }
+
+    // MARK: Short trips
+
+    private func shortTrip(to end: CLLocationCoordinate2D, mode: DoorToDoor.Mode = .walk) -> DoorToDoor.Option {
+        let leg = DoorToDoor.Leg(mode: mode, title: "To the shop", detail: "", minutes: 3, distanceMeters: 200,
+                                 endName: "The shop", endLatitude: end.latitude, endLongitude: end.longitude)
+        return DoorToDoor.Option(headline: "Straight there", legs: [leg], minutes: 3, fareLow: 0, fareHigh: 0)
+    }
+
+    /// The fault behind Follow this way doing nothing for anywhere close: a fixed 250 m circle
+    /// made a trip to somewhere 150 m off arrive before it started. Near is now led like far.
+    @Test func aShortTripDoesntArriveAsItSetsOff() {
+        let shop = GeoMath.coordinate(home, metres: 150, bearing: 90)
+        for mode in [DoorToDoor.Mode.walk, .auto] {
+            let setOff = TripGuide.status(for: shortTrip(to: shop, mode: mode), startedAt: start, now: start,
+                                          location: home, origin: home)
+            #expect(setOff?.hasArrived == false)
+        }
+        let nearly = GeoMath.coordinate(home, metres: 130, bearing: 90)
+        let there = TripGuide.status(for: shortTrip(to: shop), startedAt: start, now: start.addingTimeInterval(120),
+                                     location: nearly, origin: home)
+        #expect(there?.hasArrived == true)
+    }
+
+    /// The same for anything PathOS will plan: past "Here", setting off is never arriving.
+    @Test func nothingPlannableArrivesOnItsFirstFix() {
+        for metres in [DoorToDoor.tooCloseToRoute + 1, 60, 120, 240, 400, 900] {
+            let end = GeoMath.coordinate(home, metres: metres, bearing: 45)
+            let leg = shortTrip(to: end).legs[0]
+            #expect(TripGuide.radius(for: leg, from: home) < GeoMath.distance(from: home, to: end))
+        }
+    }
+
+    /// A long leg keeps its generous circle: a campus gate is well off the campus's pin.
+    @Test func aLongLegStillArrivesAtTheGate() {
+        let leg = trip().legs[0]
+        #expect(TripGuide.radius(for: leg, from: home) == TripGuide.placeRadius)
+        // And a station keeps its own, since GPS underground can't be asked for more.
+        #expect(TripGuide.radius(for: trip().legs[1], from: station) == TripGuide.stationRadius)
+    }
 }

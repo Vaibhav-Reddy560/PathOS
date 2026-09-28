@@ -1086,8 +1086,7 @@ final class AppState {
         return away > WorldSignalBuilder.hereRadius && away <= Self.pointerRange
     }
 
-    /// Whether there is a journey to plan at all. Closer than this, `DoorToDoor` has nothing to
-    /// offer and the ways sheet would open on "no way of getting there could be worked out".
+    /// Whether there is a journey to plan at all: anywhere PathOS doesn't already call "Here".
     func routeIsWorthIt(to coordinate: CLLocationCoordinate2D) -> Bool {
         guard let away = metres(to: coordinate) else { return true }
         return away > DoorToDoor.tooCloseToRoute

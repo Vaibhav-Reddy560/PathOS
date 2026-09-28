@@ -11,6 +11,9 @@ nonisolated struct ActiveTrip: Sendable {
 
     var latitude: Double
     var longitude: Double
+    /// Where you set off from, which says how short the first leg is and so how near its end
+    /// counts as arriving.
+    var origin: CLLocationCoordinate2D?
 
     var coordinate: CLLocationCoordinate2D {
         CLLocationCoordinate2D(latitude: latitude, longitude: longitude)
@@ -55,12 +58,13 @@ extension AppState {
     /// PathOS says so when you fall behind it.
     func startTrip(_ option: DoorToDoor.Option, to name: String, at destination: CLLocationCoordinate2D, arriveBy: Date? = nil) {
         let startedAt = Date()
+        let origin = location.location?.coordinate
         trip = ActiveTrip(option: option, destinationName: name, startedAt: startedAt, arriveBy: arriveBy,
-                          latitude: destination.latitude, longitude: destination.longitude)
+                          latitude: destination.latitude, longitude: destination.longitude, origin: origin)
         // The map that leads you needs both of these, and both used to arrive a frame or two later:
         // the browsing map showed instead, with its own marker and rings, and then vanished.
         tripStatus = TripGuide.status(for: option, startedAt: startedAt, now: startedAt,
-                                      location: location.location?.coordinate)
+                                      location: origin, origin: origin)
         deckStop = .collapsed
         announcedTripLeg = nil
         announcedTripDelay = 0
@@ -119,7 +123,7 @@ extension AppState {
             fareHigh: access.headlineFare?.estimate.high ?? 0
         )
         trip = ActiveTrip(option: option, destinationName: last.name, startedAt: Date(), arriveBy: nil,
-                          latitude: last.latitude, longitude: last.longitude)
+                          latitude: last.latitude, longitude: last.longitude, origin: location.location?.coordinate)
         announcedTripLeg = 0
         announcedTripDelay = 0
         await refreshTrip()
@@ -189,7 +193,7 @@ extension AppState {
         guard now.timeIntervalSince(lastNavigationUpdate) >= (isForeground ? 0.2 : 5) else { return }
         lastNavigationUpdate = now
         guard var status = TripGuide.status(for: trip.option, startedAt: trip.startedAt, now: now,
-                                            location: here.coordinate) else { return }
+                                            location: here.coordinate, origin: trip.origin) else { return }
         let leg = trip.option.legs[min(status.legIndex, trip.option.legs.count - 1)]
         let isRoad = leg.mode != .metro && leg.mode != .bus
 
@@ -436,7 +440,7 @@ extension AppState {
     func refreshTrip(now: Date = Date()) async {
         guard let trip else { return }
         guard let planned = TripGuide.status(for: trip.option, startedAt: trip.startedAt, now: now,
-                                             location: location.location?.coordinate) else { return }
+                                             location: location.location?.coordinate, origin: trip.origin) else { return }
         let status = liveAdjusted(planned, trip: trip, now: now)
         tripStatus = status
 

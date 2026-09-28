@@ -115,16 +115,13 @@ struct DoorToDoorTests {
         #expect(options.isEmpty)
     }
 
-    /// The two radii that have to agree. `TripGuide` counts a road leg as finished within
-    /// `placeRadius`, so anything planned closer than that arrives on its first fix: the trip
-    /// starts, reports itself over, and Follow this way looks like a dead button. Planning has to
-    /// refuse at least as far out as arriving is declared.
-    @Test func nothingIsPlannedInsideTheRadiusThatCountsAsArriving() async {
-        #expect(DoorToDoor.tooCloseToRoute >= TripGuide.placeRadius)
-        let justInside = GeoMath.coordinate(home, metres: TripGuide.placeRadius - 20, bearing: 90)
-        let options = await DoorToDoor.options(from: home, to: justInside, destinationName: "The shop",
+    /// Anywhere PathOS doesn't call "Here" is somewhere a way can be planned to, however close:
+    /// near and far are led the same way.
+    @Test func anywhereBeyondHereIsPlanned() async {
+        let justPast = GeoMath.coordinate(home, metres: 150, bearing: 90)
+        let options = await DoorToDoor.options(from: home, to: justPast, destinationName: "The shop",
                                                now: noon, road: roads())
-        #expect(options.isEmpty)
+        #expect(!options.isEmpty)
     }
 
     /// Without Apple Maps, the legs still get times rather than disappearing.
