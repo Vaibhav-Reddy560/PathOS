@@ -663,12 +663,15 @@ struct EventSheet: View {
 
     private func save() {
         let trimmed = title.trimmingCharacters(in: .whitespaces)
-        let ends = isAllDay ? Calendar.current.startOfDay(for: start).addingTimeInterval(86_399) : max(end, start.addingTimeInterval(5 * 60))
+        // All day starts at the start of the day. Keeping the time the picker happened to hold —
+        // ten in the morning, by default — is what had an all-day event "starting in 5 min".
+        let begins = isAllDay ? Calendar.current.startOfDay(for: start) : start
+        let ends = isAllDay ? begins.addingTimeInterval(86_399) : max(end, start.addingTimeInterval(5 * 60))
 
-        let event = editingEvent ?? PathEvent(title: trimmed, start: start)
+        let event = editingEvent ?? PathEvent(title: trimmed, start: begins)
         event.title = trimmed
         event.notes = notes
-        event.start = start
+        event.start = begins
         event.endsAt = ends
         event.isAllDay = isAllDay
         event.placeName = placeName.isEmpty ? nil : placeName

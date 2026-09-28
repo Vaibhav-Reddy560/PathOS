@@ -242,7 +242,8 @@ final class RadarModel {
             latitude: event.latitude,
             longitude: event.longitude,
             distanceMeters: event.distanceMeters,
-            start: event.start,
+            // All day has no time to show or count down to.
+            start: event.isAllDay ? nil : event.start,
             isEvent: event.source.isEvent
         )
     }

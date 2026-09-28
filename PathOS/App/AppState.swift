@@ -896,7 +896,8 @@ final class AppState {
         let nextEvent = events.events
             .filter { $0.source.isInYourDay && !dropped.contains($0.id) }
             .compactMap { event -> AlertSnapshot.Event? in
-                guard let start = event.start, start >= now else { return nil }
+                // An all-day event doesn't start at a time, so it never "starts in 5 min".
+                guard !event.isAllDay, let start = event.start, start >= now else { return nil }
                 let distance: Double? = if let here, let latitude = event.latitude, let longitude = event.longitude {
                     here.distance(from: CLLocation(latitude: latitude, longitude: longitude))
                 } else {

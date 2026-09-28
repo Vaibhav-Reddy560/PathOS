@@ -80,7 +80,8 @@ nonisolated enum CalendarEvents {
             longitude: coordinate?.longitude,
             distanceMeters: coordinate.map { location.distance(from: CLLocation(latitude: $0.latitude, longitude: $0.longitude)) },
             source: .calendar,
-            symbol: "calendar"
+            symbol: "calendar",
+            isAllDay: item.isAllDay
         )
     }
 }

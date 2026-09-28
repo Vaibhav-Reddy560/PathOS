@@ -35,6 +35,9 @@ nonisolated struct LocalEvent: Identifiable, Hashable, Sendable {
     var distanceMeters: Double?
     var source: Source
     var symbol: String
+    /// On the day rather than at a time. `start` is then only the day: whatever time it holds is
+    /// what the picker happened to show, and nothing should count down to it.
+    var isAllDay = false
 }
 
 /// Pluggable so a paid/third-party events feed can be added later without UI changes.

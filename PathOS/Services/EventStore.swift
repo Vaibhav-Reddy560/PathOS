@@ -177,7 +177,8 @@ final class PathOSEventSource: EventSource {
                         location.distance(from: CLLocation(latitude: $0.latitude, longitude: $0.longitude))
                     },
                     source: .own,
-                    symbol: "calendar"
+                    symbol: "calendar",
+                    isAllDay: event.isAllDay
                 )
             }
     }
