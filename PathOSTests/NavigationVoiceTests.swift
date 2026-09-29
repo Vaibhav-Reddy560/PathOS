@@ -16,7 +16,7 @@ struct NavigationVoiceTests {
                               isBehind: Bool = false, legIndex: Int = 0) -> NavigationVoice.Announcement? {
         NavigationVoice.announcement(
             step: step, stepIndex: 2, metresToStep: metres,
-            legIndex: legIndex, legInstruction: "Take an auto to Jayadeva Hospital",
+            legIndex: legIndex, legInstruction: "By road to Jayadeva Hospital",
             isBehind: isBehind, minutesBehind: 9,
             hasSaidLeg: said.contains(.handover(leg: legIndex)), said: said
         )
@@ -52,7 +52,7 @@ struct NavigationVoiceTests {
     @Test func theHandoverComesFirst() {
         let handover = announcement(metres: 100, legIndex: 1)
         #expect(handover?.moment == .handover(leg: 1))
-        #expect(handover?.text == "Take an auto to Jayadeva Hospital")
+        #expect(handover?.text == "By road to Jayadeva Hospital")
     }
 
     /// Running behind is mentioned once per leg, and only when there's no turn to call.

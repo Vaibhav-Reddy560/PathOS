@@ -16,7 +16,7 @@ nonisolated enum TripGuide {
         var minutesBehind: Int
         /// Minutes still to go, the delay included.
         var minutesRemaining: Int
-        /// "Auto to Jayadeva Hospital".
+        /// "By road to Jayadeva Hospital".
         var headline: String
         /// "About 9 min · you should be on the train by now".
         var detail: String
@@ -38,18 +38,50 @@ nonisolated enum TripGuide {
         leg.mode == .metro || leg.mode == .bus ? stationRadius : placeRadius
     }
 
+    /// How close to a place counts as being at it, at the end of a road or a walk.
+    static let doorRadius = 60.0
+    /// And how close to where the road route ends — which, for a campus whose pin is a couple of
+    /// hundred metres inside its gate, is the gate.
+    static let roadEndRadius = 40.0
+
     /// How close counts as having reached the end of a leg that set off from `start`.
     ///
-    /// Generous for a long leg — a campus gate can be a couple of hundred metres from the
-    /// campus's pin — but never more than a third of the leg itself. A fixed 250 m made every trip
-    /// shorter than that arrive on its first fix, so the driving view never came up for anywhere
-    /// close by, and close places had to be sent to the pointer instead: one way of being led for
-    /// near and another for far, which is exactly what shouldn't differ.
+    /// For a road or a walk: at the place, or at the end of the road to it (`RoadEnd`) — never a
+    /// couple of hundred metres short. A generous 250 m ended the driving view before you'd
+    /// arrived, and a fixed one made every trip shorter than that arrive on its first fix. Never
+    /// more than a third of the leg either, so a short trip doesn't arrive as it sets off. A
+    /// station keeps its wide circle: GPS underground can't be asked for more.
     static func radius(for leg: DoorToDoor.Leg, from start: CLLocationCoordinate2D?) -> Double {
-        let generous = radius(for: leg)
-        guard leg.mode != .metro, leg.mode != .bus, let start else { return generous }
+        guard leg.mode != .metro, leg.mode != .bus else { return radius(for: leg) }
+        guard let start else { return doorRadius }
         let span = GeoMath.distance(from: start, to: leg.endCoordinate)
-        return min(generous, max(nearestArrival, span / 3))
+        return min(doorRadius, max(nearestArrival, span / 3))
+    }
+
+    /// Where the road route for the leg you're on ends, and whether you've stopped near it.
+    nonisolated struct RoadEnd: Sendable {
+        var leg: Int
+        var point: CLLocationCoordinate2D
+        /// Stopped within a short walk of it for a while: parked just short, which is arriving.
+        var hasStoppedNear = false
+    }
+
+    /// Which side of you the place is, once you're there.
+    nonisolated enum Side: String, Equatable, Sendable {
+        case left
+        case right
+        case ahead
+        case here
+    }
+
+    /// The side of the road the place is on, arriving along `bearing` at the end of the route.
+    static func side(of place: CLLocationCoordinate2D, from roadEnd: CLLocationCoordinate2D,
+                     arrivingAlong bearing: Double) -> Side {
+        guard GeoMath.distance(from: roadEnd, to: place) > 20 else { return .here }
+        let turn = (GeoMath.bearing(from: roadEnd, to: place) - bearing + 540)
+            .truncatingRemainder(dividingBy: 360) - 180
+        if abs(turn) < 30 { return .ahead }
+        return turn > 0 ? .right : .left
     }
 
     /// When each leg should be finished, in minutes from setting off. Getting into a station is
@@ -69,13 +101,17 @@ nonisolated enum TripGuide {
     /// the place it ends; the furthest one wins, so passing a station you'd already left behind
     /// doesn't send the plan backwards.
     static func legsDone(_ option: DoorToDoor.Option, at location: CLLocationCoordinate2D?,
-                         origin: CLLocationCoordinate2D? = nil) -> Int? {
+                         origin: CLLocationCoordinate2D? = nil, roadEnd: RoadEnd? = nil) -> Int? {
         guard let location else { return nil }
         let reached = option.legs.indices.filter { index in
             // Each leg sets off from where the one before it ended; the first from where you were.
             let start = index == 0 ? origin : option.legs[index - 1].endCoordinate
             let leg = option.legs[index]
-            return GeoMath.distance(from: location, to: leg.endCoordinate) <= radius(for: leg, from: start)
+            if GeoMath.distance(from: location, to: leg.endCoordinate) <= radius(for: leg, from: start) {
+                return true
+            }
+            guard let roadEnd, roadEnd.leg == index else { return false }
+            return roadEnd.hasStoppedNear || GeoMath.distance(from: location, to: roadEnd.point) <= roadEndRadius
         }
         // Knowing you're nowhere along it yet is knowing something: nil is only for having no
         // fix at all, which is when the clock has to carry the plan instead.
@@ -83,7 +119,8 @@ nonisolated enum TripGuide {
     }
 
     static func status(for option: DoorToDoor.Option, startedAt: Date, now: Date,
-                       location: CLLocationCoordinate2D?, origin: CLLocationCoordinate2D? = nil) -> Status? {
+                       location: CLLocationCoordinate2D?, origin: CLLocationCoordinate2D? = nil,
+                       roadEnd: RoadEnd? = nil) -> Status? {
         guard !option.legs.isEmpty else { return nil }
         let plan = schedule(option)
         let elapsed = max(0, now.timeIntervalSince(startedAt) / 60)
@@ -91,7 +128,7 @@ nonisolated enum TripGuide {
         // Without a fix, the clock carries the plan, which is what happens underground. It can
         // move you along the legs but never past the end: arriving is something the map has to see.
         let byClock = min(plan.filter { $0 <= elapsed }.count, option.legs.count - 1)
-        let done = min(legsDone(option, at: location, origin: origin) ?? byClock, option.legs.count)
+        let done = min(legsDone(option, at: location, origin: origin, roadEnd: roadEnd) ?? byClock, option.legs.count)
 
         if done >= option.legs.count {
             return Status(legIndex: option.legs.count - 1, hasArrived: true, minutesBehind: 0, minutesRemaining: 0,
@@ -143,7 +180,8 @@ nonisolated enum TripGuide {
     static func instruction(for leg: DoorToDoor.Leg) -> String {
         switch leg.mode {
         case .walk: leg.title
-        case .auto, .bikeTaxi, .cab: "Take an auto to \(leg.endName)"
+        // However you're going by road — driving, an auto, a cab — it's the road that's said.
+        case .auto, .bikeTaxi, .cab: "By road to \(leg.endName)"
         case .metro: "Ride to \(leg.endName)"
         case .bus: "Take the bus to \(leg.endName)"
         }

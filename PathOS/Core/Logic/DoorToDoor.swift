@@ -54,7 +54,7 @@ nonisolated enum DoorToDoor {
     nonisolated struct Leg: Hashable, Sendable, Identifiable {
         var id = UUID()
         var mode: Mode
-        /// "Auto to Jayadeva Hospital", "Yellow Line to BTM Layout".
+        /// "By road to Jayadeva Hospital", "Yellow Line to BTM Layout".
         var title: String
         /// "6 stops · towards Bommasandra", "1.4 km".
         var detail: String?
@@ -343,7 +343,7 @@ nonisolated enum DoorToDoor {
         }
         guard let hop = await hop(from: origin, to: station.coordinate, byRoad: true, road: road) else { return nil }
         return roadLeg(hop, to: station.coordinate, name: station.name, now: now, calendar: calendar,
-                       title: "Auto to \(station.name)")
+                       title: "By road to \(station.name)")
     }
 
     private static func egressLeg(from station: MetroStation, to destination: CLLocationCoordinate2D, name: String,
@@ -356,7 +356,7 @@ nonisolated enum DoorToDoor {
                        endName: name, endLatitude: destination.latitude, endLongitude: destination.longitude)
         }
         guard let hop = await hop(from: station.coordinate, to: destination, byRoad: true, road: road) else { return nil }
-        return roadLeg(hop, to: destination, name: name, now: now, calendar: calendar, title: "Auto to \(name)")
+        return roadLeg(hop, to: destination, name: name, now: now, calendar: calendar, title: "By road to \(name)")
     }
 
     /// A leg you'd take an auto for, priced for an auto, a bike taxi and a cab, since it's the

@@ -33,7 +33,7 @@ struct TripGuideTests {
     @Test func itSaysWhatToDoOnTheLegYoureOn() {
         let guide = TripGuide.status(for: trip(), startedAt: start, now: start.addingTimeInterval(120), location: home)
         #expect(guide?.legIndex == 0)
-        #expect(guide?.headline == "Take an auto to Jayadeva Hospital")
+        #expect(guide?.headline == "By road to Jayadeva Hospital")
         #expect(guide?.isBehind == false)
         // Two minutes gone of the forty.
         #expect(guide?.minutesRemaining == 38)
@@ -132,11 +132,62 @@ struct TripGuideTests {
         }
     }
 
-    /// A long leg keeps its generous circle: a campus gate is well off the campus's pin.
-    @Test func aLongLegStillArrivesAtTheGate() {
+    /// A long leg arrives at the place, not a couple of hundred metres short of it — that ended
+    /// the driving view early. A station keeps its wide circle: GPS underground can't be asked
+    /// for more.
+    @Test func aLongLegArrivesAtTheDoorNotAStreetShort() {
         let leg = trip().legs[0]
-        #expect(TripGuide.radius(for: leg, from: home) == TripGuide.placeRadius)
-        // And a station keeps its own, since GPS underground can't be asked for more.
+        #expect(TripGuide.radius(for: leg, from: home) == TripGuide.doorRadius)
         #expect(TripGuide.radius(for: trip().legs[1], from: station) == TripGuide.stationRadius)
+        let short = GeoMath.coordinate(station, metres: 200, bearing: 0)
+        let stillGoing = TripGuide.status(for: trip(), startedAt: start, now: start.addingTimeInterval(9 * 60),
+                                          location: short, origin: home)
+        #expect(stillGoing?.legIndex == 0)
+    }
+
+    // MARK: The end of the road
+
+    /// A campus whose pin is 200 m inside its gate: the road ends at the gate, and reaching the
+    /// gate is arriving. Before it — 150 m down the road — isn't.
+    @Test func theEndOfTheRoadIsArriving() {
+        let college = GeoMath.coordinate(home, metres: 3_000, bearing: 0)
+        let gate = GeoMath.coordinate(college, metres: 200, bearing: 180)
+        let drive = shortTrip(to: college, mode: .auto)
+        let end = TripGuide.RoadEnd(leg: 0, point: gate)
+        let atGate = TripGuide.status(for: drive, startedAt: start, now: start.addingTimeInterval(600),
+                                      location: GeoMath.coordinate(gate, metres: 15, bearing: 90), origin: home, roadEnd: end)
+        #expect(atGate?.hasArrived == true)
+        let short = TripGuide.status(for: drive, startedAt: start, now: start.addingTimeInterval(600),
+                                     location: GeoMath.coordinate(gate, metres: 150, bearing: 180), origin: home, roadEnd: end)
+        #expect(short?.hasArrived == false)
+    }
+
+    /// Parked just short of the end and stopped there: arrived.
+    @Test func parkingJustShortIsArriving() {
+        let college = GeoMath.coordinate(home, metres: 3_000, bearing: 0)
+        let parked = TripGuide.RoadEnd(leg: 0, point: college, hasStoppedNear: true)
+        let status = TripGuide.status(for: shortTrip(to: college, mode: .auto), startedAt: start,
+                                      now: start.addingTimeInterval(600),
+                                      location: GeoMath.coordinate(college, metres: 120, bearing: 180),
+                                      origin: home, roadEnd: parked)
+        #expect(status?.hasArrived == true)
+    }
+
+    /// Which side of the road the place is, arriving northwards.
+    @Test func whichSideItsOn() {
+        let end = GeoMath.coordinate(home, metres: 1_000, bearing: 0)
+        #expect(TripGuide.side(of: GeoMath.coordinate(end, metres: 60, bearing: 270), from: end, arrivingAlong: 0) == .left)
+        #expect(TripGuide.side(of: GeoMath.coordinate(end, metres: 60, bearing: 90), from: end, arrivingAlong: 0) == .right)
+        #expect(TripGuide.side(of: GeoMath.coordinate(end, metres: 60, bearing: 5), from: end, arrivingAlong: 0) == .ahead)
+        #expect(TripGuide.side(of: GeoMath.coordinate(end, metres: 10, bearing: 90), from: end, arrivingAlong: 0) == .here)
+    }
+
+    @Test func theSentenceSaysWhere() {
+        func arrival(_ side: TripGuide.Side) -> TripArrival {
+            TripArrival(destinationName: "BMS College of Engineering", latitude: 0, longitude: 0, side: side,
+                        at: start, minutesDoorToDoor: 22)
+        }
+        #expect(arrival(.left).sentence == "BMS College of Engineering is on your left")
+        #expect(arrival(.here).sentence == "You're at BMS College of Engineering")
     }
 }

@@ -21,6 +21,36 @@ nonisolated struct ActiveTrip: Sendable {
     }
 }
 
+/// You've got there: the driving view stays up to say so, and where the place is, until you're
+/// done with it — as a navigation app does, rather than vanishing a street short.
+nonisolated struct TripArrival: Equatable, Sendable {
+    var destinationName: String
+    var latitude: Double
+    var longitude: Double
+    /// Which side of the road the place is, arriving the way you did.
+    var side: TripGuide.Side
+    var at: Date
+    var minutesDoorToDoor: Int
+
+    var coordinate: CLLocationCoordinate2D {
+        CLLocationCoordinate2D(latitude: latitude, longitude: longitude)
+    }
+
+    /// "BMS College of Engineering is on your left."
+    var sentence: String {
+        switch side {
+        case .left: "\(destinationName) is on your left"
+        case .right: "\(destinationName) is on your right"
+        case .ahead: "\(destinationName) is just ahead"
+        case .here: "You're at \(destinationName)"
+        }
+    }
+
+    /// Put away on its own a while after arriving, or once you've moved well off.
+    static let staysFor: TimeInterval = 5 * 60
+    static let leftBehindAfter = 400.0
+}
+
 /// Where the route you're on is slow, by TomTom's reading, in metres along it.
 nonisolated struct TripJams: Equatable, Sendable {
     /// The route these were read for.
@@ -58,6 +88,8 @@ extension AppState {
     func startTrip(_ option: DoorToDoor.Option, to name: String, at destination: CLLocationCoordinate2D, arriveBy: Date? = nil) {
         let startedAt = Date()
         let origin = location.location?.coordinate
+        tripArrival = nil
+        stoppedNearEndSince = nil
         trip = ActiveTrip(option: option, destinationName: name, startedAt: startedAt, arriveBy: arriveBy,
                           latitude: destination.latitude, longitude: destination.longitude, origin: origin)
         // The map that leads you needs both of these, and both used to arrive a frame or two later:
@@ -105,7 +137,7 @@ extension AppState {
             distanceMeters: measured?.distanceMeters ?? toStation * 1.3
         )
         let access = byRoad
-            ? DoorToDoor.roadLeg(hop, to: first.coordinate, name: first.name, now: Date(), title: "Auto to \(first.name)")
+            ? DoorToDoor.roadLeg(hop, to: first.coordinate, name: first.name, now: Date(), title: "By road to \(first.name)")
             : DoorToDoor.Leg(mode: .walk, title: "Walk to \(first.name)", detail: GeoMath.formatDistance(hop.distanceMeters),
                              minutes: hop.minutes, distanceMeters: hop.distanceMeters,
                              endName: first.name, endLatitude: first.latitude, endLongitude: first.longitude)
@@ -143,9 +175,23 @@ extension AppState {
         return Journey.metro(route).stops
     }
 
-    func endTrip() {
-        let name = trip?.destinationName
+    /// Done with a way that has arrived: put away without the "stopped following" note, since you
+    /// didn't stop — you got there. Pointing at the place first, when asked, for the last few
+    /// steps to the door.
+    func finishArrival(pointing: Bool = false) {
+        guard let arrival = tripArrival else { return }
+        endTrip(saying: false)
+        if pointing {
+            startCompass(to: CompassTarget(id: "arrived:\(arrival.destinationName)", name: arrival.destinationName,
+                                           latitude: arrival.latitude, longitude: arrival.longitude))
+        }
+    }
+
+    func endTrip(saying: Bool = true) {
+        let name = saying ? trip?.destinationName : nil
         trip = nil
+        tripArrival = nil
+        stoppedNearEndSince = nil
         tripStatus = nil
         tripNav = nil
         tripStep = nil
@@ -195,18 +241,44 @@ extension AppState {
         // the work, and the background keeps its slower pace.
         guard now.timeIntervalSince(lastNavigationUpdate) >= (isForeground ? 0.2 : 5) else { return }
         lastNavigationUpdate = now
+
+        // Arrived, and the arrival has been up long enough, or you've moved well off: put away.
+        if let arrival = tripArrival {
+            let away = here.distance(from: CLLocation(latitude: arrival.latitude, longitude: arrival.longitude))
+            if now.timeIntervalSince(arrival.at) > TripArrival.staysFor || away > TripArrival.leftBehindAfter {
+                finishArrival()
+                return
+            }
+            // Still there: your arrow keeps moving, and nothing else — walking in from the gate
+            // is not leaving the route.
+            if let nav = tripNav {
+                let match = RouteProgress.match(nav.coordinates, at: here.coordinate, after: tripMatch)
+                tripMatch = match
+                tripFix = fix(here, on: match)
+            }
+            return
+        }
+
         guard var status = TripGuide.status(for: trip.option, startedAt: trip.startedAt, now: now,
-                                            location: here.coordinate, origin: trip.origin) else { return }
+                                            location: here.coordinate, origin: trip.origin,
+                                            roadEnd: roadEnd(of: trip)) else { return }
         let leg = trip.option.legs[min(status.legIndex, trip.option.legs.count - 1)]
         let isRoad = leg.mode != .metro && leg.mode != .bus
 
-        // Where you are on the route, and what's left of it at the traffic's pace.
-        if isRoad, !status.hasArrived, let nav = tripNav, navLegID == leg.id {
+        // Where you are on the route, and what's left of it at the traffic's pace — after arriving
+        // too, so your arrow keeps moving while the arrival is up.
+        if isRoad, let nav = tripNav, navLegID == leg.id {
             let match = RouteProgress.match(nav.coordinates, at: here.coordinate, after: tripMatch)
             tripMatch = match
             tripFix = fix(here, on: match)
             tripStep = StepGuide.position(in: nav.steps, at: here.coordinate, near: tripStep?.stepIndex)
-            if let match {
+            // Stopped a short walk from the end of the road: parked, which is arriving.
+            if let match, match.remaining <= Self.stoppedNearEnd, here.speed >= 0, here.speed < 1 {
+                stoppedNearEndSince = stoppedNearEndSince ?? now
+            } else {
+                stoppedNearEndSince = nil
+            }
+            if let match, !status.hasArrived {
                 status = liveAdjusted(status, trip: trip, now: now)
                 // A wrong turn, or heading the wrong way down the route: seen within a couple of
                 // fixes, not after a minute — and within one when it's plainly a wrong turn.
@@ -331,6 +403,15 @@ extension AppState {
         lastTrafficCheck = isNewLeg ? .distantPast : now.addingTimeInterval(-Self.trafficCheckInterval + 10)
     }
 
+    /// The end of the road route for the leg it belongs to, and whether you've stopped near it for
+    /// long enough to count as having parked.
+    func roadEnd(of trip: ActiveTrip, now: Date = Date()) -> TripGuide.RoadEnd? {
+        guard let nav = tripNav, let end = nav.coordinates.last,
+              let index = trip.option.legs.firstIndex(where: { $0.id == navLegID }) else { return nil }
+        let parked = stoppedNearEndSince.map { now.timeIntervalSince($0) >= Self.parkedAfter } ?? false
+        return TripGuide.RoadEnd(leg: index, point: end, hasStoppedNear: parked)
+    }
+
     /// Asks Apple Maps again, every minute or so, how long the rest of the leg takes in the
     /// traffic now, and whether another way is quicker. A clearly quicker way is taken, and said,
     /// as navigation apps do; otherwise the times on screen follow the traffic.
@@ -436,6 +517,10 @@ extension AppState {
                                    legMinutesLeft: nav.secondsRemaining(from: match) * tripPace.factor / 60)
     }
 
+    /// Stopped within this of the end of the road, for this long, and you've arrived.
+    static let stoppedNearEnd = 150.0
+    static let parkedAfter: TimeInterval = 30
+
     /// Two fixes off the route, a second apart — or one well off it — and it re-routes: a wrong
     /// turn, not a wobble. Asked again no sooner than this after the last ask.
     static let rerouteCooldown: TimeInterval = 3
@@ -449,15 +534,29 @@ extension AppState {
     /// Where you've got to, what to do next, and whether the plan is slipping. Called on the
     /// foreground loop and on every background wake, so it keeps working in your pocket.
     func refreshTrip(now: Date = Date()) async {
-        guard let trip else { return }
+        // Arrived: what's up now is the arrival, until you're done with it.
+        guard let trip, tripArrival == nil else { return }
         guard let planned = TripGuide.status(for: trip.option, startedAt: trip.startedAt, now: now,
-                                             location: location.location?.coordinate, origin: trip.origin) else { return }
+                                             location: location.location?.coordinate, origin: trip.origin,
+                                             roadEnd: roadEnd(of: trip)) else { return }
         let status = liveAdjusted(planned, trip: trip, now: now)
         tripStatus = status
 
         if status.hasArrived {
-            await announceTrip(title: "You've arrived", body: "\(trip.destinationName) · \(Int(now.timeIntervalSince(trip.startedAt) / 60)) min door to door", id: "arrived")
-            endTrip()
+            // Said, and shown: the driving view stays up with where the place is, until you're
+            // done with it. It used to end the moment you were within a couple of hundred metres.
+            guard tripArrival == nil else { return }
+            let minutes = Int(now.timeIntervalSince(trip.startedAt) / 60)
+            tripArrival = TripArrival(destinationName: trip.destinationName, latitude: trip.latitude,
+                                      longitude: trip.longitude, side: arrivalSide(of: trip), at: now,
+                                      minutesDoorToDoor: minutes)
+            isRerouting = false
+            speech.stop()
+            if speaksDirections, let arrival = tripArrival {
+                say("You've arrived. \(arrival.sentence).")
+            }
+            await announceTrip(title: "You've arrived", body: "\(trip.destinationName) · \(minutes) min door to door", id: "arrived")
+            await liveActivities.end(.journey)
             return
         }
 
@@ -490,6 +589,15 @@ extension AppState {
         }
         await refreshRoute()
         await updateTripActivity()
+    }
+
+    /// Which side of the road the place is, arriving along the last stretch of the route.
+    private func arrivalSide(of trip: ActiveTrip) -> TripGuide.Side {
+        guard let nav = tripNav, nav.coordinates.count > 1 else { return .here }
+        let end = nav.coordinates[nav.coordinates.count - 1]
+        let before = nav.coordinates[nav.coordinates.count - 2]
+        return TripGuide.side(of: trip.coordinate, from: end,
+                              arrivingAlong: GeoMath.bearing(from: before, to: end))
     }
 
     /// The fast loop: where you are along the leg, once a second while you're looking at it, and

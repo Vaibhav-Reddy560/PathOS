@@ -171,6 +171,8 @@ final class AppState {
     var tripTraffic: TripTraffic?
     /// Where along the route it's slow, from TomTom, for colouring the line.
     var tripJams: TripJams?
+    /// Arrived, and the driving view saying so until you're done with it.
+    var tripArrival: TripArrival?
     /// Where the map is centred, once it stops moving.
     @ObservationIgnored var mapCenter: CLLocationCoordinate2D?
     /// Presents the event sheet: nil id means a new event.
@@ -297,6 +299,8 @@ final class AppState {
     @ObservationIgnored var tripPace = TripPace()
     /// When TomTom was last asked about the route's traffic, and whether it's being asked now.
     @ObservationIgnored var lastJamCheck = Date.distantPast
+    /// When you stopped within a short walk of the end of the road, while you're still stopped.
+    @ObservationIgnored var stoppedNearEndSince: Date?
     @ObservationIgnored var isCheckingJams = false
     @ObservationIgnored var lastTripActivityUpdate = Date.distantPast
     @ObservationIgnored var lastTripActivityStep: Int?
@@ -968,16 +972,19 @@ final class AppState {
                         symbol: status.symbol,
                         minutesBehind: status.minutesBehind,
                         minutesRemaining: status.minutesRemaining,
-                        // Nothing to point at once you're where this leg ends.
-                        target: isAt(leg.endCoordinate, within: TripGuide.radius(for: leg)) ? nil
-                            : CompassTarget(id: "way:\(leg.id)", name: leg.endName,
-                                            latitude: leg.endLatitude, longitude: leg.endLongitude),
+                        // Only for the last stretch, to find the building: not while the map is
+                        // still leading you there, and not once you're at it.
+                        target: pointerIsUseful(to: leg.endCoordinate)
+                            ? CompassTarget(id: "way:\(leg.id)", name: leg.endName,
+                                            latitude: leg.endLatitude, longitude: leg.endLongitude)
+                            : nil,
                         // Re-routing is the banner's to say; the island keeps to when you'll arrive.
                         trafficNote: tripTraffic?.note,
                         isTrafficSlow: tripTraffic?.isSlow == true
                     )
                 }
             },
+            headingTo: trip?.coordinate,
             weather: weather.snapshot.map {
                 AlertSnapshot.Weather(temperatureC: $0.temperatureC, summary: $0.summary, symbol: $0.symbol, rainChanceNext2h: $0.rainChanceNext2h)
             },
@@ -1042,7 +1049,8 @@ final class AppState {
         case .endTrip:
             Task { await stopLegTracking(declined: true) }
         case .endWay:
-            endTrip()
+            // Arrived: done, not stopped.
+            if tripArrival != nil { finishArrival() } else { endTrip() }
         case .bookCab(let target):
             CabLauncher.open(preferredCab, drop: target.coordinate, pickup: location.location?.coordinate)
         case .dropDeparture(let id):

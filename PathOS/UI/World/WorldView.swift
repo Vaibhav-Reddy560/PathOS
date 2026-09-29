@@ -51,8 +51,9 @@ struct WorldView: View {
             }
 
             ControlRail(scope: mapScope)
-                // Clear of the turn banner while the map is leading you.
-                .padding(.top, isNavigating ? 210 : 60)
+                // Clear of the turn banner while the map is leading you, and of the taller arrival
+                // banner, with its buttons, once you're there.
+                .padding(.top, isNavigating ? (state.tripArrival != nil ? 290 : 210) : 60)
                 .padding(.trailing, 12)
                 .animation(PathMotion.resolve(PathMotion.control, reduceMotion: reduceMotion), value: isNavigating)
         }
@@ -123,7 +124,10 @@ struct WorldView: View {
                 IslandView(alerts: alerts)
                 // While a way is being followed, the map leads with the turn ahead.
                 // It belongs to the map, so it shows while the map is what you're looking at.
-                if isNavigating, let trip = state.trip, let status = state.tripStatus {
+                if isNavigating, let arrival = state.tripArrival {
+                    ArrivalBanner(arrival: arrival)
+                        .transition(.move(edge: .top).combined(with: .opacity))
+                } else if isNavigating, let trip = state.trip, let status = state.tripStatus {
                     NavigationBanner(trip: trip, status: status)
                         .transition(.move(edge: .top).combined(with: .opacity))
                 }
@@ -181,12 +185,13 @@ struct WorldView: View {
     /// Being led along a way, with the map there to see it on: the deck open means you're reading
     /// something else, so the banner and the rail's offset stand down.
     private var isNavigating: Bool {
-        state.isLeadingTheWay && state.deckStop == .collapsed
+        (state.isLeadingTheWay || state.tripArrival != nil) && state.deckStop == .collapsed
     }
 
     /// On a leg you travel along a road for, with the map showing it — MapKit's map takes over.
     private var isDrivingALeg: Bool {
-        isNavigating && state.isNavigatingByRoad
+        // Arrived at the end of a road: the same map, saying so, until you're done with it.
+        isNavigating && (state.isNavigatingByRoad || (state.tripArrival != nil && state.tripNav != nil))
     }
 
     /// Where the leg you're on ends: the destination, or the station a first leg takes you to.

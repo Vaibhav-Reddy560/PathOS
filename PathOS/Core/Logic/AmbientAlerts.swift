@@ -1,3 +1,4 @@
+import CoreLocation
 import Foundation
 
 /// One thing the island can say. The first alert in priority order is what the island shows.
@@ -150,6 +151,15 @@ nonisolated struct AlertSnapshot: Sendable {
     var nextEvent: Event?
     var departure: Departure? = nil
     var way: Way? = nil
+    /// Where the way being followed ends, so nothing offers to take you somewhere you're already
+    /// on your way to.
+    var headingTo: CLLocationCoordinate2D? = nil
+
+    /// Already on the way there: within a short walk of where the way being followed ends.
+    func isHeading(to coordinate: CLLocationCoordinate2D) -> Bool {
+        guard let headingTo else { return false }
+        return GeoMath.distance(from: headingTo, to: coordinate) <= LeaveOnTime.arrivalRadius
+    }
     var weather: Weather?
     var venueName: String
     var venueSymbol: String
@@ -220,7 +230,8 @@ nonisolated enum AmbientAlerts {
             let minutes = Int((untilStart / 60).rounded(.up))
             if untilStart >= 0 && untilStart <= eventSoonWindow {
                 var buttons: [AmbientAlert.Button] = []
-                if let target = target(for: event) {
+                // Not while you're already on your way there.
+                if let target = target(for: event), !snapshot.isHeading(to: target.coordinate) {
                     buttons.append(AmbientAlert.Button(title: "Take me there", symbol: "arrow.triangle.turn.up.right.diamond.fill",
                                                        action: .waysTo(target), isPrimary: true))
                 }
@@ -447,7 +458,8 @@ nonisolated enum AmbientAlerts {
                 metric: "+\(minutes) min",
                 headline: "You'll be about \(minutes) min late for \(departure.title)",
                 detail: "\(departure.travelText) from here, and it starts at \(starts).",
-                buttons: ways
+                // On your way already: a way there, or a cab, is the one thing not to offer.
+                buttons: departure.isOnTheWay ? [] : ways
             )
         }
     }

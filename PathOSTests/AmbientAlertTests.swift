@@ -1,3 +1,4 @@
+import CoreLocation
 import Foundation
 import Testing
 @testable import PathOS
@@ -145,6 +146,14 @@ struct AmbientAlertTests {
         #expect(AmbientAlerts.departureAlert(departure(.there)) == nil)
     }
 
+    /// Late, but already on the way: said, and nothing offered — a way there, or a cab, to a
+    /// place you're already going to is noise.
+    @Test func onTheWayLateOffersNothing() {
+        let late = AmbientAlerts.departureAlert(departure(.late(arrival: now, minutes: 9), onTheWay: true))
+        #expect(late?.headline == "You'll be about 9 min late for Physics")
+        #expect(late?.buttons.isEmpty == true)
+    }
+
     /// Far too late and not moving, it stops saying "you'll be late" and asks instead, with the
     /// answer on the alert itself.
     @Test func farTooLateItAsksWhetherYoureStillGoing() {
@@ -167,13 +176,24 @@ struct AmbientAlertTests {
         #expect(away.first { $0.id == "event.soon.event:1" }?.buttons.map(\.title) == ["Take me there"])
     }
 
+    /// Following a way to the very place an event is at: it starts soon, and that's all there is
+    /// to say — the way there is already on the map.
+    @Test func noWayOfferedToWhereYoureAlreadyGoing() {
+        var heading = snapshot(event: AlertSnapshot.Event(
+            id: "event:1", title: "SML lab", start: now.addingTimeInterval(1_200), latitude: 12.9411, longitude: 77.5660,
+            distanceMeters: 1_900))
+        heading.headingTo = CLLocationCoordinate2D(latitude: 12.9413, longitude: 77.5662)
+        let alerts = AmbientAlerts.prioritized(heading)
+        #expect(alerts.first { $0.id == "event.soon.event:1" }?.buttons.isEmpty == true)
+    }
+
     /// The way you're making leads the island: quietly while it's going to plan, and for
     /// attention once you've fallen behind it.
     @Test func thePlanYoureFollowingLeadsUntilYouBoard() {
         var snapshot = snapshot()
         snapshot.way = AlertSnapshot.Way(
             destination: "BMS College",
-            headline: "Take an auto to Jayadeva Hospital",
+            headline: "By road to Jayadeva Hospital",
             detail: "2.4 km · about 30 min to go",
             symbol: "car.rear.fill",
             minutesBehind: 0,

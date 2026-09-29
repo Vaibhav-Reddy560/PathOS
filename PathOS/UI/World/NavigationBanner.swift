@@ -106,3 +106,66 @@ struct NavigationBanner: View {
         return nav.steps[safe: position.stepIndex]
     }
 }
+
+/// Arrived: said over the map, with which side of the road the place is on, as a navigation app
+/// does — rather than the map that led you there vanishing a street short. Point me there hands
+/// over to the pointer for the last few steps to the door; Done puts it all away.
+struct ArrivalBanner: View {
+    let arrival: TripArrival
+
+    @Environment(AppState.self) private var state
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(alignment: .top, spacing: 14) {
+                Image(systemName: "flag.checkered")
+                    .font(.title2.weight(.semibold))
+                    .foregroundStyle(.aurora)
+                    .frame(width: 46, height: 46)
+                    .background(Color.elevatedSurface, in: .circle)
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("You've arrived")
+                        .font(.title3.weight(.semibold))
+                        .foregroundStyle(.ice)
+                    Text(arrival.sentence)
+                        .font(.subheadline)
+                        .foregroundStyle(.ice)
+                        .lineLimit(2)
+                    Text("\(arrival.minutesDoorToDoor) min door to door")
+                        .font(.footnote)
+                        .foregroundStyle(.mist)
+                }
+                Spacer(minLength: 0)
+            }
+            HStack(spacing: 8) {
+                if arrival.side != .here {
+                    Button {
+                        state.finishArrival(pointing: true)
+                    } label: {
+                        OneLineButtonLabel(title: "Point me there", symbol: "location.north.line.fill")
+                    }
+                    .pathPrimaryAction()
+                }
+                Button {
+                    state.finishArrival()
+                } label: {
+                    OneLineButtonLabel(title: "Done", symbol: "checkmark")
+                }
+                .pathSecondaryAction()
+            }
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 12)
+        .background {
+            RoundedRectangle(cornerRadius: 22, style: .continuous)
+                .fill(Color.void.opacity(0.92))
+                .overlay {
+                    RoundedRectangle(cornerRadius: 22, style: .continuous)
+                        .strokeBorder(Hairline.style, lineWidth: 1)
+                }
+                .shadow(color: .black.opacity(0.4), radius: 14, y: 6)
+        }
+        .padding(.horizontal, DeckLayout.sideMargin)
+        .accessibilityElement(children: .contain)
+    }
+}

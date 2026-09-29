@@ -32,7 +32,31 @@ struct FollowingTripCard: View {
                 legs
 
                 HStack(spacing: 8) {
-                    if !state.isAt(currentLeg.endCoordinate, within: TripGuide.radius(for: currentLeg)) {
+                    if let arrival = state.tripArrival {
+                        // Arrived: the last steps to the door, or done.
+                        if arrival.side != .here {
+                            Button {
+                                state.finishArrival(pointing: true)
+                            } label: {
+                                Label("Point me there", systemImage: "location.north.line.fill")
+                                    .font(.subheadline.weight(.semibold))
+                                    .lineLimit(1)
+                                    .frame(maxWidth: .infinity, minHeight: 34)
+                            }
+                            .pathPrimaryAction()
+                        }
+                        Button {
+                            state.finishArrival()
+                        } label: {
+                            Label("Done", systemImage: "checkmark")
+                                .font(.subheadline.weight(.semibold))
+                                .lineLimit(1)
+                                .frame(maxWidth: .infinity, minHeight: 34)
+                        }
+                        .pathSecondaryAction()
+                    // The pointer is for the last stretch — finding the building — not for a
+                    // place kilometres off that the map is already leading you to.
+                    } else if state.pointerIsUseful(to: currentLeg.endCoordinate) {
                     Button {
                         state.perform(.pointTo(CompassTarget(
                             id: "trip:\(trip.option.id)",
@@ -51,15 +75,17 @@ struct FollowingTripCard: View {
                         Spacer(minLength: 0)
                     }
 
-                    Button("Stop", systemImage: "xmark") {
-                        state.endTrip()
+                    if state.tripArrival == nil {
+                        Button("Stop", systemImage: "xmark") {
+                            state.endTrip()
+                        }
+                        .labelStyle(.iconOnly)
+                        .font(.subheadline.weight(.bold))
+                        .frame(width: 36, height: 36)
+                        .pathSecondaryAction()
+                        .buttonBorderShape(.circle)
+                        .accessibilityLabel("Stop following this way")
                     }
-                    .labelStyle(.iconOnly)
-                    .font(.subheadline.weight(.bold))
-                    .frame(width: 36, height: 36)
-                    .pathSecondaryAction()
-                    .buttonBorderShape(.circle)
-                    .accessibilityLabel("Stop following this way")
                 }
             }
         }
