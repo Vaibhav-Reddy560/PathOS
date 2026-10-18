@@ -143,7 +143,9 @@ final class RadarModel {
 
     /// Stops by kind. PathOS's own metro and bus data knows which is which; Apple Maps only says
     /// "transit", so its stops are told apart by name, and only kept when PathOS doesn't already
-    /// have them.
+    /// have them. Never as a metro station: PathOS carries the whole network, and what Apple Maps
+    /// lists with "Metro" in its name and PathOS doesn't know is a bus stop named after one — it
+    /// put "Jayadeva Hospital Metro Station" bus stops among the stations.
     private func transitItems(near here: CLLocation, state: AppState, now: Date) -> [RadarItem] {
         let own = state.transit.nearbyStops.map { stop in
             RadarItem(
@@ -162,7 +164,7 @@ final class RadarModel {
         }
         let ownNames = own.map { TransitKind.plainName($0.title) }
         let fromMaps = (cache.places(for: .transit, near: here, now: now)?.places ?? [])
-            .filter { $0.distanceMeters <= Self.searchRadius }
+            .filter { $0.distanceMeters <= Self.searchRadius && TransitKind(name: $0.name) != .metro }
             .filter { place in
                 let name = TransitKind.plainName(place.name)
                 return !ownNames.contains { !$0.isEmpty && (name.contains($0) || $0.contains(name)) }

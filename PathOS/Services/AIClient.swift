@@ -160,6 +160,21 @@ nonisolated struct TimetableExtraction {
 }
 
 @Generable
+nonisolated struct HolidayRow {
+    @Guide(description: "The holiday's date as yyyy-MM-dd")
+    var date: String
+
+    @Guide(description: "What the holiday is for, e.g. 'Deepavali' or 'Mid-semester break'")
+    var name: String
+}
+
+@Generable
+nonisolated struct HolidayListExtraction {
+    @Guide(description: "Every holiday and day without classes in the calendar. Not exams, events or classes.", .maximumCount(60))
+    var holidays: [HolidayRow]
+}
+
+@Generable
 nonisolated enum GeneratedMailKind {
     case event
     case task
@@ -326,6 +341,27 @@ final class AIClient {
             generating: TimetableExtraction.self
         )
         return response.content.rows
+    }
+
+    /// Reads a college's academic calendar for its holidays: the days without classes, whatever
+    /// shape the calendar is in — a list, a grid of months, a circular.
+    func extractHolidays(from text: String, now: Date = Date()) async throws -> [HolidayListReader.Row] {
+        let session = LanguageModelSession(instructions: """
+            You read a college's academic calendar in India and list its holidays: \
+            public holidays and any other days without classes, such as a semester break. \
+            Today is \(now.formatted(date: .complete, time: .omitted)). \
+            Resolve dates without a year to the next time they come round. \
+            A range like "23-27 Dec: winter break" is one row per day. \
+            Leave out exams, events, the start and end of classes, and working Saturdays. \
+            Never invent holidays that aren't in the text.
+            """)
+        let response = try await session.respond(
+            to: "Calendar:\n\(text.prefix(6_000))",
+            generating: HolidayListExtraction.self
+        )
+        return response.content.holidays.compactMap { row in
+            Holidays.day(row.date).map { HolidayListReader.Row(day: $0, name: row.name.trimmingCharacters(in: .whitespaces)) }
+        }
     }
 
     /// Reads one email and says what it asks of you. One session per message: the on-device

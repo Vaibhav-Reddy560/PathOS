@@ -19,6 +19,8 @@ final class TransitService {
     @ObservationIgnored private let notifications: NotificationService
     /// "change@3", "getOff" — each said once per journey.
     @ObservationIgnored private var announced: Set<String> = []
+    /// The furthest stop GPS has put you at: the ride never goes back from it.
+    @ObservationIgnored private var reached = 0
 
     init(notifications: NotificationService) {
         self.notifications = notifications
@@ -30,6 +32,7 @@ final class TransitService {
         guard journey.stops.count > 1 else { return }
         self.journey = journey
         announced = []
+        reached = 0
         update(location: nil)
     }
 
@@ -45,13 +48,20 @@ final class TransitService {
     func update(location: CLLocation?) {
         guard let journey else { return }
         let nearest = location.flatMap {
-            JourneyTracker.nearestStopIndex(to: $0.coordinate, stops: journey.stops, radius: journey.stopRadius)
+            JourneyTracker.reachedIndex(at: $0.coordinate, stops: journey.stops, radius: journey.stopRadius)
         }
-        let updated = JourneyTracker.progress(
+        var updated = JourneyTracker.progress(
             stops: journey.stops,
             nearestIndex: nearest,
-            elapsed: Date().timeIntervalSince(journey.startedAt)
+            elapsed: Date().timeIntervalSince(journey.startedAt),
+            reached: reached
         )
+        if updated.isTrackingByLocation {
+            reached = max(reached, updated.currentIndex)
+        }
+        if let location, updated.isTrackingByLocation, let next = updated.nextStationIndex.flatMap({ journey.stops[safe: $0] }) {
+            updated.metresToNext = location.distance(from: CLLocation(latitude: next.latitude, longitude: next.longitude))
+        }
         progress = updated
         announceIfNeeded(updated, journey: journey)
     }
@@ -112,7 +122,7 @@ final class TransitService {
            announced.insert("change@\(index)").inserted {
             notifications.post(
                 id: "pathos.journey.\(journey.id.uuidString).change\(index)",
-                title: "Change next: \(journey.stationName(at: index))",
+                title: "Change at the next stop: \(journey.stationName(at: index))",
                 body: instruction,
                 category: NotificationService.Category.journey,
                 link: URL(string: "pathos://dashboard"),
@@ -122,7 +132,7 @@ final class TransitService {
         if progress.isArrivingNext, announced.insert("getOff").inserted {
             notifications.post(
                 id: "pathos.journey.\(journey.id.uuidString).next",
-                title: "Get off next: \(journey.destination)",
+                title: "Get off at the next stop: \(journey.destination)",
                 body: "\(journey.lineName) · about \(progress.estimatedMinutesRemaining) min",
                 category: NotificationService.Category.journey,
                 link: URL(string: "pathos://dashboard"),

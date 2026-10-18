@@ -93,7 +93,19 @@ final class BackupService {
         archive.days = fetch(DayLog.self).map {
             .init(dayStart: $0.dayStart, distanceMeters: $0.distanceMeters, placeVisits: $0.placeVisits,
                   firstSeenAt: $0.firstSeenAt, lastSeenAt: $0.lastSeenAt,
-                  attendedIDs: $0.attendedIDs, missedIDs: $0.missedIDs, completions: $0.completions)
+                  attendedIDs: $0.attendedIDs, missedIDs: $0.missedIDs, completions: $0.completions, note: $0.note)
+        }
+        archive.rides = fetch(RideRecord.self).map {
+            .init(id: $0.id, serviceRaw: $0.serviceRaw, at: $0.at, fare: $0.fare, distanceKm: $0.distanceKm,
+                  minutes: $0.minutes, pickup: $0.pickup, drop: $0.drop, vehicleRaw: $0.vehicleRaw, messageID: $0.messageID)
+        }
+        archive.orders = fetch(OrderUpdate.self).map {
+            .init(id: $0.id, serviceRaw: $0.serviceRaw, orderID: $0.orderID, item: $0.item, statusRaw: $0.statusRaw,
+                  firstSeenAt: $0.firstSeenAt, updatedAt: $0.updatedAt, messageID: $0.messageID)
+        }
+        archive.holidays = fetch(Holiday.self).map {
+            .init(id: $0.id, dayStart: $0.dayStart, name: $0.name, kindRaw: $0.kindRaw, isOff: $0.isOff,
+                  answeredAt: $0.answeredAt)
         }
         archive.reminders = fetch(Reminder.self).map {
             .init(id: $0.id, title: $0.title, notes: $0.notes, day: $0.day, dueAt: $0.dueAt,
@@ -299,7 +311,34 @@ final class BackupService {
             day.attendedIDs = item.attendedIDs
             day.missedIDs = item.missedIDs
             day.completions = item.completions
+            day.note = item.note
             context.insert(day)
+        }
+        for item in archive.rides ?? [] {
+            let ride = RideRecord(ServiceMail.Ride(service: ServiceMail.Service(rawValue: item.serviceRaw) ?? .uber,
+                                                   fare: item.fare, distanceKm: item.distanceKm, minutes: item.minutes,
+                                                   pickup: item.pickup, drop: item.drop,
+                                                   vehicle: item.vehicleRaw.flatMap(DoorToDoor.Mode.init(rawValue:))),
+                                  at: item.at, messageID: item.messageID)
+            ride.id = item.id
+            context.insert(ride)
+        }
+        for item in archive.orders ?? [] {
+            let order = OrderUpdate(ServiceMail.Order(service: ServiceMail.Service(rawValue: item.serviceRaw) ?? .amazon,
+                                                      orderID: item.orderID,
+                                                      status: ServiceMail.OrderStatus(rawValue: item.statusRaw) ?? .placed,
+                                                      item: item.item),
+                                    at: item.firstSeenAt, messageID: item.messageID)
+            order.id = item.id
+            order.updatedAt = item.updatedAt
+            context.insert(order)
+        }
+        for item in archive.holidays ?? [] {
+            let holiday = Holiday(dayStart: item.dayStart, name: item.name, kind: Holidays.Kind(rawValue: item.kindRaw) ?? .own)
+            holiday.id = item.id
+            holiday.isOff = item.isOff
+            holiday.answeredAt = item.answeredAt
+            context.insert(holiday)
         }
         for item in archive.reminders ?? [] {
             let reminder = Reminder(title: item.title, day: item.day, dueAt: item.dueAt, notes: item.notes)
@@ -377,6 +416,9 @@ final class BackupService {
         try context.delete(model: Expense.self)
         try context.delete(model: DepartureLog.self)
         try context.delete(model: DayLog.self)
+        try context.delete(model: Holiday.self)
+        try context.delete(model: RideRecord.self)
+        try context.delete(model: OrderUpdate.self)
         try context.delete(model: Reminder.self)
     }
 

@@ -552,6 +552,24 @@ struct MailReaderView: View {
     @State private var message: MailMessage?
     @State private var problem: String?
 
+    /// The message with its links tappable: the ones its HTML put on words, and addresses and
+    /// phone numbers written out in the text. They used to be plain text, going nowhere.
+    static func readable(_ message: MailMessage) -> AttributedString {
+        let text = message.body.isEmpty ? message.snippet : message.body
+        var attributed = AttributedString(text)
+        let ownLinks = message.body.isEmpty ? [] : message.links
+        let characters = attributed.characters
+        let total = characters.count
+        for link in ownLinks + MailParsing.detectedLinks(in: text, besides: ownLinks) {
+            guard link.start >= 0, link.length > 0, link.start + link.length <= total else { continue }
+            let lower = characters.index(characters.startIndex, offsetBy: link.start)
+            let upper = characters.index(lower, offsetBy: link.length)
+            attributed[lower..<upper].link = link.url
+            attributed[lower..<upper].underlineStyle = .single
+        }
+        return attributed
+    }
+
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 14) {
@@ -574,9 +592,10 @@ struct MailReaderView: View {
                 Divider().overlay(Color.mist.opacity(0.3))
 
                 if let message {
-                    Text(message.body.isEmpty ? message.snippet : message.body)
+                    Text(Self.readable(message))
                         .font(.body)
                         .foregroundStyle(.ice)
+                        .tint(.ion)
                         .textSelection(.enabled)
                 } else if let problem {
                     Text(problem)

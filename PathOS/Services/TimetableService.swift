@@ -14,6 +14,9 @@ final class TimetableService {
     @ObservationIgnored private let context: ModelContext
     @ObservationIgnored private let ai: AIClient
     @ObservationIgnored private let notifications: NotificationService
+    /// Told when a session is cancelled, moved or the day is taken off, so what's next is worked
+    /// out again.
+    @ObservationIgnored var onPlansChanged: (() -> Void)?
 
     /// How long before a class to remind you.
     static let reminderMinutesBefore = 10
@@ -296,6 +299,7 @@ final class TimetableService {
     /// Schedules the next two days of classes. iOS caps pending notifications, and
     /// background refresh tops this up as days roll over.
     func refreshReminders() {
+        onPlansChanged?()
         Task {
             await notifications.removePending(withPrefix: "pathos.class.")
             for dayOffset in 0...1 {

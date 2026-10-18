@@ -1,0 +1,33 @@
+{
+  "sources": [
+    {
+      "what": "Karnataka general holidays 2026, the three national holidays among them",
+      "notification": "Government of Karnataka, Notification-I No. DPAR 16 HHL 2025, dated 17.11.2025",
+      "url": "https://kea.co.in/wp-content/uploads/2025/11/Circular-No-089-2025-KARNATAKA-GOVERNMENT-HOLIDAYS-FOR-THE-YEAR-2026.pdf",
+      "notes": "Holidays on a Sunday (Maha Shivaratri 15.02, Maharshi Valmiki Jayanthi 25.10, Kannada Rajyotsava 01.11, Naraka Chaturdashi 08.11) and Mahalaya Amavasya on the second Saturday (10.10) aren't in the list. Muslim festivals may move if the moon is sighted on another day.",
+      "retrieved": "2026-10-18"
+    }
+  ],
+  "holidays": [
+    { "date": "2026-01-15", "name": "Makara Sankranti", "kind": "karnataka" },
+    { "date": "2026-01-26", "name": "Republic Day", "kind": "national" },
+    { "date": "2026-03-19", "name": "Ugadi", "kind": "karnataka" },
+    { "date": "2026-03-21", "name": "Khutub-e-Ramzan", "kind": "karnataka" },
+    { "date": "2026-03-31", "name": "Mahaveera Jayanthi", "kind": "karnataka" },
+    { "date": "2026-04-03", "name": "Good Friday", "kind": "karnataka" },
+    { "date": "2026-04-14", "name": "Dr B. R. Ambedkar Jayanthi", "kind": "karnataka" },
+    { "date": "2026-04-20", "name": "Basava Jayanthi, Akshaya Tritiya", "kind": "karnataka" },
+    { "date": "2026-05-01", "name": "May Day", "kind": "karnataka" },
+    { "date": "2026-05-28", "name": "Bakrid", "kind": "karnataka" },
+    { "date": "2026-06-26", "name": "Last day of Muharram", "kind": "karnataka" },
+    { "date": "2026-08-15", "name": "Independence Day", "kind": "national" },
+    { "date": "2026-08-26", "name": "Eid-Milad", "kind": "karnataka" },
+    { "date": "2026-09-14", "name": "Varasiddhi Vinayaka Vrata", "kind": "karnataka" },
+    { "date": "2026-10-02", "name": "Gandhi Jayanthi", "kind": "national" },
+    { "date": "2026-10-20", "name": "Mahanavami, Ayudha Pooja", "kind": "karnataka" },
+    { "date": "2026-10-21", "name": "Vijayadashami", "kind": "karnataka" },
+    { "date": "2026-11-10", "name": "Balipadyami, Deepavali", "kind": "karnataka" },
+    { "date": "2026-11-27", "name": "Kanakadasa Jayanthi", "kind": "karnataka" },
+    { "date": "2026-12-25", "name": "Christmas", "kind": "karnataka" }
+  ]
+}

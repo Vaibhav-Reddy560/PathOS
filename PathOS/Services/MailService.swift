@@ -62,6 +62,8 @@ final class MailService {
     @ObservationIgnored private let eventStore: EventStore
     @ObservationIgnored private let places: PlacesService
     @ObservationIgnored private let notifications: NotificationService
+    /// Where you are, for placing a ticket's venue near you rather than across the country.
+    @ObservationIgnored var whereYouAre: (() -> CLLocation?)?
 
     private nonisolated enum Keys {
         static let accounts = "pathos.mail.accounts"
@@ -249,7 +251,11 @@ final class MailService {
         let startedAt = Date()
         do {
             let cursor = defaults.object(forKey: Keys.cursor(email)) as? Date
-            let ids = try await session.messageIDs(matching: MailParsing.searchQuery(since: cursor), max: Self.searchWindow)
+            let general = try await session.messageIDs(matching: MailParsing.searchQuery(since: cursor), max: Self.searchWindow)
+            // Ride receipts, tickets and order updates often land in Promotions, which the search
+            // above leaves out: they're asked for by who sends them as well.
+            let services = (try? await session.messageIDs(matching: ServiceMail.searchQuery(since: cursor), max: Self.searchWindow)) ?? []
+            let ids = general + services.filter { !general.contains($0) }
             let known = knownMessageIDs()
             let unread = ids.filter { !known.contains($0) }
 
@@ -262,9 +268,12 @@ final class MailService {
                 let message = MailParsing.message(from: try await session.message(id: id))
                 // Muted senders' mail isn't read at all; it's noted only so it's never fetched again.
                 let proposal: MailProposal
+                let service = ServiceMail.service(of: message.senderAddress)
                 if isMuted(message.senderAddress) {
                     proposal = MailProposal(kind: .ignore, title: message.subject, summary: "", usedAI: false)
-                } else if let read = await triage(message) {
+                } else if let service, let read = await readService(message, service) {
+                    proposal = read
+                } else if service == nil, let read = await triage(message) {
                     proposal = read
                 } else {
                     // The model is busy. Leave this and the rest for the next check.
@@ -274,8 +283,20 @@ final class MailService {
                 let suggestion = MailSuggestion(message: message, proposal: proposal, account: email)
                 context.insert(suggestion)
                 try? context.save()
-                if suggestion.status == .pending {
-                    found.append(suggestion)
+                switch service?.kind {
+                case .ticket? where suggestion.canAddDirectly:
+                    await addTicket(suggestion, from: service!)
+                case .ride?, .order?:
+                    // Already kept where it belongs — the ride in Overview, the order on Now — so
+                    // there's nothing waiting on you in the mail.
+                    if suggestion.status == .pending {
+                        suggestion.status = .dismissed
+                        try? context.save()
+                    }
+                default:
+                    if suggestion.status == .pending {
+                        found.append(suggestion)
+                    }
                 }
             }
 
@@ -335,6 +356,110 @@ final class MailService {
             }
         }
         return MailTriage.finalize(proposal, message: message)
+    }
+
+    // MARK: Rides, tickets and orders
+
+    /// Mail from a ride app, BookMyShow, Amazon or a food app: what it records is kept — the
+    /// ride and its fare, the order and where it's got to; a ticket becomes an event. Anything
+    /// else from them — offers, ratings — is skipped. Nil only when the model is busy.
+    private func readService(_ message: MailMessage, _ service: ServiceMail.Service) async -> MailProposal? {
+        let skip = MailProposal(kind: .ignore, title: message.subject, summary: "", usedAI: false)
+        switch service.kind {
+        case .ride:
+            guard let ride = ServiceMail.ride(service, subject: message.subject, body: message.body) else { return skip }
+            record(ride, from: message)
+            let numbers = [ride.fare.map { "₹\(Int($0.rounded()))" },
+                           ride.distanceKm.map { String(format: "%.1f km", $0) },
+                           ride.minutes.map { "\($0) min" }].compactMap { $0 }
+            let route = [ride.pickup, ride.drop].compactMap { $0?.components(separatedBy: ",").first }
+            return MailProposal(kind: .update, title: (["\(service.name) ride"] + numbers).joined(separator: " · "),
+                                summary: route.count == 2 ? "\(route[0]) to \(route[1])" : "Kept in Overview", usedAI: false)
+        case .order:
+            guard let order = ServiceMail.order(service, subject: message.subject, body: message.body) else { return skip }
+            record(order, from: message)
+            return MailProposal(kind: .update, title: "\(service.name): \(order.item ?? "your order") · \(order.status.label)",
+                                summary: order.orderID.map { "Order \($0)" } ?? "", usedAI: false)
+        case .ticket:
+            guard let ticket = ServiceMail.ticket(subject: message.subject, body: message.body, received: message.receivedAt)
+            else { return skip }
+            // What's showing and where is read the way any event's mail is; when it is, the rules'.
+            guard var proposal = await triage(message) else { return nil }
+            proposal.kind = .event
+            proposal.start = ticket.showtime ?? proposal.start
+            proposal.end = proposal.start.map { $0.addingTimeInterval(3 * 3_600) }
+            proposal.isAllDay = false
+            if proposal.title.isEmpty || proposal.title.lowercased().contains("booking") {
+                proposal.title = message.subject
+            }
+            proposal.summary = (["Booking ID \(ticket.bookingID)"] + [ticket.seats.map { "Seats \($0)" }].compactMap { $0 })
+                .joined(separator: " · ")
+            return proposal
+        }
+    }
+
+    private func record(_ ride: ServiceMail.Ride, from message: MailMessage) {
+        let id = message.id
+        let seen = (try? context.fetch(FetchDescriptor<RideRecord>(predicate: #Predicate { $0.messageID == id }))) ?? []
+        guard seen.isEmpty else { return }
+        context.insert(RideRecord(ride, at: message.receivedAt, messageID: id))
+        try? context.save()
+    }
+
+    /// The order this mail is about, moved on to where it's got to. Mail can be read out of
+    /// order, so an older "shipped" never moves a delivered order back.
+    private func record(_ order: ServiceMail.Order, from message: MailMessage) {
+        let orders = (try? context.fetch(FetchDescriptor<OrderUpdate>(sortBy: [SortDescriptor(\.updatedAt, order: .reverse)]))) ?? []
+        let mine = orders.filter { $0.serviceRaw == order.service.rawValue }
+        let match = order.orderID.flatMap { id in mine.first { $0.orderID == id } }
+            ?? order.item.flatMap { item in mine.first { $0.item == item } }
+            // A food order without its number in the mail: the one you're waiting on.
+            ?? (order.service.kind == .order && order.service != .amazon ? mine.first { $0.isActive(now: message.receivedAt) } : nil)
+        if let match {
+            if order.status > match.status || (order.status == match.status && message.receivedAt > match.updatedAt) {
+                match.statusRaw = order.status.rawValue
+                match.messageID = message.id
+            }
+            match.updatedAt = max(match.updatedAt, message.receivedAt)
+            match.orderID = match.orderID ?? order.orderID
+            match.item = match.item ?? order.item
+        } else {
+            context.insert(OrderUpdate(order, at: message.receivedAt, messageID: message.id))
+        }
+        try? context.save()
+    }
+
+    /// A confirmed booking goes straight on your Day, with a notification to take it back if it
+    /// shouldn't be there. The same booking mailed twice is added once.
+    private func addTicket(_ suggestion: MailSuggestion, from service: ServiceMail.Service) async {
+        let booking = suggestion.summary.components(separatedBy: " · ").first ?? suggestion.messageID
+        if eventStore.all().contains(where: { $0.notes.contains(booking) }) {
+            suggestion.status = .dismissed
+            try? context.save()
+            return
+        }
+        await add(suggestion, near: whereYouAre?())
+        guard let eventID = suggestion.eventID else { return }
+        notifications.post(
+            id: "pathos.ticket.\(eventID.uuidString)",
+            title: "Added from \(service.name)",
+            body: [suggestion.title, suggestion.whenText].compactMap { $0 }.joined(separator: " · "),
+            category: NotificationService.Category.ticket,
+            link: URL(string: "pathos://ticket?event=\(eventID.uuidString)")
+        )
+    }
+
+    /// Takes back a ticket added from mail: off your Day, and the mail marked as declined.
+    func undoTicket(eventID: UUID) {
+        if let event = eventStore.all().first(where: { $0.id == eventID }) {
+            eventStore.delete(event)
+        }
+        let descriptor = FetchDescriptor<MailSuggestion>(predicate: #Predicate { $0.eventID == eventID })
+        for suggestion in (try? context.fetch(descriptor)) ?? [] {
+            suggestion.status = .dismissed
+            suggestion.eventID = nil
+        }
+        try? context.save()
     }
 
     private func knownMessageIDs() -> Set<String> {

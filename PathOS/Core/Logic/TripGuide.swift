@@ -27,35 +27,38 @@ nonisolated enum TripGuide {
 
     /// Being a few minutes out is traffic, not lateness.
     static let lateAfterMinutes = 5
-    /// Metro stations are big and GPS is poor around them.
-    static let stationRadius = 700.0
-    static let placeRadius = 250.0
 
     /// Arriving never needs you nearer than this: about as well as GPS knows a street.
     static let nearestArrival = 30.0
-
-    static func radius(for leg: DoorToDoor.Leg) -> Double {
-        leg.mode == .metro || leg.mode == .bus ? stationRadius : placeRadius
-    }
 
     /// How close to a place counts as being at it, at the end of a road or a walk.
     static let doorRadius = 60.0
     /// And how close to where the road route ends — which, for a campus whose pin is a couple of
     /// hundred metres inside its gate, is the gate.
     static let roadEndRadius = 40.0
+    /// At the station you're heading for. Its entrances sit well off the station's own point and
+    /// GPS is poor among the pillars: a door's 60 m had you flicking between the walk and the ride
+    /// with every step near the gate.
+    static let stationApproachRadius = 150.0
+    /// Off the train, at the station you were riding to. Stations here are a kilometre or so
+    /// apart, so a wider circle had you off a stop early; underground, with no fix to judge by,
+    /// the clock carries the ride instead.
+    static let rideEndRadius = 350.0
 
     /// How close counts as having reached the end of a leg that set off from `start`.
     ///
     /// For a road or a walk: at the place, or at the end of the road to it (`RoadEnd`) — never a
     /// couple of hundred metres short. A generous 250 m ended the driving view before you'd
     /// arrived, and a fixed one made every trip shorter than that arrive on its first fix. Never
-    /// more than a third of the leg either, so a short trip doesn't arrive as it sets off. A
-    /// station keeps its wide circle: GPS underground can't be asked for more.
-    static func radius(for leg: DoorToDoor.Leg, from start: CLLocationCoordinate2D?) -> Double {
-        guard leg.mode != .metro, leg.mode != .bus else { return radius(for: leg) }
-        guard let start else { return doorRadius }
+    /// more than a third of the leg either, so a short trip doesn't arrive as it sets off. A road
+    /// or a walk to a station you're about to board at (`boarding`) arrives at the station's
+    /// edge; a ride, near the station you get off at.
+    static func radius(for leg: DoorToDoor.Leg, from start: CLLocationCoordinate2D?, boarding: Bool = false) -> Double {
+        guard leg.mode != .metro, leg.mode != .bus else { return rideEndRadius }
+        let widest = boarding ? stationApproachRadius : doorRadius
+        guard let start else { return widest }
         let span = GeoMath.distance(from: start, to: leg.endCoordinate)
-        return min(doorRadius, max(nearestArrival, span / 3))
+        return min(widest, max(nearestArrival, span / 3))
     }
 
     /// Where the road route for the leg you're on ends, and whether you've stopped near it.
@@ -97,38 +100,49 @@ nonisolated enum TripGuide {
         }
     }
 
-    /// How many legs you've finished, from where you are. A leg counts as finished when you're at
-    /// the place it ends; the furthest one wins, so passing a station you'd already left behind
-    /// doesn't send the plan backwards.
+    /// How many legs you've finished, from where you are and what you'd already reached.
+    ///
+    /// Never fewer than `reached`: once you've got to the station, a step back from its gate is
+    /// still being at the station, not a reason to send you walking to it again. A road or a walk
+    /// is finished when you're at the place it ends, and the furthest one wins, so skipping a
+    /// leg — an auto straight there instead — still moves you on. A ride only once you're on it:
+    /// standing at one station, the next is often near enough to look reached.
     static func legsDone(_ option: DoorToDoor.Option, at location: CLLocationCoordinate2D?,
-                         origin: CLLocationCoordinate2D? = nil, roadEnd: RoadEnd? = nil) -> Int? {
+                         origin: CLLocationCoordinate2D? = nil, roadEnd: RoadEnd? = nil, reached: Int = 0) -> Int? {
         guard let location else { return nil }
-        let reached = option.legs.indices.filter { index in
+        var done = min(max(0, reached), option.legs.count)
+        for index in done..<option.legs.count {
+            let leg = option.legs[index]
+            let isRide = leg.mode == .metro || leg.mode == .bus
+            if isRide, index > done { continue }
             // Each leg sets off from where the one before it ended; the first from where you were.
             let start = index == 0 ? origin : option.legs[index - 1].endCoordinate
-            let leg = option.legs[index]
-            if GeoMath.distance(from: location, to: leg.endCoordinate) <= radius(for: leg, from: start) {
-                return true
+            let next = option.legs[safe: index + 1]
+            let boarding = next?.mode == .metro || next?.mode == .bus
+            if GeoMath.distance(from: location, to: leg.endCoordinate) <= radius(for: leg, from: start, boarding: boarding) {
+                done = index + 1
+            } else if let roadEnd, roadEnd.leg == index,
+                      roadEnd.hasStoppedNear || GeoMath.distance(from: location, to: roadEnd.point) <= roadEndRadius {
+                done = index + 1
             }
-            guard let roadEnd, roadEnd.leg == index else { return false }
-            return roadEnd.hasStoppedNear || GeoMath.distance(from: location, to: roadEnd.point) <= roadEndRadius
         }
         // Knowing you're nowhere along it yet is knowing something: nil is only for having no
         // fix at all, which is when the clock has to carry the plan instead.
-        return (reached.max().map { $0 + 1 }) ?? 0
+        return done
     }
 
     static func status(for option: DoorToDoor.Option, startedAt: Date, now: Date,
                        location: CLLocationCoordinate2D?, origin: CLLocationCoordinate2D? = nil,
-                       roadEnd: RoadEnd? = nil) -> Status? {
+                       roadEnd: RoadEnd? = nil, reached: Int = 0) -> Status? {
         guard !option.legs.isEmpty else { return nil }
         let plan = schedule(option)
         let elapsed = max(0, now.timeIntervalSince(startedAt) / 60)
 
         // Without a fix, the clock carries the plan, which is what happens underground. It can
         // move you along the legs but never past the end: arriving is something the map has to see.
-        let byClock = min(plan.filter { $0 <= elapsed }.count, option.legs.count - 1)
-        let done = min(legsDone(option, at: location, origin: origin, roadEnd: roadEnd) ?? byClock, option.legs.count)
+        let byClock = max(min(reached, option.legs.count - 1), min(plan.filter { $0 <= elapsed }.count, option.legs.count - 1))
+        let done = min(legsDone(option, at: location, origin: origin, roadEnd: roadEnd, reached: reached) ?? byClock,
+                       option.legs.count)
 
         if done >= option.legs.count {
             return Status(legIndex: option.legs.count - 1, hasArrived: true, minutesBehind: 0, minutesRemaining: 0,

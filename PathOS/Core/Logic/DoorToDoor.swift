@@ -163,8 +163,23 @@ nonisolated enum DoorToDoor {
             options.append(ride)
         }
         // Quickest first, but anything that isn't running yet goes last however quick it would be.
-        return options.sorted {
+        return worthOffering(options).sorted {
             $0.isAvailableNow == $1.isAvailableNow ? $0.minutes < $1.minutes : $0.isAvailableNow
+        }
+    }
+
+    /// Leaves out any way that another beats on both counts: slower, and no cheaper, than one
+    /// running now. An auto to a station, a stop on the metro and a walk back costs more and takes
+    /// longer than the auto straight there, and offering it only makes the list harder to trust.
+    /// A fare nobody knows, like the bus's, can only be beaten by a way that's free.
+    static func worthOffering(_ options: [Option]) -> [Option] {
+        options.filter { option in
+            !options.contains { other in
+                guard other.id != option.id, other.isAvailableNow, other.minutes < option.minutes else { return false }
+                if other.fareIsUnknown { return false }
+                if option.fareIsUnknown { return other.fareHigh == 0 }
+                return other.fareLow <= option.fareLow && other.fareHigh <= option.fareHigh
+            }
         }
     }
 
@@ -218,6 +233,10 @@ nonisolated enum DoorToDoor {
         // only there for when the nearest station is no use: a line that doesn't reach, or a ride
         // that would cover nothing.
         for start in boarding {
+            // Getting on has to be on your way. A station as far from you as where you're going
+            // is a detour: to reach the station by Jayadeva, it had you take an auto past it to
+            // BTM Layout and ride a stop back.
+            guard GeoMath.distance(from: origin, to: start.station.coordinate) <= journey / 2 else { continue }
             for end in alighting where end.station.name != start.station.name {
                 // Getting off has to leave you meaningfully closer than getting on did. Comparing
                 // the two stations' own distance instead would throw out good journeys, since a

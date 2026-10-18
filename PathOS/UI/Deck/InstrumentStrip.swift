@@ -53,6 +53,11 @@ struct InstrumentStrip: View {
     }
 
     private var venueName: String {
+        // On a ride, the station coming up: that's where you are, as far as a train goes.
+        if let journey = state.transit.journey, let progress = state.transit.progress {
+            return progress.nextStationIndex.map { "Next: \(journey.stationName(at: $0))" }
+                ?? journey.destination
+        }
         // Following a way, the strip carries the journey: where you are matters less than when
         // you'll be there.
         if state.trip != nil, let arrival = arrivalTime {
@@ -70,6 +75,14 @@ struct InstrumentStrip: View {
 
     /// Most useful first, because the tail is what gets dropped when space runs out.
     private var readouts: [Readout] {
+        // On a ride: stops and minutes to where you get off.
+        if let progress = state.transit.progress, state.transit.journey != nil, !progress.hasArrived {
+            return [
+                Readout(id: "stops", value: "\(progress.stopsRemaining)", unit: progress.stopsRemaining == 1 ? "stop" : "stops",
+                        role: progress.isArrivingNext || progress.isChangingNext ? .attention : .you),
+                Readout(id: "remaining", value: "\(progress.estimatedMinutesRemaining)", unit: "min", role: .you),
+            ]
+        }
         // While a way is being followed: when you'll arrive, how long is left, how far to the
         // next handover — the three numbers a journey is actually about.
         if state.trip != nil, let status = state.tripStatus, !status.hasArrived {
@@ -99,8 +112,9 @@ struct InstrumentStrip: View {
                 role: snapshot.isRainLikely ? .attention : .world
             ))
         }
-        if let meters = state.barometer.absoluteAltitudeMeters {
-            items.append(Readout(id: "altitude", value: "\(Int(meters.rounded()))", unit: "m alt", role: .world))
+        // Only once it's known well enough to stand without its ± beside it.
+        if let altitude = state.barometer.altitude, altitude.isSettled {
+            items.append(Readout(id: "altitude", value: "\(Int(altitude.metres.rounded()))", unit: "m alt", role: .world))
         }
         return items
     }

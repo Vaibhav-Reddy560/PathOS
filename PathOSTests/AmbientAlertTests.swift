@@ -139,19 +139,29 @@ struct AmbientAlertTests {
         #expect(late?.headline == "You'll be about 12 min late for Physics")
     }
 
-    /// Getting closer in good time needs no reminder; running late does, even on the way.
+    /// Getting closer in good time needs no reminder; running late is said, even on the way.
     @Test func onTheWayItOnlySpeaksUpIfYoureLate() {
         #expect(AmbientAlerts.departureAlert(departure(.leaveNow(leaveBy: now), onTheWay: true)) == nil)
         #expect(AmbientAlerts.departureAlert(departure(.late(arrival: now, minutes: 5), onTheWay: true)) != nil)
         #expect(AmbientAlerts.departureAlert(departure(.there)) == nil)
     }
 
-    /// Late, but already on the way: said, and nothing offered — a way there, or a cab, to a
-    /// place you're already going to is noise.
-    @Test func onTheWayLateOffersNothing() {
-        let late = AmbientAlerts.departureAlert(departure(.late(arrival: now, minutes: 9), onTheWay: true))
-        #expect(late?.headline == "You'll be about 9 min late for Physics")
+    /// Late, but already on the way: a quiet note of when you'll get there. Nothing to act on, so
+    /// no buzz, nothing offered, and never "you haven't set off".
+    @Test func onTheWayLateIsAQuietNote() {
+        let arrival = now.addingTimeInterval(69 * 60)
+        let late = AmbientAlerts.departureAlert(departure(.late(arrival: arrival, minutes: 9), onTheWay: true))
+        #expect(late?.role == .you)
+        #expect(late?.headline == "You'll get there about \(arrival.formatted(date: .omitted, time: .shortened))")
+        #expect(late?.detail.hasPrefix("9 min after Physics starts") == true)
         #expect(late?.buttons.isEmpty == true)
+        #expect(AmbientAlerts.notifiable(previous: [], current: [late!]).isEmpty)
+    }
+
+    /// An alert that stopped being true takes its waiting repeat with it.
+    @Test func anAlertNoLongerTrueIsWithdrawn() {
+        let late = AmbientAlerts.departureAlert(departure(.late(arrival: now, minutes: 12)))!
+        #expect(AmbientAlerts.withdrawn(previous: ["leave.late.class:1", "rain"], current: [late]) == ["rain"])
     }
 
     /// Far too late and not moving, it stops saying "you'll be late" and asks instead, with the

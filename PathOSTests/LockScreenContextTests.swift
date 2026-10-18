@@ -30,12 +30,11 @@ struct LockScreenContextTests {
         agenda: [LockScreenContext.Entry] = [],
         weather: AlertSnapshot.Weather? = nil,
         advice: ExitAdvice? = nil,
-        commute: LockScreenContext.Commute? = nil,
         memory: LockScreenContext.Memory? = nil
     ) -> LockScreenContext.Content {
         LockScreenContext.content(for: .init(
             venueName: "Home", venueSymbol: "house.fill", weather: weather ?? dry, exitAdvice: advice,
-            agenda: agenda, commute: commute, memory: memory, now: now, calendar: calendar
+            agenda: agenda, memory: memory, now: now, calendar: calendar
         ))
     }
 
@@ -113,15 +112,6 @@ struct LockScreenContextTests {
         #expect(shown.state.tint == .world)
     }
 
-    @Test func theTravelTimeShowsAroundWhenYouUsuallyLeave() {
-        let commute = LockScreenContext.Commute(destination: "Work", minutes: 35, mode: .car, usualDeparture: 9 * 60 + 10)
-        let note = PathOSActivityAttributes.Note(symbol: "car.fill", text: "Work: 35 min by car", role: .you)
-        #expect(content(now: at(8), commute: commute).state.notes == [note])
-        #expect(content(now: at(9, 50), commute: commute).state.notes == [note])
-        #expect(content(now: at(6), commute: commute).state.notes == nil)
-        #expect(content(now: at(11), commute: commute).state.notes == nil)
-    }
-
     @Test func aNoteYouLeftHereLeadsUnlessAClassDoes() {
         let memory = LockScreenContext.Memory(title: "Parked at B2, pillar 14", body: "")
         let shown = content(now: at(9), memory: memory)
@@ -146,8 +136,7 @@ struct LockScreenContextTests {
     @Test func neverMoreThanTwoNotes() {
         let physics = lesson("Physics", at(9, 15), at(10))
         let maths = lesson("Maths", at(10, 15), at(11))
-        let commute = LockScreenContext.Commute(destination: "Work", minutes: 35, mode: .car, usualDeparture: 9 * 60)
-        let shown = content(now: at(9), agenda: [physics, maths], weather: wet, advice: rain, commute: commute,
+        let shown = content(now: at(9), agenda: [physics, maths], weather: wet, advice: rain,
                             memory: .init(title: "Locker 12", body: ""))
         #expect(shown.state.notes?.count == 2)
     }

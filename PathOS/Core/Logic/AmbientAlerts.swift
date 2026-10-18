@@ -75,6 +75,10 @@ nonisolated struct AlertSnapshot: Sendable {
         /// Where the next change is and what to do there, when it's the next stop.
         var changeStation: String? = nil
         var changeInstruction: String? = nil
+        /// The station coming up.
+        var nextStation: String? = nil
+        /// What to do, as the banner on the map says it.
+        var instruction: JourneyTracker.Instruction? = nil
     }
 
     nonisolated struct Trip: Sendable {
@@ -148,6 +152,14 @@ nonisolated struct AlertSnapshot: Sendable {
     var guidance: Guidance?
     var journey: Journey?
     var trip: Trip? = nil
+    /// An order out for delivery, by its latest mail.
+    var delivery: Delivery? = nil
+
+    nonisolated struct Delivery: Sendable {
+        var title: String
+        var service: String
+        var symbol: String
+    }
     var nextEvent: Event?
     var departure: Departure? = nil
     var way: Way? = nil
@@ -295,16 +307,29 @@ nonisolated enum AmbientAlerts {
                 // Getting off or changing at the right stop matters more than anything else en route.
                 priority: actNow ? 9 : 19,
                 symbol: changingNext ? "arrow.triangle.swap" : journey.symbol,
-                compactText: journey.isArrivingNext ? "Get off next" : (changingNext ? "Change next" : "To \(journey.destination)"),
+                compactText: journey.isArrivingNext ? "Get off next"
+                    : (changingNext ? "Change next" : journey.nextStation.map { "Next: \($0)" } ?? "To \(journey.destination)"),
                 metric: actNow ? nil : "\(journey.stopsRemaining) stops",
-                headline: journey.isArrivingNext
-                    ? "Get off next: \(journey.destination)"
-                    : (journey.changeStation.map { "Change next: \($0)" } ?? "\(journey.lineName) to \(journey.destination)"),
-                detail: journey.isArrivingNext
+                headline: journey.instruction?.headline ?? (journey.isArrivingNext
+                    ? "Get off at the next stop: \(journey.destination)"
+                    : (journey.changeStation.map { "Change at the next stop: \($0)" } ?? "\(journey.lineName) to \(journey.destination)")),
+                detail: journey.instruction?.detail ?? (journey.isArrivingNext
                     ? "About \(journey.minutesRemaining) min to go."
-                    : (journey.changeInstruction.map { "\($0)." } ?? "\(journey.stopsRemaining) stops · about \(journey.minutesRemaining) min (estimated)."),
+                    : (journey.changeInstruction.map { "\($0)." } ?? "\(journey.stopsRemaining) stops · about \(journey.minutesRemaining) min (estimated).")),
                 buttons: [AmbientAlert.Button(title: "End", symbol: "xmark", action: .endJourney)],
                 isDismissible: false
+            ))
+        }
+
+        if let delivery = snapshot.delivery {
+            alerts.append(AmbientAlert(
+                id: "delivery.\(delivery.title)",
+                role: .world,
+                priority: 21,
+                symbol: delivery.symbol,
+                compactText: "Arriving: \(delivery.title)",
+                headline: "\(delivery.title) is on its way",
+                detail: "\(delivery.service) says it's out for delivery."
             ))
         }
 
@@ -448,6 +473,20 @@ nonisolated enum AmbientAlerts {
                     AmbientAlert.Button(title: "I'm going", symbol: "figure.walk.departure", action: .keepDeparture(departure.id)),
                 ]
             )
+        case .late(let arrival, let minutes) where departure.isOnTheWay:
+            // On your way already: nothing to do but get there, so it's said quietly — no buzz,
+            // no way there or cab offered, and no "haven't set off".
+            let time = arrival.formatted(date: .omitted, time: .shortened)
+            return AmbientAlert(
+                id: "leave.enroute.\(departure.id)",
+                role: .you,
+                priority: 17,
+                symbol: "clock",
+                compactText: "There about \(time)",
+                metric: "+\(minutes) min",
+                headline: "You'll get there about \(time)",
+                detail: "\(minutes) min after \(departure.title) starts at \(starts)."
+            )
         case .late(_, let minutes):
             return AmbientAlert(
                 id: "leave.late.\(departure.id)",
@@ -458,8 +497,7 @@ nonisolated enum AmbientAlerts {
                 metric: "+\(minutes) min",
                 headline: "You'll be about \(minutes) min late for \(departure.title)",
                 detail: "\(departure.travelText) from here, and it starts at \(starts).",
-                // On your way already: a way there, or a cab, is the one thing not to offer.
-                buttons: departure.isOnTheWay ? [] : ways
+                buttons: ways
             )
         }
     }
@@ -468,6 +506,13 @@ nonisolated enum AmbientAlerts {
     /// from the last check stays quiet, so a rainy afternoon doesn't buzz every half hour.
     static func notifiable(previous: Set<String>, current: [AmbientAlert]) -> [AmbientAlert] {
         current.filter { interrupts($0) && !previous.contains($0.id) }
+    }
+
+    /// Alerts announced before that are no longer true — the event was deleted, you set off,
+    /// you got there. Any repeat of them still waiting has to be taken back, or a "running late"
+    /// arrives about something you cancelled.
+    static func withdrawn(previous: Set<String>, current: [AmbientAlert]) -> Set<String> {
+        previous.subtracting(current.map(\.id))
     }
 
     /// What to remember as "already announced" after a check.

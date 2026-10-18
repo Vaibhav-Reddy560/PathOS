@@ -14,6 +14,7 @@ struct DayDeck: View {
     @Query private var trips: [Trip]
     @Query private var savedPlaces: [SavedPlace]
     @Query(sort: \Reminder.createdAt) private var allReminders: [Reminder]
+    @Query(sort: \Holiday.dayStart) private var holidays: [Holiday]
 
     /// Answered elective questions; watched so an answer takes the question away at once.
     @AppStorage(TimetableService.settledClashesKey) private var settledClashes = ""
@@ -81,6 +82,15 @@ struct DayDeck: View {
     @ViewBuilder
     private var dayView: some View {
         dayPicker
+        ForEach(holidaysOnDay) { holiday in
+            HolidayLine(holiday: holiday)
+        }
+        DayNoteField(day: day)
+        // Holidays in the month ahead you haven't said about, one at a time: answering one
+        // brings up the next. Three cards in a row buried the day's plan.
+        if isToday, let holiday = holidaysToAsk.first {
+            HolidayQuestion(holiday: holiday)
+        }
         if let trip = tripForDay {
             tripBanner(trip)
         }
@@ -136,8 +146,14 @@ struct DayDeck: View {
         // Every day's dots worked out in one pass, not the whole schedule rebuilt for each of the
         // forty-odd days on the grid, which is what made switching to Month stutter.
         let marks = monthMarks()
-        MonthCalendar(month: $month, selected: $day) { date in
+        let flags = monthFlags()
+        MonthCalendar(month: $month, selected: $day, marks: { date in
             marks[Calendar.current.startOfDay(for: date)] ?? []
+        }, flags: { date in
+            flags[Calendar.current.startOfDay(for: date)] ?? []
+        })
+        if let holiday = holidaysOnDay.first {
+            HolidayLine(holiday: holiday)
         }
 
         schedule(title: day.formatted(.dateTime.weekday(.wide).day().month(.wide)))
@@ -472,6 +488,31 @@ struct DayDeck: View {
             marks[dayStart] = timed.sorted { $0.start < $1.start }.prefix(3).map(\.role)
         }
         return marks
+    }
+
+    /// Holidays and notes on the month's days, for their marks.
+    private func monthFlags() -> [Date: MonthCalendar.Flags] {
+        let calendar = Calendar.current
+        var flags: [Date: MonthCalendar.Flags] = [:]
+        for holiday in holidays {
+            flags[calendar.startOfDay(for: holiday.dayStart), default: []].insert(.holiday)
+        }
+        for log in dayLogs where !log.note.isEmpty {
+            flags[calendar.startOfDay(for: log.dayStart), default: []].insert(.note)
+        }
+        return flags
+    }
+
+    private var holidaysOnDay: [Holiday] {
+        holidays.filter { Calendar.current.isDate($0.dayStart, inSameDayAs: day) }
+    }
+
+    /// Unanswered holidays in the month ahead, soonest first — not today's, which has its own line.
+    private var holidaysToAsk: [Holiday] {
+        let asked = Holidays.toAsk(holidays.map(\.entry), today: now)
+            .filter { !Calendar.current.isDate($0.day, inSameDayAs: day) }
+            .map(\.id)
+        return asked.compactMap { id in holidays.first { $0.id == id } }
     }
 
     /// The day's sessions, at your Work place.

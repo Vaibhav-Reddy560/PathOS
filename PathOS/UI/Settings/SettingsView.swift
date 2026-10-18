@@ -22,7 +22,6 @@ struct SettingsView: View {
 
     var body: some View {
         @Bindable var state = state
-        @Bindable var routine = state.routine
 
         NavigationStack {
             Form {
@@ -40,6 +39,16 @@ struct SettingsView: View {
                     }
                     .padding(.vertical, 4)
                     .accessibilityElement(children: .combine)
+                }
+
+                Section {
+                    NavigationLink {
+                        OverviewView()
+                    } label: {
+                        Label("Overview", systemImage: "chart.bar.doc.horizontal")
+                    }
+                } footer: {
+                    Text("What you went to and missed, holidays and days off, tasks done.")
                 }
 
                 appIconSection
@@ -126,18 +135,6 @@ struct SettingsView: View {
                 }
 
                 Section {
-                    Toggle("Departure reminders", isOn: $routine.remindersEnabled)
-                    ForEach(1...7, id: \.self) { weekday in
-                        if let minutes = routine.typicalDepartures[weekday] {
-                            LabeledContent(Calendar.current.weekdaySymbols[weekday - 1], value: RoutineLearner.format(minutes: minutes))
-                                .monospacedDigit()
-                        }
-                    }
-                    if routine.typicalDepartures.isEmpty {
-                        Text("Learned from \(routine.loggedDepartures) departure(s) so far. Needs at least \(RoutineModel.minimumSamples).")
-                            .font(.footnote)
-                            .foregroundStyle(.mist)
-                    }
                     Picker("Preferred cab", selection: $state.preferredCab) {
                         ForEach(CabProvider.allCases) { provider in
                             Text(provider.name).tag(provider)
@@ -145,6 +142,8 @@ struct SettingsView: View {
                     }
                 } header: {
                     InstrumentLabel("Commute")
+                } footer: {
+                    Text("When to leave comes from each day's own plan: the next session or event with a place, timed from where you are in today's traffic. Nothing on a day off or a holiday.")
                 }
 
                 liveTrafficSection

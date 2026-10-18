@@ -15,6 +15,8 @@ final class NotificationService: NSObject {
         static let tripLeg = "pathos.tripLeg"
         /// "Still going?", answered from the notification itself.
         static let stillGoing = "pathos.stillGoing"
+        /// A ticket added from mail, with the way to take it back.
+        static let ticket = "pathos.ticket"
     }
 
     nonisolated enum Action {
@@ -22,6 +24,7 @@ final class NotificationService: NSObject {
         static let trackLeg = "pathos.action.trackLeg"
         static let dropDeparture = "pathos.action.dropDeparture"
         static let keepDeparture = "pathos.action.keepDeparture"
+        static let undoTicket = "pathos.action.undoTicket"
     }
 
     private(set) var isAuthorized = false
@@ -52,6 +55,11 @@ final class NotificationService: NSObject {
                     UNNotificationAction(identifier: Action.dropDeparture, title: "Drop it", options: [.destructive]),
                     UNNotificationAction(identifier: Action.keepDeparture, title: "I'm going", options: []),
                 ],
+                intentIdentifiers: []
+            ),
+            UNNotificationCategory(
+                identifier: Category.ticket,
+                actions: [UNNotificationAction(identifier: Action.undoTicket, title: "Undo", options: [.destructive])],
                 intentIdentifiers: []
             ),
             UNNotificationCategory(
@@ -131,7 +139,12 @@ final class NotificationService: NSObject {
     }
 
     func removePending(withPrefix prefix: String) async {
-        let identifiers = await Self.pendingIdentifiers().filter { $0.hasPrefix(prefix) }
+        await removePending { $0.hasPrefix(prefix) }
+    }
+
+    func removePending(where shouldRemove: (String) -> Bool) async {
+        let identifiers = await Self.pendingIdentifiers().filter(shouldRemove)
+        guard !identifiers.isEmpty else { return }
         center.removePendingNotificationRequests(withIdentifiers: identifiers)
     }
 
@@ -191,6 +204,7 @@ extension NotificationService: UNUserNotificationCenterDelegate {
         // pathos://departure?id=… becomes pathos://departure/drop?id=…, answered without opening.
         case Action.dropDeparture: link.flatMap { URL(string: $0.replacingOccurrences(of: "://departure?", with: "://departure/drop?")) }
         case Action.keepDeparture: link.flatMap { URL(string: $0.replacingOccurrences(of: "://departure?", with: "://departure/keep?")) }
+        case Action.undoTicket: link.flatMap { URL(string: $0.replacingOccurrences(of: "://ticket?", with: "://ticket/undo?")) }
         default: link.flatMap(URL.init(string:))
         }
         if let target {

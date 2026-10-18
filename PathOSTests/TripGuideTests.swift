@@ -133,16 +133,66 @@ struct TripGuideTests {
     }
 
     /// A long leg arrives at the place, not a couple of hundred metres short of it — that ended
-    /// the driving view early. A station keeps its wide circle: GPS underground can't be asked
-    /// for more.
+    /// the driving view early. Getting to a station arrives at its edge, where the entrances are.
     @Test func aLongLegArrivesAtTheDoorNotAStreetShort() {
-        let leg = trip().legs[0]
-        #expect(TripGuide.radius(for: leg, from: home) == TripGuide.doorRadius)
-        #expect(TripGuide.radius(for: trip().legs[1], from: station) == TripGuide.stationRadius)
+        let toStation = trip().legs[0]
+        #expect(TripGuide.radius(for: toStation, from: home, boarding: true) == TripGuide.stationApproachRadius)
+        #expect(TripGuide.radius(for: toStation, from: home) == TripGuide.doorRadius)
+        #expect(TripGuide.radius(for: trip().legs[1], from: station) == TripGuide.rideEndRadius)
         let short = GeoMath.coordinate(station, metres: 200, bearing: 0)
         let stillGoing = TripGuide.status(for: trip(), startedAt: start, now: start.addingTimeInterval(9 * 60),
                                           location: short, origin: home)
         #expect(stillGoing?.legIndex == 0)
+    }
+
+    // MARK: Only forward
+
+    /// The flicker between "walk to the station" and "ride" at the station's gate: a few metres
+    /// of drift, or a step back, sent you walking to it again. A leg once reached stays reached.
+    @Test func reachingTheStationIsntUndoneByAStepBack() {
+        let atGate = GeoMath.coordinate(station, metres: 120, bearing: 90)
+        let reached = TripGuide.status(for: trip(), startedAt: start, now: start.addingTimeInterval(10 * 60),
+                                       location: atGate, origin: home)
+        #expect(reached?.legIndex == 1)
+
+        // Wandered back out past the gate, and GPS drifting: still the ride.
+        for metres in [180.0, 250, 400] {
+            let back = GeoMath.coordinate(station, metres: metres, bearing: 200)
+            let status = TripGuide.status(for: trip(), startedAt: start, now: start.addingTimeInterval(11 * 60),
+                                          location: back, origin: home, reached: 1)
+            #expect(status?.legIndex == 1)
+        }
+        // Without having reached it, that far out is still the way there.
+        let notYet = TripGuide.status(for: trip(), startedAt: start, now: start.addingTimeInterval(11 * 60),
+                                      location: GeoMath.coordinate(station, metres: 250, bearing: 200), origin: home)
+        #expect(notYet?.legIndex == 0)
+    }
+
+    /// Standing at one station, the next can be near enough to look reached. A ride only finishes
+    /// once you're on it.
+    @Test func aRideCantFinishBeforeYouBoard() {
+        let auto = trip().legs[0]
+        let nextStop = GeoMath.coordinate(station, metres: 900, bearing: 90)
+        let ride = DoorToDoor.Leg(mode: .metro, title: "Yellow Line to BTM Layout", detail: "1 stop", minutes: 2,
+                                  distanceMeters: 900, endName: "BTM Layout",
+                                  endLatitude: nextStop.latitude, endLongitude: nextStop.longitude)
+        let walk = DoorToDoor.Leg(mode: .walk, title: "Walk to the shop", detail: "800 m", minutes: 10,
+                                  distanceMeters: 800, endName: "The shop",
+                                  endLatitude: nextStop.latitude - 0.007, endLongitude: nextStop.longitude)
+        let option = DoorToDoor.Option(headline: "Metro", legs: [auto, ride, walk], minutes: 30, fareLow: 0, fareHigh: 0)
+        // On the way to the first station, 300 m short of the second: still going to the first.
+        let between = GeoMath.coordinate(nextStop, metres: 300, bearing: 270)
+        #expect(TripGuide.legsDone(option, at: between, origin: home) == 0)
+        // On the train, nearly there: off.
+        #expect(TripGuide.legsDone(option, at: GeoMath.coordinate(nextStop, metres: 200, bearing: 0),
+                                   origin: home, reached: 1) == 2)
+    }
+
+    /// Underground, the clock can carry you along but never behind what the map already saw.
+    @Test func theClockNeverGoesBehindWhatWasReached() {
+        let status = TripGuide.status(for: trip(), startedAt: start, now: start.addingTimeInterval(5 * 60),
+                                      location: nil, reached: 1)
+        #expect(status?.legIndex == 1)
     }
 
     // MARK: The end of the road

@@ -53,7 +53,7 @@ struct WorldMapView: View {
             }
 
             // The walking rings are for browsing what's around you, not for driving through.
-            if let here, state.mapLayers.contains(.rings), state.trip == nil {
+            if let here, state.mapLayers.contains(.rings), !isTravelling {
                 ForEach(Self.walkRingMinutes, id: \.self) { minutes in
                     let radius = GeoMath.walkingRadius(minutes: minutes)
                     MapCircle(center: here, radius: radius)
@@ -90,11 +90,14 @@ struct WorldMapView: View {
                 MapPolyline(coordinates: ride.map(\.coordinate))
                     .stroke(Color.ion, style: StrokeStyle(lineWidth: 6, lineCap: .round, lineJoin: .round))
                     .mapOverlayLevel(level: .aboveRoads)
+                // Every station named: where you board, change and get off always, the ones passed
+                // through as there's room, the way Maps names its own places.
                 ForEach(Array(ride.enumerated()), id: \.offset) { index, stop in
+                    let isKey = index == 0 || index == ride.count - 1 || stop.changeInstruction != nil
                     Annotation(stop.name, coordinate: stop.coordinate, anchor: .center) {
-                        RideStopDot(isEnd: index == 0 || index == ride.count - 1)
+                        RideStopDot(name: isKey ? stop.name : nil, isEnd: isKey)
                     }
-                    .annotationTitles(.hidden)
+                    .annotationTitles(isKey ? .hidden : .automatic)
                 }
             }
 
@@ -135,17 +138,23 @@ struct WorldMapView: View {
             }
             .annotationSubtitles(.hidden)
         }
-        // Traffic while you're on your way, as Maps shows it; otherwise the map stays quiet.
+        // On your way, the map is the journey and nothing else: no cafés along the route, and no
+        // traffic drawn beside every road — the route carries its own.
         .mapStyle(.standard(elevation: .realistic, emphasis: .muted,
-                            pointsOfInterest: state.poiDisplay.categories, showsTraffic: state.trip != nil))
+                            pointsOfInterest: isTravelling ? .excludingAll : state.poiDisplay.categories,
+                            showsTraffic: false))
         .mapControls {}
         .safeAreaPadding(.bottom, bottomInset)
+        // A ride is framed clear of the banner above it and the buttons down its right edge, so
+        // the stations at either end aren't hidden under them.
+        .safeAreaPadding(.top, state.rideBeingFollowed == nil ? 0 : 150)
+        .safeAreaPadding(.trailing, state.rideBeingFollowed == nil ? 0 : 64)
         .onMapCameraChange(frequency: .onEnd) { context in
             state.mapCenter = context.camera.centerCoordinate
         }
         .overlay(alignment: .bottomTrailing) {
             // Moved the map yourself while following a way: it stays where you put it until this.
-            if state.trip != nil, !isFollowingMap {
+            if isTravelling, !isFollowingMap {
                 Button {
                     isFollowingMap = true
                     followNavigation(animated: true)
@@ -175,7 +184,7 @@ struct WorldMapView: View {
         // way you'd hold a phone on a dashboard; on the train it pulls back to the whole ride.
         // Moving the map yourself stops it following until you tap Recentre.
         .simultaneousGesture(DragGesture(minimumDistance: 12).onChanged { _ in
-            if state.trip != nil { isFollowingMap = false }
+            if isTravelling { isFollowingMap = false }
         })
         .onChange(of: navigationKey) { _, _ in
             isFollowingMap = true
@@ -217,15 +226,23 @@ struct WorldMapView: View {
 
     /// What the camera should be doing: which leg, and whether it's a ride.
     private var navigationKey: String {
-        guard let trip = state.trip, let status = state.tripStatus else { return "none" }
-        return "\(trip.option.id)-\(status.legIndex)"
+        if let trip = state.trip, let status = state.tripStatus {
+            return "\(trip.option.id)-\(status.legIndex)-\(state.transit.journey?.id.uuidString ?? "")"
+        }
+        return state.transit.journey?.id.uuidString ?? "none"
+    }
+
+    /// A way or a ride being followed: the map is about the journey.
+    private var isTravelling: Bool {
+        state.trip != nil || state.transit.journey != nil
     }
 
     /// Frames the ride you're on, so its stops read. Road legs are led by `NavigationMapView`,
     /// which is MapKit following you itself: a camera driven by hand, a fix at a time, is what
     /// made the map drift and lag behind.
     private func followNavigation(animated: Bool) {
-        guard state.isLeadingTheWay, isFollowingMap, state.rideBeingFollowed != nil else { return }
+        guard state.isLeadingTheWay || state.transit.journey != nil, isFollowingMap,
+              state.rideBeingFollowed != nil else { return }
         // Between fixes the map slides at a constant rate, which is what makes a navigation map
         // glide rather than hop: each fix starts a linear move that the next one takes over.
         let motion = PathMotion.resolve(animated ? PathMotion.signal : .linear(duration: 1), reduceMotion: reduceMotion)
@@ -240,13 +257,20 @@ struct WorldMapView: View {
 
 
 
-    /// Everything on the map, or — while you're being led somewhere — only what the journey is
-    /// about: where this leg ends, and where you're going in the end.
+    /// Everything on the map, or — while you're on your way — only what the journey is about:
+    /// where this leg ends and where you're going in the end. Whether or not the map is following
+    /// you: one drag used to bring back every café and bus stop around. A ride's stations are
+    /// drawn with the ride.
     private var shownSignals: [WorldSignal] {
-        guard let trip = state.trip, let status = state.tripStatus, isFollowingMap else { return signals }
-        let leg = trip.option.legs[min(status.legIndex, trip.option.legs.count - 1)]
-        let keep = Set([leg.endName, trip.destinationName])
-        return signals.filter { keep.contains($0.title) }
+        if let trip = state.trip {
+            let leg = trip.option.legs[min(state.tripStatus?.legIndex ?? 0, trip.option.legs.count - 1)]
+            let keep = Set([leg.endName, trip.destinationName])
+            return signals.filter { $0.kind != .transitStop && keep.contains($0.title) }
+        }
+        if let journey = state.transit.journey {
+            return signals.filter { $0.kind != .transitStop && $0.title == journey.destination }
+        }
+        return signals
     }
 
     /// A region holding all of these, with room around them.
@@ -265,8 +289,10 @@ struct WorldMapView: View {
         )
     }
 
-    /// A stop along the ride being followed: the ends stand out from the ones passed through.
+    /// A stop along the ride being followed: where you board, change and get off stand out, with
+    /// their names always shown, from the ones passed through.
     private struct RideStopDot: View {
+        var name: String?
         var isEnd = false
 
         var body: some View {
@@ -274,6 +300,20 @@ struct WorldMapView: View {
                 .fill(isEnd ? Color.ion : Color.void)
                 .stroke(Color.ion, lineWidth: isEnd ? 0 : 2)
                 .frame(width: isEnd ? 12 : 8, height: isEnd ? 12 : 8)
+                // Under the dot, outside its frame, so the dot itself stays on the station.
+                .overlay(alignment: .top) {
+                    if let name {
+                        Text(name)
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(.ice)
+                            .lineLimit(1)
+                            .fixedSize()
+                            .padding(.horizontal, 7)
+                            .padding(.vertical, 3)
+                            .background(Color.void.opacity(0.85), in: .capsule)
+                            .offset(y: 16)
+                    }
+                }
                 .accessibilityHidden(true)
         }
     }

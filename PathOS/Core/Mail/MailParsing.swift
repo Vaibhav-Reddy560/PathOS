@@ -51,6 +51,8 @@ nonisolated struct MailMessage: Equatable, Sendable {
     var snippet: String
     var body: String
     var labels: [String]
+    /// Where the HTML linked its words, in the body: "Track your order" → the tracking page.
+    var links: [MailLink] = []
 
     /// What the on-device model reads: headers, then as much body as fits its context.
     func promptText(bodyLimit: Int = 3_000) -> String {
@@ -64,6 +66,19 @@ nonisolated struct MailMessage: Equatable, Sendable {
     }
 }
 
+/// A stretch of a message's text that goes somewhere, in characters from the start of the body.
+nonisolated struct MailLink: Equatable, Sendable {
+    var start: Int
+    var length: Int
+    var url: URL
+}
+
+/// A message's readable text, with what its links pointed at.
+nonisolated struct MailBody: Equatable, Sendable {
+    var text: String
+    var links: [MailLink] = []
+}
+
 nonisolated enum MailParsing {
     static func message(from resource: GmailMessageResource) -> MailMessage {
         let headers = resource.payload?.headers ?? []
@@ -73,7 +88,8 @@ nonisolated enum MailParsing {
         let sender = parseSender(header("From") ?? "")
         let received = resource.internalDate.flatMap(Double.init).map { Date(timeIntervalSince1970: $0 / 1_000) }
         let snippet = decodeEntities(resource.snippet ?? "")
-        let body = resource.payload.flatMap(bodyText) ?? ""
+        let readable = resource.payload.flatMap(readableBody)
+        let body = readable?.text ?? ""
 
         return MailMessage(
             id: resource.id,
@@ -84,7 +100,8 @@ nonisolated enum MailParsing {
             receivedAt: received ?? Date(),
             snippet: snippet,
             body: body.isEmpty ? snippet : body,
-            labels: resource.labelIds ?? []
+            labels: resource.labelIds ?? [],
+            links: body.isEmpty ? [] : readable?.links ?? []
         )
     }
 
@@ -93,13 +110,18 @@ nonisolated enum MailParsing {
     /// The readable text of a message: its plain-text part, or its HTML part stripped to text.
     /// Attachments are skipped, however they're nested.
     static func bodyText(of part: GmailMessageResource.Part) -> String? {
+        readableBody(of: part)?.text
+    }
+
+    /// The same, keeping where the HTML's links went.
+    static func readableBody(of part: GmailMessageResource.Part) -> MailBody? {
         var plain: String?
         var html: String?
         collect(part, plain: &plain, html: &html)
         if let plain, !plain.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            return tidy(plain)
+            return MailBody(text: tidy(plain))
         }
-        return html.map(htmlToText)
+        return html.map(readable(html:))
     }
 
     private static func collect(_ part: GmailMessageResource.Part, plain: inout String?, html: inout String?) {
@@ -126,14 +148,84 @@ nonisolated enum MailParsing {
     }
 
     static func htmlToText(_ html: String) -> String {
+        readable(html: html).text
+    }
+
+    /// Marks around a link's words, and between them and where it goes, that pass through the
+    /// rest of the clean-up untouched: characters no email has any business containing.
+    private static let linkOpen: Character = "\u{E000}"
+    private static let linkTarget: Character = "\u{E001}"
+    private static let linkClose: Character = "\u{E002}"
+
+    /// HTML as readable text, with each link kept on its own words. Stripping every tag used to
+    /// take the links with it, and "Track your order" went nowhere.
+    static func readable(html: String) -> MailBody {
         var text = html
         for pattern in [#"(?is)<head\b.*?</head>"#, #"(?is)<style\b.*?</style>"#, #"(?is)<script\b.*?</script>"#, #"(?s)<!--.*?-->"#] {
             text = text.replacingOccurrences(of: pattern, with: "", options: .regularExpression)
         }
+        text = text.replacingOccurrences(
+            of: #"(?is)<a\b[^>]*?\bhref\s*=\s*(["'])(.*?)\1[^>]*>(.*?)</a\s*>"#,
+            with: "\(linkOpen)$3\(linkTarget)$2\(linkClose)", options: .regularExpression
+        )
         text = text.replacingOccurrences(of: #"(?i)<br\s*/?>|</(?:p|div|tr|li|h[1-6]|table)>"#, with: "\n", options: .regularExpression)
         text = text.replacingOccurrences(of: #"(?i)</t[dh]>"#, with: " ", options: .regularExpression)
         text = text.replacingOccurrences(of: #"<[^>]+>"#, with: "", options: .regularExpression)
-        return tidy(decodeEntities(text))
+        // A link around nothing but a picture has no words left to tap.
+        text = text.replacingOccurrences(of: "\(linkOpen)\\s*\(linkTarget)[^\(linkClose)]*\(linkClose)", with: "",
+                                         options: .regularExpression)
+        return extractingLinks(from: tidy(decodeEntities(text)))
+    }
+
+    /// Takes the marks back out, noting where each link's words ended up.
+    private static func extractingLinks(from marked: String) -> MailBody {
+        var text = ""
+        var links: [MailLink] = []
+        var count = 0
+        var index = marked.startIndex
+        while index < marked.endIndex {
+            let character = marked[index]
+            guard character == linkOpen,
+                  let middle = marked[index...].firstIndex(of: linkTarget),
+                  let end = marked[middle...].firstIndex(of: linkClose) else {
+                if character != linkOpen, character != linkTarget, character != linkClose {
+                    text.append(character)
+                    count += 1
+                }
+                index = marked.index(after: index)
+                continue
+            }
+            let words = String(marked[marked.index(after: index)..<middle]).filter { $0 != linkOpen }
+            let target = String(marked[marked.index(after: middle)..<end]).trimmingCharacters(in: .whitespacesAndNewlines)
+            if let url = URL(string: target), let scheme = url.scheme?.lowercased(),
+               ["http", "https", "mailto", "tel"].contains(scheme),
+               !words.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                links.append(MailLink(start: count, length: words.count, url: url))
+            }
+            text += words
+            count += words.count
+            index = marked.index(after: end)
+        }
+        return MailBody(text: text, links: links)
+    }
+
+    /// Addresses, phone numbers and email addresses written out in the text itself, as links —
+    /// anywhere a link from the HTML doesn't already cover.
+    static func detectedLinks(in text: String, besides existing: [MailLink] = []) -> [MailLink] {
+        let types: NSTextCheckingResult.CheckingType = [.link, .phoneNumber]
+        guard let detector = try? NSDataDetector(types: types.rawValue) else { return [] }
+        let taken = existing.map { $0.start..<($0.start + $0.length) }
+        return detector.matches(in: text, range: NSRange(text.startIndex..., in: text)).compactMap { match in
+            guard let range = Range(match.range, in: text) else { return nil }
+            let url: URL? = match.url ?? match.phoneNumber.flatMap { number in
+                URL(string: "tel:" + number.filter { $0.isNumber || $0 == "+" })
+            }
+            guard let url else { return nil }
+            let start = text.distance(from: text.startIndex, to: range.lowerBound)
+            let length = text.distance(from: range.lowerBound, to: range.upperBound)
+            guard !taken.contains(where: { $0.overlaps(start..<(start + length)) }) else { return nil }
+            return MailLink(start: start, length: length, url: url)
+        }
     }
 
     /// Collapses the runs of spaces and blank lines that email HTML leaves behind, and drops the

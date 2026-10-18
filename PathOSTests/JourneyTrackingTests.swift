@@ -121,6 +121,91 @@ struct JourneyTrackingTests {
         #expect(JourneyTracker.nearestStopIndex(to: farAway, stops: stops, radius: 700) == nil)
     }
 
+    /// Once GPS has put you at a stop, a stray fix from the one before doesn't send you back.
+    @Test func theRideNeverGoesBackAStop() {
+        let stops = purpleRide.stops
+        let progress = JourneyTracker.progress(stops: stops, nearestIndex: 3, elapsed: 0, reached: 4)
+        #expect(progress.currentIndex == 4)
+        // GPS is still believed over the clock when the train is running late.
+        let late = JourneyTracker.progress(stops: stops, nearestIndex: 4, elapsed: (stops[5].minutesFromStart + 0.1) * 60,
+                                           reached: 4)
+        #expect(late.currentIndex == 4)
+    }
+
+    /// Halfway between two stations, the one ahead isn't reached yet; at its platform, it is.
+    @Test func aStationIsReachedAtItNotHalfwayToIt() {
+        let journey = Journey.metro(MetroRouter.route(from: "Ragigudda", to: "Central Silk Board", at: afternoon)!,
+                                    startedAt: afternoon)
+        let ragigudda = journey.stops[0].coordinate, jayadeva = journey.stops[1].coordinate
+        let mostOfTheWay = CLLocationCoordinate2D(latitude: ragigudda.latitude + (jayadeva.latitude - ragigudda.latitude) * 0.7,
+                                                  longitude: ragigudda.longitude + (jayadeva.longitude - ragigudda.longitude) * 0.7)
+        #expect(JourneyTracker.reachedIndex(at: mostOfTheWay, stops: journey.stops, radius: 700) == 0)
+        let atPlatform = GeoMath.coordinate(jayadeva, metres: 80, bearing: 270)
+        #expect(JourneyTracker.reachedIndex(at: atPlatform, stops: journey.stops, radius: 700) == 1)
+        #expect(JourneyTracker.reachedIndex(at: CLLocationCoordinate2D(latitude: 12.99, longitude: 77.59),
+                                            stops: journey.stops, radius: 700) == nil)
+    }
+
+    // MARK: What to do
+
+    @Test func atTheFirstStationItSaysWhichTrainToBoard() {
+        let journey = Journey.metro(MetroRouter.route(from: "Ragigudda", to: "Central Silk Board", at: afternoon)!,
+                                    startedAt: afternoon)
+        let progress = JourneyTracker.progress(stops: journey.stops, nearestIndex: 0, elapsed: 0)
+        let instruction = JourneyTracker.instruction(for: progress, in: journey)
+        #expect(instruction.headline == "Board the Yellow Line towards Delta Electronics Bommasandra")
+        #expect(instruction.detail.hasPrefix("Next: Jayadeva Hospital · 3 stops to Central Silk Board"))
+        #expect(!instruction.isAction)
+    }
+
+    /// Pulled out of the first station, it's the next station, not which train to board.
+    @Test func onceMovingItStopsSayingBoard() {
+        let journey = Journey.metro(MetroRouter.route(from: "Ragigudda", to: "Central Silk Board", at: afternoon)!,
+                                    startedAt: afternoon)
+        var progress = JourneyTracker.progress(stops: journey.stops, nearestIndex: 0, elapsed: 0)
+        progress.metresToNext = 400
+        let instruction = JourneyTracker.instruction(for: progress, in: journey)
+        #expect(instruction.headline == "Next: Jayadeva Hospital")
+        #expect(instruction.detail.hasPrefix("400 m away"))
+    }
+
+    @Test func alongTheWayItSaysTheNextStation() {
+        let journey = Journey.metro(MetroRouter.route(from: "Ragigudda", to: "Central Silk Board", at: afternoon)!,
+                                    startedAt: afternoon)
+        let progress = JourneyTracker.progress(stops: journey.stops, nearestIndex: 1, elapsed: 0)
+        let instruction = JourneyTracker.instruction(for: progress, in: journey)
+        #expect(instruction.headline == "Next: BTM Layout")
+        #expect(instruction.detail.hasPrefix("2 stops to Central Silk Board · about "))
+    }
+
+    @Test func theStopBeforeItSaysToGetOffAndWhatsNext() {
+        let journey = Journey.metro(MetroRouter.route(from: "Ragigudda", to: "Central Silk Board", at: afternoon)!,
+                                    startedAt: afternoon)
+        let progress = JourneyTracker.progress(stops: journey.stops, nearestIndex: 2, elapsed: 0)
+        let instruction = JourneyTracker.instruction(for: progress, in: journey, then: "Walk to HSR BDA Complex")
+        #expect(instruction.headline == "Get off at the next stop: Central Silk Board")
+        #expect(instruction.detail.hasSuffix("then walk to HSR BDA Complex"))
+        #expect(instruction.isAction)
+
+        let off = JourneyTracker.progress(stops: journey.stops, nearestIndex: 3, elapsed: 0)
+        let after = JourneyTracker.instruction(for: off, in: journey, then: "Walk to HSR BDA Complex")
+        #expect(after.headline == "You're at Central Silk Board")
+        #expect(after.detail == "Exit, then walk to HSR BDA Complex")
+    }
+
+    @Test func theStopBeforeAChangeSaysWhereToChangeTo() {
+        let journey = Journey.metro(MetroRouter.route(from: indiranagar, to: "Lalbagh", at: afternoon)!, startedAt: afternoon)
+        let changeIndex = journey.stops.firstIndex { $0.name == majestic }!
+        let progress = JourneyTracker.progress(stops: journey.stops, nearestIndex: changeIndex - 1, elapsed: 0)
+        let instruction = JourneyTracker.instruction(for: progress, in: journey)
+        #expect(instruction.headline == "Change at the next stop: \(majestic)")
+        #expect(instruction.detail == "To the Green Line towards Silk Institute")
+        #expect(instruction.isAction)
+        // Further back, the change is mentioned along with the next station.
+        let earlier = JourneyTracker.progress(stops: journey.stops, nearestIndex: 1, elapsed: 0)
+        #expect(JourneyTracker.instruction(for: earlier, in: journey).detail.contains("change at \(majestic)"))
+    }
+
     @Test func summaryAlwaysReadsAsAnEstimate() {
         let progress = JourneyTracker.progress(stops: purpleRide.stops, nearestIndex: 3, elapsed: 0)
         #expect(JourneyTracker.summary(progress).hasPrefix("4 stops · about "))

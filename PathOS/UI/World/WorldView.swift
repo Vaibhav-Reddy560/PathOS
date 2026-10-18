@@ -35,7 +35,7 @@ struct WorldView: View {
                 NavigationMapView(route: state.tripNav?.coordinates ?? [], fix: state.tripFix,
                                   jams: state.tripJams?.shown(on: state.tripNav) ?? [],
                                   destination: state.tripNav?.coordinates.last ?? legEnd,
-                                  places: state.poiDisplay, here: state.location.location?.coordinate,
+                                  places: POIDisplay(), here: state.location.location?.coordinate,
                                   isFollowing: $isFollowingRoute)
                     .ignoresSafeArea()
             } else {
@@ -53,9 +53,9 @@ struct WorldView: View {
             ControlRail(scope: mapScope)
                 // Clear of the turn banner while the map is leading you, and of the taller arrival
                 // banner, with its buttons, once you're there.
-                .padding(.top, isNavigating ? (state.tripArrival != nil ? 290 : 210) : 60)
+                .padding(.top, isNavigating || isRiding ? (state.tripArrival != nil ? 290 : 210) : 60)
                 .padding(.trailing, 12)
-                .animation(PathMotion.resolve(PathMotion.control, reduceMotion: reduceMotion), value: isNavigating)
+                .animation(PathMotion.resolve(PathMotion.control, reduceMotion: reduceMotion), value: isNavigating || isRiding)
         }
         .overlay(alignment: .top) {
             // Attention and urgency tint the top edge of the world, very faintly.
@@ -130,6 +130,9 @@ struct WorldView: View {
                 } else if isNavigating, let trip = state.trip, let status = state.tripStatus {
                     NavigationBanner(trip: trip, status: status)
                         .transition(.move(edge: .top).combined(with: .opacity))
+                } else if isRiding, let instruction = state.rideInstruction {
+                    RideBanner(instruction: instruction)
+                        .transition(.move(edge: .top).combined(with: .opacity))
                 }
             }
             .padding(.top, 6)
@@ -186,6 +189,11 @@ struct WorldView: View {
     /// something else, so the banner and the rail's offset stand down.
     private var isNavigating: Bool {
         (state.isLeadingTheWay || state.tripArrival != nil) && state.deckStop == .collapsed
+    }
+
+    /// On a metro or bus journey followed on its own, with the map there to see it on.
+    private var isRiding: Bool {
+        state.trip == nil && state.transit.journey != nil && state.deckStop == .collapsed
     }
 
     /// On a leg you travel along a road for, with the map showing it — MapKit's map takes over.

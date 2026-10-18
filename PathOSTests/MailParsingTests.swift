@@ -99,4 +99,27 @@ struct MailParsingTests {
         #expect(MailParsing.gmailAppURL(threadID: "18f1a2", accountPosition: 2)?.absoluteString
                 == "googlegmail:///cv=18f1a2/accountId=2&create-new-tab")
     }
+
+    // MARK: Links
+
+    /// A link keeps its words and where it goes; the words read as before.
+    @Test func linksKeepWhereTheyGo() throws {
+        let html = #"<p>Your order has shipped. <a href="https://amazon.in/track?id=1&amp;ref=x" style="color:blue"><span>Track your order</span></a> or <a href='mailto:help@shop.in'>write to us</a>.</p><a href="https://x.in/p"><img src="logo.png"></a>"#
+        let body = MailParsing.readable(html: html)
+        #expect(body.text == "Your order has shipped. Track your order or write to us.")
+        #expect(body.links.count == 2)
+        let track = try #require(body.links.first)
+        let start = body.text.index(body.text.startIndex, offsetBy: track.start)
+        #expect(String(body.text[start...].prefix(track.length)) == "Track your order")
+        #expect(track.url.absoluteString == "https://amazon.in/track?id=1&ref=x")
+        #expect(body.links.last?.url.scheme == "mailto")
+    }
+
+    /// Addresses and phone numbers written out in plain text become links too.
+    @Test func plainTextAddressesAndNumbersAreFound() {
+        let text = "Call 080 4567 8901 or see https://bookmyshow.com/booking/ABC123 for details."
+        let links = MailParsing.detectedLinks(in: text)
+        #expect(links.contains { $0.url.scheme == "tel" })
+        #expect(links.contains { $0.url.absoluteString.hasPrefix("https://bookmyshow.com/booking/ABC123") })
+    }
 }

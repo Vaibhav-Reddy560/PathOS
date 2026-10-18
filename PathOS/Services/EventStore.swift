@@ -12,6 +12,8 @@ final class EventStore {
     @ObservationIgnored private let context: ModelContext
     @ObservationIgnored private let notifications: NotificationService
     @ObservationIgnored private let calendar = EKEventStore()
+    /// Told when an event is added, moved or deleted, so what's next is worked out again.
+    @ObservationIgnored var onPlansChanged: (() -> Void)?
 
     init(context: ModelContext, notifications: NotificationService) {
         self.context = context
@@ -65,14 +67,20 @@ final class EventStore {
         if mirrorToCalendar {
             Task { await mirror(event) }
         }
+        onPlansChanged?()
         return event
     }
 
     func delete(_ event: PathEvent) {
-        Task { await notifications.removePending(withPrefix: event.notificationID) }
+        let leave = "\(LeaveOnTime.reminderPrefix)event:\(event.id.uuidString)."
+        Task {
+            await notifications.removePending(withPrefix: event.notificationID)
+            await notifications.removePending(withPrefix: leave)
+        }
         removeFromCalendar(event)
         context.delete(event)
         persist()
+        onPlansChanged?()
     }
 
     func scheduleReminder(for event: PathEvent) {

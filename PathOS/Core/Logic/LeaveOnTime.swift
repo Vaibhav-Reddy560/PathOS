@@ -77,6 +77,78 @@ nonisolated enum LeaveOnTime {
             .min { $0.start < $1.start }
     }
 
+    // MARK: On your way
+
+    /// What PathOS knows of you heading for the next place, from one check to the next.
+    nonisolated struct Watch: Equatable, Sendable {
+        var id: String
+        /// Where you were, and how far from the place, when it was first watched.
+        var startLatitude: Double
+        var startLongitude: Double
+        var startMeters: Double
+        /// The distance last compared against: a fair bit closer since is setting off.
+        var checkpointMeters: Double
+        var isOnTheWay: Bool
+    }
+
+    /// Faster than a walk: in an auto, a bus, on a bike.
+    static let movingSpeed = 2.0
+    /// Moving within this of straight at the place is heading for it. Roads bend; the whole of a
+    /// city isn't the way there.
+    static let headingTolerance = 60.0
+    /// Closer by this since the last check, or this far from where you were first seen and
+    /// closer than you were, and you've set off.
+    static let progressMeters = 150.0
+    static let leftMeters = 300.0
+
+    /// Whether you're on your way to the next place, from everything PathOS can see at this
+    /// check: closer than the check before, gone from where you were when it was first watched,
+    /// or moving at more than a walk towards it right now — which is what's known the moment you
+    /// open PathOS in an auto, before any two checks could be compared. Only closer-by-150-m
+    /// used to count, and with checks minutes apart in your pocket, it said you hadn't left home
+    /// from halfway there.
+    static func watch(_ previous: Watch?, id: String, here: CLLocationCoordinate2D, distance: Double,
+                      speed: Double?, course: Double?, bearingToPlace: Double) -> Watch {
+        let heading = isHeading(speed: speed, course: course, towards: bearingToPlace)
+        guard var watch = previous, watch.id == id else {
+            return Watch(id: id, startLatitude: here.latitude, startLongitude: here.longitude, startMeters: distance,
+                         checkpointMeters: distance, isOnTheWay: heading)
+        }
+        let start = CLLocationCoordinate2D(latitude: watch.startLatitude, longitude: watch.startLongitude)
+        let hasLeft = GeoMath.distance(from: start, to: here) >= leftMeters && distance < watch.startMeters - progressMeters
+        if distance < watch.checkpointMeters - progressMeters {
+            watch.checkpointMeters = distance
+            watch.isOnTheWay = true
+        } else if distance > watch.checkpointMeters + progressMeters {
+            // Heading away again: not on your way, unless you're plainly moving towards it now.
+            watch.checkpointMeters = distance
+            watch.isOnTheWay = heading
+        } else if heading || hasLeft {
+            watch.isOnTheWay = true
+        }
+        return watch
+    }
+
+    /// Moving faster than a walk, roughly towards the place.
+    static func isHeading(speed: Double?, course: Double?, towards bearing: Double) -> Bool {
+        guard let speed, speed >= movingSpeed, let course, course >= 0 else { return false }
+        let off = abs((course - bearing + 540).truncatingRemainder(dividingBy: 360) - 180)
+        return off <= headingTolerance
+    }
+
+    // MARK: Reminders
+
+    static let reminderPrefix = "pathos.leave."
+
+    /// Whether a waiting "time to leave" should go: anything but the reminders for `keeping`,
+    /// the one thing that's next. Something deleted, skipped, dropped or taken the day off from
+    /// is no longer next, so its reminders go with it — they used to fire regardless.
+    static func isStaleReminder(_ identifier: String, keeping id: String?) -> Bool {
+        guard identifier.hasPrefix(reminderPrefix) else { return false }
+        guard let id else { return true }
+        return !identifier.hasPrefix(reminderPrefix + id + ".")
+    }
+
     /// On foot for a short hop, by road otherwise, which is what Apple Maps can time in India.
     static let walkingDistance = 1_500.0
 

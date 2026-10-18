@@ -111,6 +111,8 @@ final class DayLog {
     var missedIDs: [String] = []
     /// What you marked done, and when: an event finished early says how long it really took.
     var completions: [ItemCompletion] = []
+    /// Something to remember about the day, written on it or ahead of it.
+    var note: String = ""
 
     init(dayStart: Date) {
         self.dayStart = dayStart

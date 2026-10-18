@@ -15,6 +15,9 @@ nonisolated struct ActiveTrip: Sendable {
     /// Where you set off from, which says how short the first leg is and so how near its end
     /// counts as arriving.
     var origin: CLLocationCoordinate2D?
+    /// The ride, stop by stop, for a way built around a metro or bus journey you planned station
+    /// to station: it's followed from the moment you reach the first one.
+    var ride: Journey?
 
     var coordinate: CLLocationCoordinate2D {
         CLLocationCoordinate2D(latitude: latitude, longitude: longitude)
@@ -90,6 +93,7 @@ extension AppState {
         let origin = location.location?.coordinate
         tripArrival = nil
         stoppedNearEndSince = nil
+        tripLegsReached = 0
         trip = ActiveTrip(option: option, destinationName: name, startedAt: startedAt, arriveBy: arriveBy,
                           latitude: destination.latitude, longitude: destination.longitude, origin: origin)
         // The map that leads you needs both of these, and both used to arrive a frame or two later:
@@ -127,7 +131,7 @@ extension AppState {
               let first = journey.stops.first, let last = journey.stops.last else { return }
         let toStation = here.distance(from: CLLocation(latitude: first.latitude, longitude: first.longitude))
         // Already at the station: the journey tracker follows the ride stop by stop on its own.
-        guard toStation > TripGuide.stationRadius else { return }
+        guard toStation > TripGuide.stationApproachRadius else { return }
 
         let byRoad = toStation > DoorToDoor.walkToStation
         let measured = await places.hop(to: first.coordinate, from: here, transport: byRoad ? .automobile : .walking)
@@ -158,21 +162,45 @@ extension AppState {
             fareLow: access.headlineFare?.estimate.low ?? 0,
             fareHigh: access.headlineFare?.estimate.high ?? 0
         )
+        tripLegsReached = 0
         trip = ActiveTrip(option: option, destinationName: last.name, startedAt: Date(), arriveBy: nil,
-                          latitude: last.latitude, longitude: last.longitude, origin: location.location?.coordinate)
+                          latitude: last.latitude, longitude: last.longitude, origin: location.location?.coordinate,
+                          ride: journey)
         announcedTripLeg = 0
         announcedTripDelay = 0
         await refreshTrip()
     }
 
-    /// The stations of the ride you're on, for the map. Nil unless you're actually on it.
+    /// The stations of the ride you're on, for the map. Nil unless you're actually on it: a
+    /// journey being followed stop by stop, or the ride leg of a way.
     var rideBeingFollowed: [JourneyStop]? {
+        if let journey = transit.journey { return journey.stops }
         guard let trip, let status = tripStatus, !status.hasArrived else { return nil }
         let leg = trip.option.legs[min(status.legIndex, trip.option.legs.count - 1)]
         guard leg.mode == .metro || leg.mode == .bus else { return nil }
-        if let journey = transit.journey { return journey.stops }
-        guard let route = leg.metro else { return nil }
-        return Journey.metro(route).stops
+        return leg.metro.map { Journey.metro($0).stops } ?? trip.ride?.stops
+    }
+
+    /// What to do on the ride you're on — the next station, a change, getting off — and, when
+    /// it's part of a way, what comes after it.
+    var rideInstruction: JourneyTracker.Instruction? {
+        guard let journey = transit.journey, let progress = transit.progress else { return nil }
+        let after = trip.flatMap { trip in
+            tripStatus.flatMap { trip.option.legs[safe: $0.legIndex + 1] }
+        }
+        return JourneyTracker.instruction(for: progress, in: journey, then: after.map(TripGuide.instruction(for:)))
+    }
+
+    /// Each station reached on the ride is felt, and — with directions spoken — said: the next
+    /// one, or the change or the stop to get off at when that's next.
+    func announceStation() {
+        guard let instruction = rideInstruction else { return }
+        if isForeground {
+            if instruction.isAction { haptics.alert() } else { haptics.tick() }
+        }
+        if speaksDirections {
+            say(instruction.headline.replacingOccurrences(of: ": ", with: ", "))
+        }
     }
 
     /// Done with a way that has arrived: put away without the "stopped following" note, since you
@@ -192,6 +220,7 @@ extension AppState {
         trip = nil
         tripArrival = nil
         stoppedNearEndSince = nil
+        tripLegsReached = 0
         tripStatus = nil
         tripNav = nil
         tripStep = nil
@@ -259,9 +288,7 @@ extension AppState {
             return
         }
 
-        guard var status = TripGuide.status(for: trip.option, startedAt: trip.startedAt, now: now,
-                                            location: here.coordinate, origin: trip.origin,
-                                            roadEnd: roadEnd(of: trip)) else { return }
+        guard var status = progress(of: trip, now: now) else { return }
         let leg = trip.option.legs[min(status.legIndex, trip.option.legs.count - 1)]
         let isRoad = leg.mode != .metro && leg.mode != .bus
 
@@ -403,6 +430,20 @@ extension AppState {
         lastTrafficCheck = isNewLeg ? .distantPast : now.addingTimeInterval(-Self.trafficCheckInterval + 10)
     }
 
+    /// Where you've got to along the way, from where you are now. Only ever forward: a leg once
+    /// reached stays reached, whatever the next fix by a station's gate says.
+    func progress(of trip: ActiveTrip, now: Date) -> TripGuide.Status? {
+        let here = location.location?.coordinate
+        guard let status = TripGuide.status(for: trip.option, startedAt: trip.startedAt, now: now, location: here,
+                                            origin: trip.origin, roadEnd: roadEnd(of: trip),
+                                            reached: tripLegsReached) else { return nil }
+        // Only what the map saw counts as reached; the clock's guess underground doesn't.
+        if here != nil {
+            tripLegsReached = max(tripLegsReached, status.hasArrived ? trip.option.legs.count : status.legIndex)
+        }
+        return status
+    }
+
     /// The end of the road route for the leg it belongs to, and whether you've stopped near it for
     /// long enough to count as having parked.
     func roadEnd(of trip: ActiveTrip, now: Date = Date()) -> TripGuide.RoadEnd? {
@@ -536,9 +577,7 @@ extension AppState {
     func refreshTrip(now: Date = Date()) async {
         // Arrived: what's up now is the arrival, until you're done with it.
         guard let trip, tripArrival == nil else { return }
-        guard let planned = TripGuide.status(for: trip.option, startedAt: trip.startedAt, now: now,
-                                             location: location.location?.coordinate, origin: trip.origin,
-                                             roadEnd: roadEnd(of: trip)) else { return }
+        guard let planned = progress(of: trip, now: now) else { return }
         let status = liveAdjusted(planned, trip: trip, now: now)
         tripStatus = status
 
@@ -560,12 +599,14 @@ extension AppState {
             return
         }
 
-        // The metro leg is followed stop by stop by the journey tracker, which knows about
-        // changes and getting off; the trip hands over to it and takes back afterwards.
+        // The ride is followed stop by stop by the journey tracker, which knows about changes and
+        // getting off; the trip hands over to it and takes back afterwards. A journey planned
+        // station to station brings its own stops, and its clock starts as you reach the first.
         let leg = trip.option.legs[status.legIndex]
-        if leg.mode == .metro, let route = leg.metro {
-            if transit.journey == nil {
-                transit.start(Journey.metro(route, startedAt: now))
+        if leg.mode == .metro || leg.mode == .bus {
+            if transit.journey == nil, var ride = trip.ride ?? leg.metro.map({ Journey.metro($0) }) {
+                ride.startedAt = now
+                transit.start(ride)
             }
         } else if transit.journey != nil {
             transit.end()

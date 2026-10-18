@@ -23,6 +23,7 @@ struct NowDeck: View {
                 if let journey = state.transit.journey, let progress = state.transit.progress {
                     ActiveJourneyCard(journey: journey, progress: progress)
                 }
+                DeliveriesCard()
                 environmentSection
                 commuteSection
                 if !hasHomeAndWork {
@@ -191,9 +192,13 @@ struct NowDeck: View {
                     EnvironmentTile(
                         symbol: "mountain.2.fill",
                         label: "Altitude",
-                        value: barometer.absoluteAltitudeMeters.map { "\(Int($0.rounded()))" } ?? "—",
+                        value: barometer.altitude.map { "\(Int($0.metres.rounded()))" } ?? "—",
                         unit: "m",
-                        detail: "Above sea level"
+                        // How sure it is, so a number isn't trusted further than it deserves.
+                        detail: barometer.altitude.map {
+                            $0.isSettled ? "Above sea level · ± \(Int($0.accuracy.rounded())) m"
+                                         : "Settling · ± \(Int($0.accuracy.rounded())) m"
+                        } ?? "Waiting for a good reading"
                     )
                 }
                 EnvironmentTile(
@@ -215,6 +220,21 @@ struct NowDeck: View {
         }
     }
 
+    /// When to set off today, from the day's own plan: the next class or event somewhere. Nothing
+    /// on a day off, a holiday, or a day with nowhere to be — a learned "you usually leave at
+    /// 11:18" said the same thing every Monday whatever the Monday held.
+    private var leaveByNote: String? {
+        guard let departure = state.departure, !departure.isOnTheWay, !state.isTravelling else { return nil }
+        switch departure.status {
+        case .inGoodTime(let leaveBy), .leaveSoon(let leaveBy):
+            return "Leave by \(leaveBy.formatted(date: .omitted, time: .shortened))"
+        case .leaveNow:
+            return "Leave now"
+        case .there, .late:
+            return nil
+        }
+    }
+
     /// Travel times and the nearest metro, one way to plan a ride, and cabs. There used to be a
     /// Start commute button beside the planner: it put these same times on the Lock Screen, read as
     /// a second way to travel, and had no end. Pinning the context does its job now.
@@ -222,7 +242,7 @@ struct NowDeck: View {
         VStack(alignment: .leading, spacing: 10) {
             DeckSectionHeader(
                 title: "Getting around",
-                trailing: state.routine.todaysDeparture().map { "You usually leave \(RoutineLearner.format(minutes: $0))" }
+                trailing: leaveByNote
             )
             // What's actually next leads, whether that's a class, an event or work. Until you
             // pick a way: from then on the card at the top of Now is the journey itself, and a

@@ -8,6 +8,14 @@ struct MonthCalendar: View {
     @Binding var selected: Date
     /// The roles of up to three things on a date, for its dots.
     let marks: (Date) -> [SignalRole]
+    /// A holiday on the date, or a note left for it.
+    var flags: (Date) -> Flags = { _ in [] }
+
+    struct Flags: OptionSet {
+        let rawValue: Int
+        static let holiday = Flags(rawValue: 1 << 0)
+        static let note = Flags(rawValue: 1 << 1)
+    }
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     private let columns = Array(repeating: GridItem(.flexible(), spacing: 4), count: 7)
@@ -90,6 +98,7 @@ struct MonthCalendar: View {
         let isToday = calendar.isDateInToday(day)
         let dots = marks(day)
         let count = dots.count
+        let flags = flags(day)
 
         return Button {
             withAnimation(PathMotion.resolve(PathMotion.control, reduceMotion: reduceMotion)) {
@@ -98,14 +107,23 @@ struct MonthCalendar: View {
             }
         } label: {
             VStack(spacing: 4) {
+                // A holiday's date in Ion, the world's colour: it's the calendar's, not yours.
                 Text(day.formatted(.dateTime.day()))
-                    .font(.subheadline.weight(isToday || isSelected ? .bold : .regular).monospacedDigit())
-                    .foregroundStyle(isSelected ? Color.void : isToday ? .aurora : inMonth ? .ice : .mist.opacity(0.5))
+                    .font(.subheadline.weight(isToday || isSelected || flags.contains(.holiday) ? .bold : .regular).monospacedDigit())
+                    .foregroundStyle(isSelected ? Color.void : isToday ? .aurora
+                                     : flags.contains(.holiday) ? .ion.opacity(inMonth ? 1 : 0.5)
+                                     : inMonth ? .ice : .mist.opacity(0.5))
                 HStack(spacing: 3) {
                     ForEach(Array(dots.enumerated()), id: \.offset) { _, role in
                         Circle()
                             .fill(isSelected ? Color.void : role.color.opacity(inMonth ? 1 : 0.5))
                             .frame(width: 5, height: 5)
+                    }
+                    // A note left for the day: a short bar beside its dots.
+                    if flags.contains(.note) {
+                        Capsule()
+                            .fill(isSelected ? Color.void : Color.ice.opacity(inMonth ? 0.8 : 0.4))
+                            .frame(width: 8, height: 3)
                     }
                 }
                 .frame(height: 5)
@@ -122,7 +140,11 @@ struct MonthCalendar: View {
         }
         .buttonStyle(.plain)
         .accessibilityLabel(day.formatted(.dateTime.weekday(.wide).day().month(.wide)))
-        .accessibilityValue(count == 0 ? "Nothing planned" : count == 3 ? "3 or more things" : "\(count) \(count == 1 ? "thing" : "things")")
+        .accessibilityValue([
+            flags.contains(.holiday) ? "Holiday" : nil,
+            count == 0 ? "Nothing planned" : count == 3 ? "3 or more things" : "\(count) \(count == 1 ? "thing" : "things")",
+            flags.contains(.note) ? "Has a note" : nil,
+        ].compactMap { $0 }.joined(separator: ", "))
         .accessibilityAddTraits(isSelected ? .isSelected : [])
     }
 

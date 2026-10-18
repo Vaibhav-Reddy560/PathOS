@@ -122,6 +122,7 @@ final class AppState {
     /// TomTom's traffic on the route you're driving, when you've given PathOS a key.
     let routeTraffic: TrafficService
     let timetable: TimetableService
+    let holidays: HolidayStore
     let transit: TransitService
     let trips: TripStore
     let snap: SnapToActionService
@@ -301,6 +302,9 @@ final class AppState {
     @ObservationIgnored var lastJamCheck = Date.distantPast
     /// When you stopped within a short walk of the end of the road, while you're still stopped.
     @ObservationIgnored var stoppedNearEndSince: Date?
+    /// The furthest the map has seen you get along the way being followed, in legs: progress
+    /// never goes back from it.
+    @ObservationIgnored var tripLegsReached = 0
     @ObservationIgnored var isCheckingJams = false
     @ObservationIgnored var lastTripActivityUpdate = Date.distantPast
     @ObservationIgnored var lastTripActivityStep: Int?
@@ -313,8 +317,13 @@ final class AppState {
     @ObservationIgnored var announcedTripDelay = 0
     /// The destination whose ways to get there have already been offered, so it's said once.
     @ObservationIgnored var offeredWaysFor: String?
-    /// Where you were, for the next place, when you last moved a fair way: closer since means you're on your way.
-    @ObservationIgnored private var departureCheckpoint: (id: String, meters: Double, isOnTheWay: Bool)?
+    /// Whether you've set off for the next place, from one check to the next.
+    @ObservationIgnored private var departureWatch: LeaveOnTime.Watch?
+    /// What the leave reminders were last squared up against: the next thing's id, or none. Done
+    /// on launch too, for reminders left from before.
+    @ObservationIgnored private var leaveRemindersSettled: (id: String?, at: Date)?
+    /// A burst of changes — a mail import adding several events — is worked through once.
+    @ObservationIgnored private var plansChangedTask: Task<Void, Never>?
     /// The leave-by the reminders are set for, so they're only rescheduled when it moves.
     @ObservationIgnored private var scheduledLeaveBy: (id: String, at: Date)?
     /// A note just brought back by arriving at its spot, which the pinned context shows for a while.
@@ -332,7 +341,8 @@ final class AppState {
             modelContainer = try ModelContainer(
                 for: SavedPlace.self, SpatialNote.self, ScanRecord.self, Expense.self, DepartureLog.self,
                 PathEvent.self, DayLog.self, NotePhoto.self, TimetableEntry.self, TimetableException.self,
-                Trip.self, TripLeg.self, MailSuggestion.self, Reminder.self
+                Trip.self, TripLeg.self, MailSuggestion.self, Reminder.self, Holiday.self,
+                RideRecord.self, OrderUpdate.self
             )
         } catch {
             fatalError("PathOS couldn't open its storage: \(error)")
@@ -369,6 +379,7 @@ final class AppState {
         routeTraffic = TrafficService()
         let timetable = TimetableService(context: modelContext, ai: ai, notifications: notifications)
         self.timetable = timetable
+        holidays = HolidayStore(context: modelContext, timetable: timetable)
         transit = TransitService(notifications: notifications)
         trips = TripStore(context: modelContext, notifications: notifications)
         let geocoder = PlaceGeocoder(places: places)
@@ -387,6 +398,10 @@ final class AppState {
         backups = BackupService(context: modelContext)
 
         haptics.isAdaptive = adaptiveSound
+        mail.whereYouAre = { [weak self] in self?.location.location }
+        // Deleted, skipped, a day off: what's next and its reminders follow at once.
+        eventStore.onPlansChanged = { [weak self] in self?.plansChanged() }
+        timetable.onPlansChanged = { [weak self] in self?.plansChanged() }
         notifications.onOpenURL = { [weak self] url in
             self?.handle(url: url)
         }
@@ -397,6 +412,9 @@ final class AppState {
         location.onFix = { [weak self] fix in
             guard let self else { return }
             recordDistance(to: fix)
+            if isForeground {
+                barometer.recordGPS(altitude: fix.altitude, verticalAccuracy: fix.verticalAccuracy, at: fix.timestamp)
+            }
             // Following a way, the map moves with the fix rather than with a timer: a line trimmed
             // on the next tick of a one-second loop always trails the puck.
             if trip != nil {
@@ -442,6 +460,8 @@ final class AppState {
         // context keep up with the phone in your pocket.
         location.setSignificantChangesActive(isContextPinned || location.hasAlwaysAccess)
         await notifications.refreshStatus()
+        // The public holidays that ship with PathOS, ready to be asked about.
+        holidays.addBundled()
         await vault.syncGeofences(userLocation: location.location)
         scheduleBackgroundRefresh()
         // A copy of everything, every couple of days, so the data outlives the app itself.
@@ -563,7 +583,7 @@ final class AppState {
         recordAttendance()
         await refreshTrip()
         await refreshPinnedContext()
-        await routine.rescheduleReminders()
+        await routine.removeWeeklyReminders()
         eventStore.refreshReminders()
         reminders.refreshAlerts()
         timetable.refreshReminders()
@@ -689,7 +709,6 @@ final class AppState {
     private func didLeave(_ place: SavedPlace) async {
         if place.kind == .home {
             routine.logDeparture(from: .home)
-            await routine.rescheduleReminders()
         }
 
         let here = await location.currentLocation() ?? CLLocation(latitude: place.latitude, longitude: place.longitude)
@@ -784,6 +803,14 @@ final class AppState {
                 case "keep": keepDeparture(id)
                 default: showDeck(.day)
                 }
+            }
+        case "ticket":
+            // From "Added from BookMyShow": Undo takes it off your Day; a tap shows it there.
+            if path.first == "undo", let id = value("event").flatMap(UUID.init(uuidString:)) {
+                mail.undoTicket(eventID: id)
+                showToast("Taken off your Day", symbol: "arrow.uturn.backward.circle.fill")
+            } else {
+                showDeck(.day)
             }
         case "timetable": isTimetablePresented = true
         case "event": eventSheet = EventSheetRequest(editing: nil, text: value("text"))
@@ -943,7 +970,9 @@ final class AppState {
                         isArrivingNext: progress.isArrivingNext,
                         symbol: journey.symbol,
                         changeStation: progress.isChangingNext ? progress.nextStationIndex.map(journey.stationName(at:)) : nil,
-                        changeInstruction: progress.isChangingNext ? progress.nextStationIndex.flatMap { journey.stops[safe: $0]?.changeInstruction } : nil
+                        changeInstruction: progress.isChangingNext ? progress.nextStationIndex.flatMap { journey.stops[safe: $0]?.changeInstruction } : nil,
+                        nextStation: progress.nextStationIndex.map(journey.stationName(at:)),
+                        instruction: rideInstruction
                     )
                 }
             },
@@ -958,6 +987,9 @@ final class AppState {
                         isLate: progress.isLate
                     )
                 }
+            },
+            delivery: outForDelivery.map {
+                AlertSnapshot.Delivery(title: $0.title, service: $0.service.name, symbol: $0.service.symbol)
             },
             nextEvent: nextEvent,
             // On the way already: "leave by" is for before you set off.
@@ -994,11 +1026,29 @@ final class AppState {
         )
     }
 
+    /// The order most recently said to be out for delivery, while it still is.
+    private var outForDelivery: OrderUpdate? {
+        let status = ServiceMail.OrderStatus.outForDelivery.rawValue
+        let descriptor = FetchDescriptor<OrderUpdate>(predicate: #Predicate { $0.statusRaw == status },
+                                                      sortBy: [SortDescriptor(\.updatedAt, order: .reverse)])
+        return ((try? modelContainer.mainContext.fetch(descriptor)) ?? []).first { $0.isActive() }
+    }
+
     /// Sends a notification for anything that has *newly* become worth interrupting for.
     /// Silent while the app is open, because the island is already showing it.
     func notifyNewAlerts() {
-        guard !isForeground, notifications.isAuthorized else { return }
         let alerts = ambientAlerts
+        // Anything announced that's no longer true takes back its repeat still waiting.
+        let withdrawn = AmbientAlerts.withdrawn(previous: announcedAlertIDs, current: alerts)
+        if !withdrawn.isEmpty {
+            Task {
+                await notifications.removePending { id in
+                    withdrawn.contains { id == "pathos.alert.\($0)" || id.hasPrefix("pathos.alert.\($0).") }
+                }
+            }
+            announcedAlertIDs.subtract(withdrawn)
+        }
+        guard !isForeground, notifications.isAuthorized else { return }
         for alert in AmbientAlerts.notifiable(previous: announcedAlertIDs, current: alerts) {
             // How hard to try depends on what it is and on the last thing PathOS heard: a buzz
             // in traffic is easily missed, so an urgent one in a loud place says itself twice.
@@ -1176,7 +1226,11 @@ final class AppState {
             // used to fall outside this, so its stops never advanced.
             while !Task.isCancelled, transit.journey != nil || trackedLegID != nil || trip != nil {
                 if transit.journey != nil {
+                    let before = transit.progress?.currentIndex
                     transit.update(location: location.location)
+                    if let before, let after = transit.progress?.currentIndex, after > before {
+                        announceStation()
+                    }
                     await updateJourneyActivity()
                 }
                 if trackedLegID != nil {
@@ -1294,18 +1348,15 @@ final class AppState {
 
     /// Mirrors journey progress onto the Lock Screen and Dynamic Island.
     func updateJourneyActivity() async {
-        guard let journey = transit.journey, let progress = transit.progress else { return }
-        let changeHere = progress.isChangingNext ? progress.nextStationIndex.flatMap { journey.stops[safe: $0]?.changeInstruction } : nil
+        guard let progress = transit.progress, let instruction = rideInstruction else { return }
         let state = PathOSActivityAttributes.ContentState(
             mode: .journey,
-            title: "To \(journey.destination)",
-            subtitle: progress.hasArrived
-                ? "You've arrived"
-                : changeHere.map { "Next stop \(journey.stationName(at: progress.nextStationIndex ?? 0)): \($0.prefix(1).lowercased() + $0.dropFirst())" }
-                    ?? "\(journey.lineName) · \(JourneyTracker.summary(progress)) (estimated)",
-            symbol: changeHere == nil ? journey.symbol : "arrow.triangle.swap",
+            title: instruction.headline,
+            subtitle: instruction.detail,
+            symbol: instruction.symbol,
             etaMinutes: progress.estimatedMinutesRemaining,
-            deepLink: URL(string: "pathos://dashboard")
+            deepLink: URL(string: "pathos://dashboard"),
+            role: instruction.isAction ? .attention : .you
         )
         await liveActivities.showIfChanged(state, lane: .journey, staleAfter: 3_600, relevance: 95)
     }
@@ -1509,8 +1560,9 @@ final class AppState {
     /// you are, asked again once you've moved or a few minutes have passed.
     func refreshDeparture(now: Date = Date()) async {
         let dropped = droppedDepartureIDs
-        guard let here = location.location,
-              let next = LeaveOnTime.next(in: destinations(on: now).filter { !dropped.contains($0.id) }, now: now) else {
+        let next = LeaveOnTime.next(in: destinations(on: now).filter { !dropped.contains($0.id) }, now: now)
+        await settleLeaveReminders(keeping: next?.id)
+        guard let here = location.location, let next else {
             departure = nil
             return
         }
@@ -1530,19 +1582,16 @@ final class AppState {
             }
         }
 
-        // On your way: a fair bit closer than when last checked, until you head away again.
-        var checkpoint: (id: String, meters: Double, isOnTheWay: Bool) =
-            departureCheckpoint?.id == next.id ? departureCheckpoint! : (next.id, distance, false)
-        if distance < checkpoint.meters - 150 {
-            checkpoint = (next.id, distance, true)
-        } else if distance > checkpoint.meters + 150 {
-            checkpoint = (next.id, distance, false)
-        }
-        departureCheckpoint = checkpoint
+        // On your way: closer than last time, gone from where you were, or moving towards it now.
+        let watch = LeaveOnTime.watch(departureWatch, id: next.id, here: here.coordinate, distance: distance,
+                                      speed: here.speed >= 0 ? here.speed : nil,
+                                      course: here.course >= 0 ? here.course : nil,
+                                      bearingToPlace: GeoMath.bearing(from: here.coordinate, to: destination.coordinate))
+        departureWatch = watch
 
         let status = LeaveOnTime.status(start: next.start, travel: TimeInterval(minutes * 60), distance: distance, now: now)
         // Following a way there is being on your way, whatever the distance says so far.
-        let isOnTheWay = checkpoint.isOnTheWay || isTravelling
+        let isOnTheWay = watch.isOnTheWay || isTravelling
         departure = AlertSnapshot.Departure(
             id: next.id, title: next.title, placeName: next.placeName, start: next.start,
             travelMinutes: minutes, byRoad: byRoad, status: status, isOnTheWay: isOnTheWay,
@@ -1550,8 +1599,31 @@ final class AppState {
             isAskingToDrop: LeaveOnTime.asksToDrop(status, isOnTheWay: isOnTheWay) && !keptDepartureIDs.contains(next.id)
         )
         scheduleLeaveReminders(for: departure!, now: now)
-        guard !isTravelling else { return }
+        guard !isOnTheWay else { return }
         await offerWays(to: next, travelMinutes: minutes, status: status, from: here, now: now)
+    }
+
+    /// Takes back every "time to leave" waiting for anything but what's next. Checked whenever
+    /// what's next changes, and every few minutes besides — something deleted, skipped, dropped
+    /// or taken the day off from is no longer next, and its reminders used to fire regardless.
+    private func settleLeaveReminders(keeping id: String?, now: Date = Date()) async {
+        if let settled = leaveRemindersSettled, settled.id == id, now.timeIntervalSince(settled.at) < 5 * 60 { return }
+        leaveRemindersSettled = (id, now)
+        if scheduledLeaveBy?.id != id { scheduledLeaveBy = nil }
+        await notifications.removePending { LeaveOnTime.isStaleReminder($0, keeping: id) }
+    }
+
+    /// Something you'd planned changed — deleted, skipped, a day off: what's next, and its
+    /// reminders, are worked out again at once rather than at the next check.
+    func plansChanged() {
+        leaveRemindersSettled = nil
+        plansChangedTask?.cancel()
+        plansChangedTask = Task {
+            try? await Task.sleep(for: .milliseconds(400))
+            guard !Task.isCancelled else { return }
+            await refreshDeparture()
+            await refreshPinnedContext()
+        }
     }
 
     /// How long you have in hand beyond the travel time before something starts. Past this, the
@@ -1626,9 +1698,9 @@ final class AppState {
     /// Notifications ten minutes before you need to leave and when it's time, so they come with
     /// PathOS closed. Cleared once you're there or it's already time.
     private func scheduleLeaveReminders(for departure: AlertSnapshot.Departure, now: Date) {
-        let prefix = "pathos.leave.\(departure.id)"
+        let prefix = "pathos.leave.\(departure.id)."
         // Already set off: "time to leave" would only arrive while you're in the auto.
-        if isTravelling {
+        if departure.isOnTheWay {
             if scheduledLeaveBy?.id == departure.id {
                 scheduledLeaveBy = nil
                 Task { await notifications.removePending(withPrefix: prefix) }
@@ -1654,14 +1726,14 @@ final class AppState {
         let soon = leaveBy.addingTimeInterval(-10 * 60)
         if soon > now {
             notifications.schedule(
-                id: prefix + ".soon", at: soon,
+                id: prefix + "soon", at: soon,
                 title: "Leave in 10 min for \(departure.title)",
                 body: "\(departure.travelText). It starts at \(starts).",
                 category: NotificationService.Category.event, link: URL(string: "pathos://day"), timeSensitive: true
             )
         }
         notifications.schedule(
-            id: prefix + ".now", at: leaveBy,
+            id: prefix + "now", at: leaveBy,
             title: "Time to leave for \(departure.title)",
             body: "\(departure.travelText). It starts at \(starts).",
             category: NotificationService.Category.event, link: URL(string: "pathos://day"), timeSensitive: true
@@ -1700,9 +1772,6 @@ final class AppState {
     @discardableResult
     func refreshPinnedContext(now: Date = Date()) async -> Bool {
         guard isContextPinned else { return false }
-        if context.venue.kind == .home, routine.todaysDeparture(now: now) != nil {
-            await refreshCommute()
-        }
         let content = LockScreenContext.content(for: lockScreenInputs(now: now))
         return await liveActivities.showIfChanged(content.state, lane: .context, staleDate: content.staleDate, relevance: 60)
     }
@@ -1743,12 +1812,6 @@ final class AppState {
         if let surfaced = surfacedMemory, now.timeIntervalSince(surfaced.at) > 15 * 60 {
             surfacedMemory = nil
         }
-        var commuteLine: LockScreenContext.Commute?
-        if context.venue.kind == .home, let usual = routine.todaysDeparture(now: now),
-           let commute, let name = commute.destinationName,
-           let headline = TravelTimes.headline(car: commute.carMinutes, transit: commute.transitMinutes, walk: commute.walkMinutes) {
-            commuteLine = .init(destination: name, minutes: headline.minutes, mode: headline.mode, usualDeparture: usual)
-        }
         return LockScreenContext.Inputs(
             venueName: context.venue.name ?? context.venue.kind.label,
             venueSymbol: context.venue.kind.symbol,
@@ -1759,7 +1822,6 @@ final class AppState {
             agenda: agenda(on: now).filter { !droppedDepartureIDs.contains($0.id) },
             // The journey has its own card, which says how it's going.
             departure: isTravelling ? nil : departure,
-            commute: commuteLine,
             memory: surfacedMemory?.memory,
             now: now
         )
@@ -1821,6 +1883,112 @@ final class AppState {
         log.attendedIDs = went.sorted()
         log.missedIDs = skipped.sorted()
         try? modelContainer.mainContext.save()
+    }
+
+    // MARK: Notes for a day
+
+    /// Something to remember about a day. Left ahead of the day, it's brought up that morning.
+    func setNote(_ text: String, on day: Date, now: Date = Date()) {
+        let note = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        let log = todaysLog(for: day)
+        guard log.note != note else { return }
+        log.note = note
+        try? modelContainer.mainContext.save()
+        let id = Self.noteNotificationID(for: day)
+        Task {
+            await notifications.removePending(withPrefix: id)
+            guard !note.isEmpty, let morning = Self.noteMorning(of: day), morning > now else { return }
+            notifications.schedule(
+                id: id, at: morning, title: "Today",
+                body: note, category: NotificationService.Category.event, link: URL(string: "pathos://day")
+            )
+        }
+    }
+
+    /// The note left for a day, if any.
+    func note(on day: Date) -> String {
+        let dayStart = Calendar.current.startOfDay(for: day)
+        let descriptor = FetchDescriptor<DayLog>(predicate: #Predicate { $0.dayStart == dayStart })
+        return (try? modelContainer.mainContext.fetch(descriptor).first)?.note ?? ""
+    }
+
+    /// Half past eight on the day: before the day's first things, after you're up.
+    static func noteMorning(of day: Date, calendar: Calendar = .current) -> Date? {
+        calendar.date(bySettingHour: 8, minute: 30, second: 0, of: day)
+    }
+
+    static func noteNotificationID(for day: Date, calendar: Calendar = .current) -> String {
+        let parts = calendar.dateComponents([.year, .month, .day], from: day)
+        return "pathos.daynote.\(parts.year ?? 0)-\(parts.month ?? 0)-\(parts.day ?? 0)"
+    }
+
+    // MARK: Overview
+
+    /// What the days in a span added up to: what you went to and missed, days off and holidays,
+    /// tasks done and how far you went. Each day's plan is read again, so something missed can
+    /// be named however long ago it was.
+    func overview(_ span: Overview.Span, now: Date = Date()) -> Overview.Summary {
+        let calendar = Calendar.current
+        let today = calendar.startOfDay(for: now)
+        let logs = (try? modelContainer.mainContext.fetch(FetchDescriptor<DayLog>())) ?? []
+        let logsByDay = Dictionary(logs.map { (calendar.startOfDay(for: $0.dayStart), $0) }, uniquingKeysWith: { first, _ in first })
+        let earliest = logs.map(\.dayStart).min().map(calendar.startOfDay(for:)) ?? today
+        // A year at most: further back, the weekly schedule of the time isn't known anyway.
+        let floor = calendar.date(byAdding: .day, value: -365, to: today) ?? today
+        let start = max(span.start(now: now, calendar: calendar).map(calendar.startOfDay(for:)) ?? earliest, floor)
+
+        let dayOffs = timetable.exceptions().filter { $0.entryID == nil }
+        let holidaysOff = holidays.all().filter { $0.isOff == true }
+        let finished = (try? modelContainer.mainContext.fetch(FetchDescriptor<Reminder>())) ?? []
+        let mirrored = Set(eventStore.all().compactMap(\.calendarEventID))
+        let tomorrow = calendar.date(byAdding: .day, value: 1, to: today) ?? today
+        let calendarItems = CalendarEventSource.items(from: start, to: tomorrow, excluding: mirrored).filter { !$0.isAllDay }
+        // Read once, not once a day: a year of days asked SwiftData for everything seven hundred times.
+        let slots = timetable.entries().map(TimetableService.slot)
+        let skips = timetable.exceptions().map(TimetableService.skip)
+        let plannedEvents = eventStore.all().map(EventStore.plannedEvent)
+
+        var days: [Overview.Day] = []
+        var day = start
+        while day <= today {
+            let log = logsByDay[day]
+            let dayEnd = calendar.date(byAdding: .day, value: 1, to: day) ?? day
+            var planned = TimetableRoutine.sessions(slots: slots, skips: skips, on: day).map {
+                Overview.Item(id: "class:\($0.id)", title: $0.subject, start: $0.start, end: $0.end)
+            }
+            planned += DayPlan.events(plannedEvents, on: day).filter { !$0.isAllDay }.map {
+                Overview.Item(id: "event:\($0.id.uuidString)", title: $0.title, start: $0.start, end: $0.end)
+            }
+            planned += calendarItems.filter { $0.start >= day && $0.start < dayEnd }.map {
+                Overview.Item(id: "calendar:\($0.id)", title: $0.title, start: $0.start, end: $0.end)
+            }
+            days.append(Overview.Day(
+                dayStart: day,
+                planned: planned,
+                missedIDs: Set(log?.missedIDs ?? []),
+                doneIDs: Set(log?.completions.map(\.id) ?? []),
+                tasksDone: finished.filter { $0.completedAt.map { calendar.isDate($0, inSameDayAs: day) } ?? false }.count,
+                distanceMeters: log?.distanceMeters ?? 0,
+                dayOff: dayOffs.first { calendar.isDate($0.dayStart, inSameDayAs: day) }?.reason,
+                holidayOff: holidaysOff.first { calendar.isDate($0.dayStart, inSameDayAs: day) }?.name
+            ))
+            day = dayEnd
+        }
+        return Overview.summary(of: days, now: now)
+    }
+
+    // MARK: Rides
+
+    /// What your rides have really cost against PathOS's estimate for the same distance, from
+    /// their receipts, and over how many.
+    var rideFares: (factor: Double, rides: Int)? {
+        let rides = (try? modelContainer.mainContext.fetch(FetchDescriptor<RideRecord>(sortBy: [SortDescriptor(\.at)]))) ?? []
+        let pairs = rides.compactMap { ride -> (fare: Double, estimate: Double)? in
+            guard let fare = ride.fare, let estimate = ride.estimate else { return nil }
+            return (fare, estimate)
+        }
+        guard let factor = ServiceMail.fareFactor(pairs) else { return nil }
+        return (factor, min(pairs.count, 10))
     }
 
     // MARK: Done

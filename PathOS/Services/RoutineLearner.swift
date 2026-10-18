@@ -2,87 +2,32 @@ import Foundation
 import Observation
 import SwiftData
 
-/// Learns when you usually leave home and nudges you 15 minutes before.
+/// Keeps a record of when you leave home.
+///
+/// It used to learn one usual time per weekday and say "You usually leave around 11:18" every
+/// week, whatever the day held — a day off, a holiday, a class moved to the afternoon. When to
+/// leave comes from the day's own plan now (`LeaveOnTime`); this only keeps the record, which
+/// backups carry.
 @Observable
 final class RoutineLearner {
+    /// The weekly reminders it used to set, taken back from phones that still have them.
     static let reminderPrefix = "pathos.commute.weekday."
-    static let leadMinutes = 15
-
-    /// Weekday (1 = Sunday) → typical departure in minutes since midnight.
-    private(set) var typicalDepartures: [Int: Int] = [:]
-    private(set) var loggedDepartures = 0
-
-    var remindersEnabled: Bool = UserDefaults.standard.object(forKey: "pathos.commuteReminders") as? Bool ?? true {
-        didSet {
-            UserDefaults.standard.set(remindersEnabled, forKey: "pathos.commuteReminders")
-            Task { await rescheduleReminders() }
-        }
-    }
 
     @ObservationIgnored private let context: ModelContext
     @ObservationIgnored private let notifications: NotificationService
-    @ObservationIgnored private var model = RoutineModel(samples: [])
 
     init(context: ModelContext, notifications: NotificationService) {
         self.context = context
         self.notifications = notifications
-        recompute()
     }
 
     func logDeparture(from kind: PlaceKind, at date: Date = Date()) {
         context.insert(DepartureLog(placeKind: kind, date: date))
         try? context.save()
-        recompute()
     }
 
-    func recompute() {
-        let homeKind = PlaceKind.home.rawValue
-        let descriptor = FetchDescriptor<DepartureLog>(predicate: #Predicate { $0.placeKindRaw == homeKind })
-        let logs = (try? context.fetch(descriptor)) ?? []
-        loggedDepartures = logs.count
-
-        let samples = logs.map {
-            DepartureSample(date: $0.date, weekday: $0.weekday, minutesSinceMidnight: $0.minutesSinceMidnight)
-        }
-        model = RoutineModel(samples: RoutineModel.firstPerDay(samples))
-
-        var departures: [Int: Int] = [:]
-        for weekday in 1...7 {
-            departures[weekday] = model.typicalDeparture(weekday: weekday)
-        }
-        typicalDepartures = departures
-    }
-
-    func rescheduleReminders() async {
+    /// Takes back the old weekly "Heading out soon?" reminders.
+    func removeWeeklyReminders() async {
         await notifications.removePending(withPrefix: Self.reminderPrefix)
-        guard remindersEnabled else { return }
-
-        for weekday in 1...7 {
-            guard let departure = typicalDepartures[weekday],
-                  let reminder = model.reminderTime(weekday: weekday, leadMinutes: Self.leadMinutes) else { continue }
-            notifications.scheduleWeekly(
-                id: Self.reminderPrefix + String(weekday),
-                weekday: weekday,
-                hour: reminder.hour,
-                minute: reminder.minute,
-                title: "Heading out soon?",
-                body: "You usually leave around \(Self.format(minutes: departure)). Tap for travel time, the nearest metro and cabs.",
-                category: NotificationService.Category.commute,
-                link: URL(string: "pathos://commute")
-            )
-        }
-    }
-
-    /// Today's typical departure, if one has been learned.
-    func todaysDeparture(now: Date = Date(), calendar: Calendar = .current) -> Int? {
-        typicalDepartures[calendar.component(.weekday, from: now)]
-    }
-
-    static func format(minutes: Int) -> String {
-        var components = DateComponents()
-        components.hour = minutes / 60
-        components.minute = minutes % 60
-        guard let date = Calendar.current.date(from: components) else { return "" }
-        return date.formatted(date: .omitted, time: .shortened)
     }
 }

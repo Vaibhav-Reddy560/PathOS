@@ -31,6 +31,11 @@ nonisolated struct BackupArchive: Codable, Equatable {
     /// Optional because backups written before reminders existed don't have them: an array with
     /// a default still fails to decode when its key is missing.
     var reminders: [Reminder]?
+    /// Optional for the same reason: holidays, and whether each was a day off for you.
+    var holidays: [Holiday]?
+    /// Rides and orders read from mail.
+    var rides: [Ride]?
+    var orders: [Order]?
     /// Preferences that aren't worth a model of their own: priority senders, the preferred cab.
     var settings: [String: String] = [:]
     var settingLists: [String: [String]] = [:]
@@ -199,6 +204,40 @@ nonisolated struct BackupArchive: Codable, Equatable {
         var attendedIDs: [String] = []
         var missedIDs: [String] = []
         var completions: [ItemCompletion] = []
+        var note: String = ""
+    }
+
+    nonisolated struct Holiday: Codable, Equatable {
+        var id: UUID
+        var dayStart: Date
+        var name: String
+        var kindRaw: String
+        var isOff: Bool?
+        var answeredAt: Date?
+    }
+
+    nonisolated struct Ride: Codable, Equatable {
+        var id: UUID
+        var serviceRaw: String
+        var at: Date
+        var fare: Double?
+        var distanceKm: Double?
+        var minutes: Int?
+        var pickup: String?
+        var drop: String?
+        var vehicleRaw: String?
+        var messageID: String
+    }
+
+    nonisolated struct Order: Codable, Equatable {
+        var id: UUID
+        var serviceRaw: String
+        var orderID: String?
+        var item: String?
+        var statusRaw: String
+        var firstSeenAt: Date
+        var updatedAt: Date
+        var messageID: String
     }
 
     nonisolated struct Reminder: Codable, Equatable {
@@ -302,5 +341,6 @@ nonisolated extension BackupArchive.Day {
         attendedIDs = try container.decodeIfPresent([String].self, forKey: .attendedIDs) ?? []
         missedIDs = try container.decodeIfPresent([String].self, forKey: .missedIDs) ?? []
         completions = try container.decodeIfPresent([ItemCompletion].self, forKey: .completions) ?? []
+        note = try container.decodeIfPresent(String.self, forKey: .note) ?? ""
     }
 }

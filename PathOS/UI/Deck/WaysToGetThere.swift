@@ -44,6 +44,11 @@ struct WaysToGetThereView: View {
                         ForEach(Array(options.enumerated()), id: \.element.id) { index, option in
                             WayCard(option: option, request: request, tag: tag(for: option, index: index))
                         }
+                        if let learned = fareLearning {
+                            Label(learned, systemImage: "receipt")
+                                .font(.footnote)
+                                .foregroundStyle(.mist)
+                        }
                         sources
                     }
                 }
@@ -64,6 +69,16 @@ struct WaysToGetThereView: View {
     }
 
     // MARK: Pieces
+
+    /// What your own ride receipts say about these estimates, once there are enough of them.
+    private var fareLearning: String? {
+        guard let learned = state.rideFares else { return nil }
+        let percent = Int(((learned.factor - 1) * 100).rounded())
+        guard abs(percent) >= 5 else {
+            return "Your last \(learned.rides) rides cost about what PathOS estimates."
+        }
+        return "Your last \(learned.rides) rides cost about \(abs(percent))% \(percent > 0 ? "more" : "less") than PathOS estimates."
+    }
 
     private var loading: some View {
         HStack(spacing: 12) {
