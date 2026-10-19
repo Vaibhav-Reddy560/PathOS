@@ -141,8 +141,18 @@ struct DoorToDoorTests {
     /// Going to either of the other two, the metro from the nearest is offered: a stop each way.
     /// Apple Maps, as here, can't route the zero metres from a station to itself; that used to
     /// lose the metro journey altogether.
-    @Test func theNearestStationTakesYouToTheOthers() async {
-        let here = CLLocationCoordinate2D(latitude: 12.9105, longitude: 77.6004)
+    @Test(arguments: [
+        // Seven hundred metres south of Jayadeva Hospital.
+        CLLocationCoordinate2D(latitude: 12.9105, longitude: 77.6004),
+        // A couple of kilometres south: the station is an auto ride away, and the one stop to
+        // BTM Layout is short beside that. It used to be ruled out for it.
+        CLLocationCoordinate2D(latitude: 12.895, longitude: 77.6004),
+        // Almost as near BTM Layout as Jayadeva Hospital.
+        CLLocationCoordinate2D(latitude: 12.9125, longitude: 77.6040),
+    ])
+    func theNearestStationTakesYouToTheOthers(here: CLLocationCoordinate2D) async {
+        let nearest = MetroNetwork.nearbyStations(to: here, atLeast: 3).prefix(3).map(\.station.name)
+        #expect(nearest == ["Jayadeva Hospital", "BTM Layout", "Ragigudda"])
         let timed = roads()
         let appleMaps: DoorToDoor.RoadTimes = { from, to, byRoad in
             guard GeoMath.distance(from: from, to: to) > 1 else { return nil }

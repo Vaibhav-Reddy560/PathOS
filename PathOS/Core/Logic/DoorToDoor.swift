@@ -220,21 +220,27 @@ nonisolated enum DoorToDoor {
         // only there for when the nearest station is no use: a line that doesn't reach, or a ride
         // that would cover nothing.
         for start in boarding {
-            // Getting on has to be nearer to you than where you're going. A station as far off as
-            // the destination is a detour: to reach the station by Jayadeva, it had you take an
-            // auto past it to BTM Layout and ride a stop back. Half the journey was too strict —
-            // it ruled out walking to Jayadeva to ride a stop to BTM Layout.
-            guard GeoMath.distance(from: origin, to: start.station.coordinate) < journey * 0.8 else { continue }
+            // Getting on has to be nearer to you than where you're going. A station further off
+            // than the destination is a detour: to reach the station by Jayadeva, it had you take
+            // an auto past it to BTM Layout and ride a stop back.
+            guard GeoMath.distance(from: origin, to: start.station.coordinate) < journey else { continue }
             for end in alighting where end.station.name != start.station.name {
                 // Getting off has to leave you meaningfully closer than getting on did. Comparing
                 // the two stations' own distance instead would throw out good journeys, since a
                 // metro line bends and its stations can be further apart than the places they serve.
                 guard GeoMath.distance(from: end.station.coordinate, to: destination)
                         < GeoMath.distance(from: start.station.coordinate, to: destination) - 500 else { continue }
-                // And the ride has to be most of the journey. A stop or two between stations that
-                // are both miles from where you're going is a metro ride in name only: it looked
-                // quick on the clock while leaving an auto to do the real travelling.
-                guard GeoMath.distance(from: start.station.coordinate, to: end.station.coordinate) >= journey * rideShare else { continue }
+                // And where an auto would still have to take you on from the station, the ride has
+                // to be most of the journey. A stop or two between stations that are both miles
+                // from where you're going is a metro ride in name only: it looked quick on the
+                // clock while leaving an auto to do the real travelling. Off at the place itself,
+                // or a walk from it, any ride is a real one — a stop from Jayadeva Hospital to BTM
+                // Layout used to be ruled out for being short.
+                let leftToGo = GeoMath.distance(from: end.station.coordinate, to: destination)
+                if leftToGo > walkToStation {
+                    guard GeoMath.distance(from: start.station.coordinate, to: end.station.coordinate) >= journey * rideShare
+                    else { continue }
+                }
                 if let built = await metroJourney(from: origin, boardingAt: start.station, alightingAt: end.station,
                                                   to: destination, name: name, now: now, calendar: calendar, road: road) {
                     return built.option

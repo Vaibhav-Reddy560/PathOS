@@ -100,16 +100,11 @@ struct DayNoteField: View {
                       text: $text, axis: .vertical)
                 .font(.subheadline)
                 .foregroundStyle(.ice)
-                .lineLimit(1...5)
+                // The keyboard's own key starts a new line, so a note can be a list; it says
+                // "return" to match. Finishing is the button beside the note.
+                .lineLimit(1...8)
                 .focused($isEditing)
-                .submitLabel(.done)
-                .onChange(of: text) { _, typed in
-                    // A field that grows to fit types the keyboard's ✓ as a new line. It's meant
-                    // as done, so it's taken as done.
-                    guard typed.contains("\n") else { return }
-                    text = typed.replacingOccurrences(of: "\n", with: "")
-                    isEditing = false
-                }
+                .submitLabel(.return)
             // Finishing, the way a message box offers it: right beside what you're writing.
             if isEditing {
                 Button {
