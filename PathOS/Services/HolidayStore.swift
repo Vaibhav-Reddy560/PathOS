@@ -56,17 +56,14 @@ final class HolidayStore {
         return count
     }
 
-    /// A day off for you, or not. Saying yes takes the day off your schedule; changing your mind
-    /// puts it back.
+    /// A day off for you, or not. The day follows the answer whatever it was before: yes takes
+    /// it off your schedule, no puts it back — "Undo day off" on a holiday is answering no.
     func answer(_ holiday: Holiday, isOff: Bool) {
-        let wasOff = holiday.isOff == true
         holiday.isOff = isOff
         holiday.answeredAt = Date()
         save()
-        if isOff, !wasOff {
-            timetable.setDayOff(holiday.dayStart, isOff: true, reason: holiday.name)
-        } else if !isOff, wasOff {
-            timetable.setDayOff(holiday.dayStart, isOff: false)
+        if timetable.isDayOff(holiday.dayStart) != isOff {
+            timetable.setDayOff(holiday.dayStart, isOff: isOff, reason: holiday.name)
         }
     }
 

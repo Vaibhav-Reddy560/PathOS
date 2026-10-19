@@ -82,8 +82,13 @@ struct DayDeck: View {
     @ViewBuilder
     private var dayView: some View {
         dayPicker
+        // The day's own holiday: asked about until you've said, then just named.
         ForEach(holidaysOnDay) { holiday in
-            HolidayLine(holiday: holiday)
+            if holiday.isOff == nil {
+                HolidayQuestion(holiday: holiday)
+            } else {
+                HolidayLine(holiday: holiday)
+            }
         }
         DayNoteField(day: day)
         // Holidays in the month ahead you haven't said about, one at a time: answering one
@@ -152,7 +157,7 @@ struct DayDeck: View {
         }, flags: { date in
             flags[Calendar.current.startOfDay(for: date)] ?? []
         })
-        if let holiday = holidaysOnDay.first {
+        if let holiday = holidaysOnDay.first(where: { $0.isOff != nil }) {
             HolidayLine(holiday: holiday)
         }
 
@@ -446,7 +451,12 @@ struct DayDeck: View {
 
     private var classesToggle: some View {
         Button {
-            state.timetable.setDayOff(day, isOff: !isDayOff)
+            // On a holiday, this is your answer about it, so Overview counts the day rightly.
+            if let holiday = holidaysOnDay.first {
+                state.holidays.answer(holiday, isOff: !isDayOff)
+            } else {
+                state.timetable.setDayOff(day, isOff: !isDayOff)
+            }
         } label: {
             OneLineButtonLabel(title: isDayOff ? "Undo day off" : "Take \(isToday ? "today" : "this day") off",
                                symbol: isDayOff ? "arrow.uturn.backward" : "xmark.circle")

@@ -12,6 +12,17 @@ nonisolated enum Holidays {
         case college
         case own
 
+        /// Where it comes from, not what it celebrates: the list has days of mourning as well as
+        /// festivals, so nothing festive stands for all of them.
+        var symbol: String {
+            switch self {
+            case .national: "flag.fill"
+            case .karnataka: "building.columns.fill"
+            case .college: "graduationcap.fill"
+            case .own: "calendar"
+            }
+        }
+
         var label: String {
             switch self {
             case .national: "National holiday"

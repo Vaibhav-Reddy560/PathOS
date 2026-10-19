@@ -384,7 +384,7 @@ struct HolidayImportSheet: View {
     private func save() {
         let added = state.holidays.add(rows.filter(\.isKept).map(\.row), kind: .college)
         state.showToast(added == 0 ? "Those were already on your calendar" : "\(added) college \(added == 1 ? "holiday" : "holidays") added",
-                        symbol: "sun.max.fill")
+                        symbol: Holidays.Kind.college.symbol)
         dismiss()
     }
 }

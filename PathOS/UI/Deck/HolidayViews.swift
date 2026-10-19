@@ -11,7 +11,7 @@ struct HolidayQuestion: View {
         ContentTile {
             VStack(alignment: .leading, spacing: 12) {
                 HStack(alignment: .top, spacing: 12) {
-                    Image(systemName: "sun.max.fill")
+                    Image(systemName: holiday.kind.symbol)
                         .font(.title3)
                         .foregroundStyle(.ion)
                         .frame(width: 28)
@@ -48,20 +48,20 @@ struct HolidayQuestion: View {
             state.holidays.answer(holiday, isOff: isOff)
         }
         state.showToast(isOff ? "\(name) is a day off · no sessions or reminders" : "\(name) is a day like any other",
-                        symbol: isOff ? "sun.max.fill" : "checkmark.circle.fill")
+                        symbol: isOff ? holiday.kind.symbol : "checkmark.circle.fill")
     }
 }
 
-/// A holiday on the day you're looking at, and what you said about it.
+/// A holiday on the day you're looking at, and what you said about it. Changing your mind is
+/// the day's own "Undo day off" or "Take this day off", which keep the answer in step.
 struct HolidayLine: View {
     let holiday: Holiday
 
-    @Environment(AppState.self) private var state
-
     var body: some View {
         HStack(spacing: 10) {
-            Image(systemName: "sun.max.fill")
+            Image(systemName: holiday.kind.symbol)
                 .foregroundStyle(.ion)
+                .frame(width: 24)
             VStack(alignment: .leading, spacing: 1) {
                 Text(holiday.name)
                     .font(.subheadline.weight(.semibold))
@@ -71,27 +71,13 @@ struct HolidayLine: View {
                     .foregroundStyle(.mist)
             }
             Spacer(minLength: 0)
-            Menu {
-                Button("A day off for me", systemImage: "sun.max") { state.holidays.answer(holiday, isOff: true) }
-                Button("Not a day off for me", systemImage: "briefcase") { state.holidays.answer(holiday, isOff: false) }
-            } label: {
-                Image(systemName: "ellipsis.circle")
-                    .font(.title3)
-                    .foregroundStyle(.mist)
-                    .frame(width: 44, height: 44)
-                    .contentShape(.rect)
-            }
-            .accessibilityLabel("Change whether \(holiday.name) is a day off")
         }
         .padding(.horizontal, 4)
+        .accessibilityElement(children: .combine)
     }
 
     private var verdict: String {
-        switch holiday.isOff {
-        case true?: "A day off for you"
-        case false?: "Not a day off for you"
-        case nil: "Not answered yet"
-        }
+        holiday.isOff == true ? "A day off for you" : "Not a day off for you"
     }
 }
 
@@ -117,8 +103,32 @@ struct DayNoteField: View {
                 .lineLimit(1...5)
                 .focused($isEditing)
                 .submitLabel(.done)
-                .onSubmit { save() }
+                .onChange(of: text) { _, typed in
+                    // A field that grows to fit types the keyboard's ✓ as a new line. It's meant
+                    // as done, so it's taken as done.
+                    guard typed.contains("\n") else { return }
+                    text = typed.replacingOccurrences(of: "\n", with: "")
+                    isEditing = false
+                }
+            // Finishing, the way a message box offers it: right beside what you're writing.
+            if isEditing {
+                Button {
+                    isEditing = false
+                } label: {
+                    Image(systemName: "checkmark.circle.fill")
+                        .font(.title2)
+                        .foregroundStyle(.aurora)
+                        .frame(width: 44, height: 44)
+                        .contentShape(.rect)
+                }
+                .buttonStyle(.plain)
+                // A full-size target that doesn't make the field jump taller while you type.
+                .padding(.vertical, -10)
+                .accessibilityLabel("Done")
+                .transition(.scale.combined(with: .opacity))
+            }
         }
+        .animation(PathMotion.control, value: isEditing)
         .padding(.horizontal, 14)
         .padding(.vertical, 12)
         .background(Color.elevatedSurface.opacity(0.72), in: .rect(cornerRadius: 16, style: .continuous))

@@ -163,23 +163,10 @@ nonisolated enum DoorToDoor {
             options.append(ride)
         }
         // Quickest first, but anything that isn't running yet goes last however quick it would be.
-        return worthOffering(options).sorted {
+        // Every sensible way is offered, even one that walking beats: a stop on the metro is a
+        // choice you get to make.
+        return options.sorted {
             $0.isAvailableNow == $1.isAvailableNow ? $0.minutes < $1.minutes : $0.isAvailableNow
-        }
-    }
-
-    /// Leaves out any way that another beats on both counts: slower, and no cheaper, than one
-    /// running now. An auto to a station, a stop on the metro and a walk back costs more and takes
-    /// longer than the auto straight there, and offering it only makes the list harder to trust.
-    /// A fare nobody knows, like the bus's, can only be beaten by a way that's free.
-    static func worthOffering(_ options: [Option]) -> [Option] {
-        options.filter { option in
-            !options.contains { other in
-                guard other.id != option.id, other.isAvailableNow, other.minutes < option.minutes else { return false }
-                if other.fareIsUnknown { return false }
-                if option.fareIsUnknown { return other.fareHigh == 0 }
-                return other.fareLow <= option.fareLow && other.fareHigh <= option.fareHigh
-            }
         }
     }
 
@@ -233,10 +220,11 @@ nonisolated enum DoorToDoor {
         // only there for when the nearest station is no use: a line that doesn't reach, or a ride
         // that would cover nothing.
         for start in boarding {
-            // Getting on has to be on your way. A station as far from you as where you're going
-            // is a detour: to reach the station by Jayadeva, it had you take an auto past it to
-            // BTM Layout and ride a stop back.
-            guard GeoMath.distance(from: origin, to: start.station.coordinate) <= journey / 2 else { continue }
+            // Getting on has to be nearer to you than where you're going. A station as far off as
+            // the destination is a detour: to reach the station by Jayadeva, it had you take an
+            // auto past it to BTM Layout and ride a stop back. Half the journey was too strict —
+            // it ruled out walking to Jayadeva to ride a stop to BTM Layout.
+            guard GeoMath.distance(from: origin, to: start.station.coordinate) < journey * 0.8 else { continue }
             for end in alighting where end.station.name != start.station.name {
                 // Getting off has to leave you meaningfully closer than getting on did. Comparing
                 // the two stations' own distance instead would throw out good journeys, since a
@@ -262,9 +250,20 @@ nonisolated enum DoorToDoor {
                                      name: String, now: Date, calendar: Calendar,
                                      road: RoadTimes) async -> (option: Option, minutes: Int)? {
         guard let route = MetroRouter.route(from: board.name, to: alight.name, at: now, calendar: calendar) else { return nil }
-        guard let access = await accessLeg(from: origin, to: board, now: now, calendar: calendar, road: road),
-              let egress = await egressLeg(from: alight, to: destination, name: name, now: now, calendar: calendar, road: road)
-        else { return nil }
+        // No leg to a station you're already at, or from the station that is where you're going:
+        // asked to route the zero metres from BTM Layout to BTM Layout, Apple Maps has no answer,
+        // and the whole metro journey used to go with it.
+        var access: Leg?
+        if GeoMath.distance(from: origin, to: board.coordinate) > TripGuide.stationApproachRadius {
+            guard let leg = await accessLeg(from: origin, to: board, now: now, calendar: calendar, road: road) else { return nil }
+            access = leg
+        }
+        var egress: Leg?
+        if GeoMath.distance(from: alight.coordinate, to: destination) > TripGuide.stationApproachRadius {
+            guard let leg = await egressLeg(from: alight, to: destination, name: name, now: now, calendar: calendar, road: road)
+            else { return nil }
+            egress = leg
+        }
 
         let fare = MetroRouter.fare(stationsTravelled: route.stationsTravelled, at: now, calendar: calendar)
         let ride = Leg(
@@ -283,7 +282,7 @@ nonisolated enum DoorToDoor {
             )],
             metro: route
         )
-        let legs = [access, ride, egress]
+        let legs = [access, ride, egress].compactMap { $0 }
         let minutes = legs.reduce(0) { $0 + $1.minutes } + stationEntryMinutes
 
         var notes = ["Times include about \(stationEntryMinutes) min to get in and onto the platform, and half a wait for a train."]

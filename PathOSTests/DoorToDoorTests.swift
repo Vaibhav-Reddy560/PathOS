@@ -128,8 +128,8 @@ struct DoorToDoorTests {
     /// the station by Jayadeva Hospital, the nearest station was the destination itself, so the
     /// next one along was tried as somewhere to board. Getting on has to be on your way.
     @Test func itNeverBoardsAwayFromWhereYoureGoing() async {
-        // South of BTM Layout, a kilometre and a half from Jayadeva Hospital station.
-        let here = CLLocationCoordinate2D(latitude: 12.905, longitude: 77.6085)
+        // Where Jayadeva Hospital is the nearest station, then BTM Layout, then Ragigudda.
+        let here = CLLocationCoordinate2D(latitude: 12.9105, longitude: 77.6004)
         let jayadeva = CLLocationCoordinate2D(latitude: 12.916764, longitude: 77.600442)
         let options = await DoorToDoor.options(from: here, to: jayadeva, destinationName: "Jayadeva Hospital",
                                                now: noon, road: roads())
@@ -137,26 +137,28 @@ struct DoorToDoorTests {
         #expect(!options.contains { $0.legs.contains { $0.mode == .metro } })
     }
 
-    /// A way that's slower and no cheaper than another running now isn't offered. A fare nobody
-    /// knows can only be beaten by a way that's free.
-    @Test func aWayBeatenOnBothCountsIsLeftOut() {
-        func option(_ name: String, minutes: Int, fare: ClosedRange<Int>, unknown: Bool = false) -> DoorToDoor.Option {
-            DoorToDoor.Option(headline: name, legs: [], minutes: minutes, fareLow: fare.lowerBound,
-                              fareHigh: fare.upperBound, fareIsUnknown: unknown)
+    /// Your own three stations — Jayadeva Hospital nearest, then BTM Layout, then Ragigudda.
+    /// Going to either of the other two, the metro from the nearest is offered: a stop each way.
+    /// Apple Maps, as here, can't route the zero metres from a station to itself; that used to
+    /// lose the metro journey altogether.
+    @Test func theNearestStationTakesYouToTheOthers() async {
+        let here = CLLocationCoordinate2D(latitude: 12.9105, longitude: 77.6004)
+        let timed = roads()
+        let appleMaps: DoorToDoor.RoadTimes = { from, to, byRoad in
+            guard GeoMath.distance(from: from, to: to) > 1 else { return nil }
+            return await timed(from, to, byRoad)
         }
-        let road = option("Road", minutes: 10, fare: 40...50)
-        let metro = option("Metro", minutes: 18, fare: 50...60)
-        let cheaperMetro = option("Metro", minutes: 18, fare: 30...40)
-        let walk = option("Walk", minutes: 25, fare: 0...0)
-        let bus = option("Bus", minutes: 30, fare: 0...0, unknown: true)
-        let quickBus = option("Bus", minutes: 20, fare: 0...0, unknown: true)
-
-        let kept = DoorToDoor.worthOffering([road, metro, cheaperMetro, walk, bus, quickBus]).map(\.id)
-        #expect(kept.contains(road.id) && kept.contains(walk.id))
-        #expect(!kept.contains(metro.id))
-        #expect(kept.contains(cheaperMetro.id))
-        #expect(!kept.contains(bus.id))
-        #expect(kept.contains(quickBus.id))
+        for (name, station) in [("BTM Layout", CLLocationCoordinate2D(latitude: 12.916598, longitude: 77.608622)),
+                                ("Ragigudda", CLLocationCoordinate2D(latitude: 12.917089, longitude: 77.588698))] {
+            let options = await DoorToDoor.options(from: here, to: station, destinationName: name, now: noon, road: appleMaps)
+            let metro = options.first { $0.legs.contains { $0.mode == .metro } }
+            #expect(metro != nil, "\(name)")
+            let ride = metro?.legs.first { $0.mode == .metro }
+            #expect(ride?.metro?.origin == "Jayadeva Hospital", "\(name)")
+            #expect(ride?.endName == name)
+            // Off the train is there: no walk from the station to itself.
+            #expect(metro?.legs.last?.mode == .metro, "\(name)")
+        }
     }
 
     /// Without Apple Maps, the legs still get times rather than disappearing.
