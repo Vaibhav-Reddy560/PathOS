@@ -73,5 +73,18 @@ xcrun devicectl device install app --device "$device" \
     build/DeviceData/Build/Products/Debug-iphoneos/PathOS.app >/dev/null
 
 say "Done. PathOS is on your phone with everything still in it."
-echo "Good for another seven days. If it won't open, go to"
+
+# How long it's good for: the profile Xcode signed it with, which is only a fresh seven days
+# when Xcode made a new one — it reuses the one it has until that runs out. Noted for the
+# hourly check (Tools/Reinstall), which renews it from there.
+profile=build/DeviceData/Build/Products/Debug-iphoneos/PathOS.app/embedded.mobileprovision
+ends=$(security cms -D -i "$profile" 2>/dev/null | plutil -extract ExpirationDate raw - 2>/dev/null || true)
+if [ -n "$ends" ]; then
+    seconds=$(date -j -u -f '%Y-%m-%dT%H:%M:%SZ' "$ends" +%s)
+    mkdir -p "$HOME/Library/Application Support/PathOS Reinstall"
+    echo "$seconds" > "$HOME/Library/Application Support/PathOS Reinstall/installed-expiry"
+    echo "It runs until $(date -r "$seconds" '+%a %-d %b, %-I:%M %p'). If it won't open, go to"
+else
+    echo "If it won't open, go to"
+fi
 echo "Settings → General → VPN & Device Management and trust your Apple ID."

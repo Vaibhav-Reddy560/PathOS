@@ -46,7 +46,28 @@ xcodebuild test -scheme PathOS -destination 'platform=iOS Simulator,name=iPhone 
 ## Every seven days
 
 A free Apple ID signs an app for **7 days**. After that it won't open — the phone says
-*"PathOS is no longer available"*. To put it back:
+*"PathOS is no longer available"*.
+
+**Let the Mac do it.** Once, from the project folder:
+
+```sh
+./Tools/Reinstall/setup.sh
+```
+
+From then on the Mac checks every hour when PathOS on your phone runs out, and in the last two
+days builds it again with a fresh seven-day profile and installs it over Wi-Fi. **Reinstall
+PathOS** in your Applications folder does it on the spot — drag it to the Dock. When it can't, a
+notification says what's missing, at most once a day: the Extra Storage drive, the phone (it
+needs to be unlocked, on the same Wi-Fi), or Xcode's sign-in to your Apple ID, which Apple
+asks for again every so often (**Xcode → Settings → Accounts**). What it did is logged in
+`~/Library/Application Support/PathOS Reinstall/reinstall.log`; `setup.sh --remove` takes it
+all away.
+
+Xcode keeps using a profile it already has until it runs out, so rebuilding early on its own
+doesn't buy more days — the check sets the old profile aside first so Xcode asks Apple for a new
+one. If Apple hands the same one back, it renews just after that one runs out.
+
+**Or by hand:**
 
 ```sh
 cd "/Volumes/Extra Storage/Projects/PathOS App"
@@ -54,7 +75,7 @@ cd "/Volumes/Extra Storage/Projects/PathOS App"
 ```
 
 Plug the phone in (or have it on the same Wi-Fi, unlocked), and that's the whole job — about a
-minute. **Nothing you have saved is lost**: installing over the top keeps the app's own storage, so
+minute. It says how long the copy it installed is good for. **Nothing you have saved is lost**: installing over the top keeps the app's own storage, so
 your places, memories and photos, events, weekly schedule, trips, mail, scans and expenses are all
 still there. Only *deleting* the app loses them, which is what **Settings → Your data** is for.
 
