@@ -6,8 +6,9 @@
 #   ./Tools/Reinstall/setup.sh            set both up, or update them after a change here
 #   ./Tools/Reinstall/setup.sh --remove   take both away again
 #
-# The check is copied onto the Mac's own disk, so that with the Extra Storage drive unplugged
-# it can still say so rather than quietly not running.
+# Everything it needs is put on the Mac's own disk — the check, and a copy of the project in
+# ~/Developer/PathOS that it brings up to date from GitHub before each build — so the drive the
+# project lives on needn't be connected.
 
 set -euo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
@@ -16,19 +17,30 @@ LABEL="com.vaibhavreddy.pathos.reinstall"
 STATE="$HOME/Library/Application Support/PathOS Reinstall"
 AGENT="$HOME/Library/LaunchAgents/$LABEL.plist"
 APP="$HOME/Applications/Reinstall PathOS.app"
+COPY="$HOME/Developer/PathOS"
 DOMAIN="gui/$(id -u)"
 
 if [ "${1:-}" = "--remove" ]; then
     launchctl bootout "$DOMAIN/$LABEL" 2>/dev/null || true
     rm -f "$AGENT"
     rm -rf "$APP"
-    echo "Removed the hourly check and Reinstall PathOS. Its log is still in $STATE."
+    echo "Removed the hourly check and Reinstall PathOS. Its log is still in $STATE,"
+    echo "and the copy it built from in $COPY — delete that too if you won't need it."
     exit 0
 fi
 
 mkdir -p "$STATE" "$HOME/Library/LaunchAgents" "$HOME/Applications"
 cp "$HERE/auto-reinstall.sh" "$STATE/auto-reinstall.sh"
 chmod +x "$STATE/auto-reinstall.sh"
+
+# The copy it builds from: cloned from this one (quick, and no download), then pointed at
+# GitHub, where every change is pushed, for keeping up to date.
+if [ ! -d "$COPY/.git" ]; then
+    mkdir -p "$(dirname "$COPY")"
+    git clone --quiet "$PROJECT" "$COPY"
+    git -C "$COPY" remote set-url origin "$(git -C "$PROJECT" remote get-url origin)"
+fi
+git -C "$COPY" pull --ff-only --quiet || echo "Couldn't bring $COPY up to date just now; the check tries again before each build."
 
 # What's on the phone now: the profile in the last build installed. The check counts from it.
 BUILT="$PROJECT/build/DeviceData/Build/Products/Debug-iphoneos/PathOS.app/embedded.mobileprovision"
@@ -39,11 +51,9 @@ if [ ! -f "$STATE/installed-expiry" ] && [ -f "$BUILT" ]; then
     fi
 fi
 
-# Every hour, and whenever you log in. A Mac that was asleep runs it on waking.
-#
-# Through the app rather than a script of its own: macOS keeps background scripts off external
-# drives ("Operation not permitted"), but lets an app in once you've said Allow. A fresh mark in
-# the folder tells the app this run is the hourly check, not you asking.
+# Every hour, and whenever you log in. A Mac that was asleep runs it on waking. Through the same
+# app you'd double-click, so both run alike; a fresh mark in the folder tells the app this run
+# is the hourly check, not you asking.
 cat > "$AGENT" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -108,6 +118,5 @@ launchctl bootstrap "$DOMAIN" "$AGENT"
 echo "Set up."
 echo "  • Every hour the Mac checks when PathOS on your phone runs out, and renews it in the last two days."
 echo "  • $APP reinstalls it now. Drag it to the Dock to keep it to hand."
+echo "  • It builds from $COPY, updated from GitHub first: the Extra Storage drive needn't be connected."
 echo "  • What it did is in $STATE/reinstall.log."
-echo "  • The first time, macOS asks whether Reinstall PathOS may use files on a removable volume —"
-echo "    the Extra Storage drive the project lives on. Allow it, or the check can't build."

@@ -9,15 +9,17 @@
 #   auto-reinstall.sh          the hourly check, from launchd (see setup.sh)
 #   auto-reinstall.sh --now    build and install now, whatever the date
 #
-# It needs the Extra Storage drive connected, the phone on the same Wi-Fi and unlocked, and
-# Xcode still signed in to the Apple ID. When one of those is missing it says which — at most
-# once a day — and tries again the next hour.
+# It builds from a copy of the project on the Mac's own disk, brought up to date from GitHub
+# first, so the drive the project lives on needn't be connected: what's installed is what's
+# been pushed. It needs the phone on the same Wi-Fi and unlocked, and Xcode still signed in to
+# the Apple ID. When one of those is missing it says which — at most once a day — and tries
+# again the next hour.
 
 set -uo pipefail
 # launchd starts this with almost no PATH; reinstall.sh needs xcodegen from Homebrew.
 export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 
-PROJECT="/Volumes/Extra Storage/Projects/PathOS App"
+PROJECT="$HOME/Developer/PathOS"
 BUILT="$PROJECT/build/DeviceData/Build/Products/Debug-iphoneos/PathOS.app/embedded.mobileprovision"
 STATE="$HOME/Library/Application Support/PathOS Reinstall"
 PROFILES="$HOME/Library/Developer/Xcode/UserData/Provisioning Profiles"
@@ -94,10 +96,18 @@ if ! mkdir "$STATE/lock" 2>/dev/null; then
 fi
 trap finish EXIT
 
-if [ ! -d "$PROJECT" ]; then
-    log "Drive not connected."
-    tell drive "PathOS runs out $when" "Connect the Extra Storage drive so it can be renewed: the project is on it."
+if [ ! -d "$PROJECT/.git" ]; then
+    log "No copy of the project at $PROJECT."
+    tell copy "PathOS runs out $when" "The copy it's built from is missing: run Tools/Reinstall/setup.sh again."
     exit 0
+fi
+
+# Up to date with GitHub, so the latest pushed changes go on the phone. Offline, or with the
+# copy changed by hand, it builds what it has rather than not at all.
+if update=$(git -C "$PROJECT" pull --ff-only --quiet 2>&1); then
+    log "Copy at $(git -C "$PROJECT" log -1 --format='%h %s' | cut -c1-80)."
+else
+    log "Couldn't update the copy, building what it has: $update"
 fi
 
 # MARK: Renewing

@@ -56,10 +56,13 @@ A free Apple ID signs an app for **7 days**. After that it won't open — the ph
 
 From then on the Mac checks every hour when PathOS on your phone runs out, and in the last two
 days builds it again with a fresh seven-day profile and installs it over Wi-Fi. **Reinstall
-PathOS** in your Applications folder does it on the spot — drag it to the Dock. When it can't, a
-notification says what's missing, at most once a day: the Extra Storage drive, the phone (it
-needs to be unlocked, on the same Wi-Fi), or Xcode's sign-in to your Apple ID, which Apple
-asks for again every so often (**Xcode → Settings → Accounts**). What it did is logged in
+PathOS** in your Applications folder does it on the spot — drag it to the Dock.
+
+It builds from a copy of the project on the Mac's own disk, `~/Developer/PathOS`, brought up to
+date from GitHub first — so the Extra Storage drive needn't be connected, and what goes on the
+phone is what's been pushed. When it can't renew, a notification says what's missing, at most
+once a day: the phone (it needs to be unlocked, on the same Wi-Fi), or Xcode's sign-in to your
+Apple ID, which Apple asks for again every so often (**Xcode → Settings → Accounts**). What it did is logged in
 `~/Library/Application Support/PathOS Reinstall/reinstall.log`; `setup.sh --remove` takes it
 all away.
 
