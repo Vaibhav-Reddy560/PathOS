@@ -142,7 +142,8 @@ for file in "$held"/*.mobileprovision; do
 done
 
 if [ $status -ne 0 ]; then
-    if grep -q "login details\|Unable to log in" <<<"$output"; then
+    # Xcode words a lapsed sign-in several ways: rejected, unreadable, or no account at all.
+    if grep -q "login details\|Unable to log in\|No Accounts\|Failed to load credentials\|Invalid credentials" <<<"$output"; then
         log "Xcode isn't signed in."
         tell signin "Sign in to Xcode again" "Xcode → Settings → Accounts needs your Apple ID password. PathOS runs out $when."
     elif grep -q "No iPhone found\|could not be established\|Connection reset" <<<"$output"; then
