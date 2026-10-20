@@ -58,13 +58,16 @@ EOF
 fi
 echo "Found ${name}."
 
-# 2. Build it, letting Xcode mint a fresh seven-day certificate.
+# 2. Build it, letting Xcode mint a fresh seven-day certificate. For this phone by name, not
+# any iPhone: a free account's profile lists the phones it runs on, and Apple won't make one
+# for a team with none registered ("Your team has no devices"). Building for the phone is
+# what lets Xcode register it.
 say "Building…"
 xcodegen generate >/dev/null
 xcodebuild -project PathOS.xcodeproj -scheme PathOS \
-    -destination 'generic/platform=iOS' \
+    -destination "id=$device" \
     -derivedDataPath build/DeviceData \
-    -allowProvisioningUpdates build \
+    -allowProvisioningUpdates -allowProvisioningDeviceRegistration build \
     -quiet
 
 # 3. Install over the top.
