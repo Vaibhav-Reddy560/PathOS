@@ -52,8 +52,9 @@ if [ ! -f "$STATE/installed-expiry" ] && [ -f "$BUILT" ]; then
 fi
 
 # Every hour, and whenever you log in. A Mac that was asleep runs it on waking. Through the same
-# app you'd double-click, so both run alike; a fresh mark in the folder tells the app this run
-# is the hourly check, not you asking.
+# app you'd double-click, so both run alike, and macOS asks about Reminders on its behalf. A
+# fresh "next-run" note in the folder says what this run is — empty for the hourly check; with
+# no note, it's you asking for a reinstall.
 cat > "$AGENT" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -65,7 +66,7 @@ cat > "$AGENT" <<PLIST
     <array>
         <string>/bin/sh</string>
         <string>-c</string>
-        <string>touch "$STATE/scheduled" &amp;&amp; /usr/bin/open -g "$APP"</string>
+        <string>: &gt; "$STATE/next-run" &amp;&amp; /usr/bin/open -g "$APP"</string>
     </array>
     <key>StartInterval</key>
     <integer>3600</integer>
@@ -89,9 +90,8 @@ cat > "$STATE/applet.applescript" <<APPLESCRIPT
 set stateFolder to "$STATE/"
 set mode to " --now"
 try
-    -- Marked by the hourly check within the last two minutes: just a check.
-    do shell script "test -n \"\$(find " & quoted form of (stateFolder & "scheduled") & " -mmin -2)\" && rm " & quoted form of (stateFolder & "scheduled")
-    set mode to ""
+    -- A note left within the last two minutes says what this run is: empty for the hourly check.
+    set mode to " " & (do shell script "f=" & quoted form of (stateFolder & "next-run") & "; test -n \"\$(find \"\$f\" -mmin -2)\" && cat \"\$f\" && rm \"\$f\"")
 end try
 do shell script "/bin/bash " & quoted form of (stateFolder & "auto-reinstall.sh") & mode & " > /dev/null 2>&1"
 APPLESCRIPT

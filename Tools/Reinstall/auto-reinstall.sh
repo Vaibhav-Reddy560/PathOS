@@ -6,8 +6,9 @@
 # phone runs out, and within the last two days it builds PathOS again with a fresh seven-day
 # profile and installs it over Wi-Fi. "Reinstall PathOS" in Applications runs it at once:
 #
-#   auto-reinstall.sh          the hourly check, from launchd (see setup.sh)
-#   auto-reinstall.sh --now    build and install now, whatever the date
+#   auto-reinstall.sh            the hourly check, from launchd (see setup.sh)
+#   auto-reinstall.sh --now      build and install now, whatever the date
+#   auto-reinstall.sh --remind   only send the reminder to tap Trust, to try it out
 #
 # It builds from a copy of the project on the Mac's own disk, brought up to date from GitHub
 # first, so the drive the project lives on needn't be connected: what's installed is what's
@@ -73,6 +74,30 @@ is_ours() {
 }
 
 say_when() { date -r "$1" '+%a %-d %b, %-I:%M %p'; }
+
+# Where to tap on the phone. iOS asks a free Apple ID's app to be trusted again when a new
+# weekly profile arrives and it can't check the developer with Apple by itself.
+TRUST_STEPS="Open PathOS. If it says Untrusted Developer: Settings → General → VPN & Device Management → Apple Development: vaibhav.reddy560@gmail.com → Trust (or Verify App)."
+
+# A reminder that goes off on the phone a minute from now: Reminders syncs through iCloud, which
+# a notification from this Mac can't reach.
+remind_on_phone() {
+    osascript - "$TRUST_STEPS" >/dev/null 2>&1 <<'APPLESCRIPT'
+on run {steps}
+    tell application "Reminders"
+        tell default list
+            make new reminder with properties {name:"PathOS was renewed — check it opens", body:steps, remind me date:((current date) + 60)}
+        end tell
+    end tell
+end run
+APPLESCRIPT
+}
+
+if [ "${1:-}" = "--remind" ]; then
+    remind_on_phone && log "Reminder sent to the phone." || log "Couldn't add the reminder: Reminders may need allowing."
+    rm -rf "$SCRATCH"
+    exit 0
+fi
 
 finish() { rm -rf "$SCRATCH" "$STATE/lock"; }
 
@@ -165,9 +190,11 @@ if [ "$renewed" -le "$installed" ]; then
     echo "$installed" > "$SAME_UNTIL"
     log "Installed, but with the same profile: it still runs out $when."
     $force && notify "PathOS reinstalled" "Apple gave back the same profile, so it still runs out $when. It renews after that."
+    remind_on_phone
 else
     echo "$renewed" > "$INSTALLED"
     rm -f "$SAME_UNTIL"
     log "Renewed until $(say_when "$renewed")."
-    notify "PathOS renewed" "Good until $(say_when "$renewed")."
+    notify "PathOS renewed" "Good until $(say_when "$renewed"). On your iPhone, check it opens — a reminder's on its way."
+    remind_on_phone
 fi
