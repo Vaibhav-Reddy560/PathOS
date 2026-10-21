@@ -305,6 +305,8 @@ final class AppState {
     /// On foot near the end: the nearest you've got, and when — inside a mall you keep walking
     /// without getting any closer, which is having arrived.
     @ObservationIgnored var closestToEnd: (metres: Double, at: Date)?
+    /// The ride's shape on the map, worked out once a ride rather than on every redraw.
+    @ObservationIgnored var cachedRideShape: (key: String, points: [CLLocationCoordinate2D])?
     /// Travel noticed from movement while nothing's being followed.
     @ObservationIgnored var segmenter = MotionSegmenter()
     /// The leg of a way under way: when it began, and how far you've gone on it.
@@ -354,7 +356,7 @@ final class AppState {
                 for: SavedPlace.self, SpatialNote.self, ScanRecord.self, Expense.self, DepartureLog.self,
                 PathEvent.self, DayLog.self, NotePhoto.self, TimetableEntry.self, TimetableException.self,
                 Trip.self, TripLeg.self, MailSuggestion.self, Reminder.self, Holiday.self,
-                RideRecord.self, OrderUpdate.self, TravelSegment.self
+                RideRecord.self, OrderUpdate.self, TravelSegment.self, PaymentRecord.self
             )
         } catch {
             fatalError("PathOS couldn't open its storage: \(error)")
@@ -1472,9 +1474,8 @@ final class AppState {
         guard trip == nil, let journey = transit.journey, loggedJourneyID != journey.id else { return }
         loggedJourneyID = journey.id
         saveTravel()
-        let distances = RideLine.distances(journey.stops)
         let reached = transit.progress?.currentIndex ?? 0
-        let distance = min(transit.track.along, distances.last ?? 0)
+        let distance = min(transit.track.along, RideLine.geometry(of: journey).length)
         defer { legMeters = 0 }
         guard distance >= 300 else { return }
         let fare: Double? = journey.kind == .metro
@@ -2170,6 +2171,34 @@ final class AppState {
             day = dayEnd
         }
         return days
+    }
+
+    /// What was spent in a day, a month or a year: every payment a mail confirmed — banks' and
+    /// cards' alerts, UPI apps', shops' and ride apps' receipts — and every bill you scanned, each once.
+    func spending(in interval: DateInterval) -> [Spending.Entry] {
+        let context = modelContainer.mainContext
+        // A little either side, so an alert and its receipt either side of midnight still meet.
+        let start = interval.start.addingTimeInterval(-Spending.receiptAfterDebit)
+        let end = interval.end.addingTimeInterval(Spending.receiptAfterDebit)
+        let payments = (try? context.fetch(FetchDescriptor<PaymentRecord>(
+            predicate: #Predicate { $0.at >= start && $0.at < end }))) ?? []
+        let rides = (try? context.fetch(FetchDescriptor<RideRecord>(
+            predicate: #Predicate { $0.at >= start && $0.at < end }))) ?? []
+        let scanned = (try? context.fetch(FetchDescriptor<Expense>(
+            predicate: #Predicate { $0.date >= start && $0.date < end }))) ?? []
+        var entries = payments.map(\.entry)
+        entries += rides.compactMap { ride in
+            ride.fare.map {
+                Spending.Entry(id: ride.id, at: ride.at, amount: $0, payee: ride.service.name, source: ride.service.name,
+                               method: .other, reference: nil, account: nil, isReceipt: true)
+            }
+        }
+        entries += scanned.filter { $0.amount > 0 && $0.currencyCode == "INR" }.map { expense in
+            Spending.Entry(id: expense.id, at: expense.date, amount: expense.amount,
+                           payee: expense.merchant.isEmpty ? nil : expense.merchant, source: "Scanned bill",
+                           method: .other, reference: nil, account: nil, isReceipt: true)
+        }
+        return Spending.combined(entries).filter { interval.contains($0.at) }
     }
 
     /// The travel of a day, a month or a year: every stretch written, priced by the ride receipts

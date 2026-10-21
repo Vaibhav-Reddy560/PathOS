@@ -104,6 +104,10 @@ final class BackupService {
                   fromName: $0.fromName, toName: $0.toName, fare: $0.fare, fareIsEstimate: $0.fareIsEstimate,
                   sourceRaw: $0.sourceRaw)
         }
+        archive.payments = fetch(PaymentRecord.self).map {
+            .init(id: $0.id, at: $0.at, amount: $0.amount, payee: $0.payee, source: $0.source, methodRaw: $0.methodRaw,
+                  reference: $0.reference, account: $0.account, isReceipt: $0.isReceipt, messageID: $0.messageID)
+        }
         archive.orders = fetch(OrderUpdate.self).map {
             .init(id: $0.id, serviceRaw: $0.serviceRaw, orderID: $0.orderID, item: $0.item, statusRaw: $0.statusRaw,
                   firstSeenAt: $0.firstSeenAt, updatedAt: $0.updatedAt, messageID: $0.messageID)
@@ -335,6 +339,13 @@ final class BackupService {
             segment.id = item.id
             context.insert(segment)
         }
+        for item in archive.payments ?? [] {
+            let payment = PaymentRecord(amount: item.amount, at: item.at, payee: item.payee, source: item.source,
+                                        method: PaymentMail.Method(rawValue: item.methodRaw) ?? .other, reference: item.reference,
+                                        account: item.account, isReceipt: item.isReceipt, messageID: item.messageID)
+            payment.id = item.id
+            context.insert(payment)
+        }
         for item in archive.orders ?? [] {
             let order = OrderUpdate(ServiceMail.Order(service: ServiceMail.Service(rawValue: item.serviceRaw) ?? .amazon,
                                                       orderID: item.orderID,
@@ -432,6 +443,7 @@ final class BackupService {
         try context.delete(model: RideRecord.self)
         try context.delete(model: OrderUpdate.self)
         try context.delete(model: TravelSegment.self)
+        try context.delete(model: PaymentRecord.self)
         try context.delete(model: Reminder.self)
     }
 

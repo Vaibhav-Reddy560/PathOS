@@ -77,3 +77,42 @@ final class OrderUpdate {
         return now.timeIntervalSince(updatedAt) < patience
     }
 }
+
+/// Money that left your accounts, as a mail confirmed it: a bank's or a card's alert, a UPI app's
+/// receipt, or a shop's own.
+@Model
+final class PaymentRecord {
+    var id: UUID = UUID()
+    var at: Date = Date()
+    var amount: Double = 0
+    var payee: String?
+    /// Who said so: "HDFC Bank", "Swiggy".
+    var source: String = ""
+    var methodRaw: String = PaymentMail.Method.other.rawValue
+    var reference: String?
+    var account: String?
+    /// A shop's own receipt, rather than the bank's word for it.
+    var isReceipt: Bool = false
+    /// The mail it came from, so it's never counted twice.
+    var messageID: String = ""
+
+    init(amount: Double, at: Date, payee: String?, source: String, method: PaymentMail.Method, reference: String? = nil,
+         account: String? = nil, isReceipt: Bool = false, messageID: String) {
+        self.amount = amount
+        self.at = at
+        self.payee = payee
+        self.source = source
+        methodRaw = method.rawValue
+        self.reference = reference
+        self.account = account
+        self.isReceipt = isReceipt
+        self.messageID = messageID
+    }
+
+    var method: PaymentMail.Method { PaymentMail.Method(rawValue: methodRaw) ?? .other }
+
+    var entry: Spending.Entry {
+        Spending.Entry(id: id, at: at, amount: amount, payee: payee, source: source, method: method, reference: reference,
+                       account: account, isReceipt: isReceipt)
+    }
+}

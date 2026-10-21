@@ -255,7 +255,12 @@ final class MailService {
             // Ride receipts, tickets and order updates often land in Promotions, which the search
             // above leaves out: they're asked for by who sends them as well.
             let services = (try? await session.messageIDs(matching: ServiceMail.searchQuery(since: cursor), max: Self.searchWindow)) ?? []
-            let ids = general + services.filter { !general.contains($0) }
+            // Banks' alerts and payments apps' receipts, for what you've spent: some land there too.
+            let payments = (try? await session.messageIDs(matching: PaymentMail.searchQuery(since: cursor), max: Self.searchWindow)) ?? []
+            var ids = general
+            for id in services + payments where !ids.contains(id) {
+                ids.append(id)
+            }
             let known = knownMessageIDs()
             let unread = ids.filter { !known.contains($0) }
 
@@ -269,10 +274,14 @@ final class MailService {
                 // Muted senders' mail isn't read at all; it's noted only so it's never fetched again.
                 let proposal: MailProposal
                 let service = ServiceMail.service(of: message.senderAddress)
+                var isPayment = false
                 if isMuted(message.senderAddress) {
                     proposal = MailProposal(kind: .ignore, title: message.subject, summary: "", usedAI: false)
                 } else if let service, let read = await readService(message, service) {
                     proposal = read
+                } else if service == nil, let paid = readPayment(message) {
+                    proposal = paid
+                    isPayment = true
                 } else if service == nil, let read = await triage(message) {
                     proposal = read
                 } else {
@@ -286,9 +295,9 @@ final class MailService {
                 switch service?.kind {
                 case .ticket? where suggestion.canAddDirectly:
                     await addTicket(suggestion, from: service!)
-                case .ride?, .order?:
-                    // Already kept where it belongs — the ride in Overview, the order on Now — so
-                    // there's nothing waiting on you in the mail.
+                case _ where isPayment, .ride?, .order?:
+                    // Already kept where it belongs — the ride and the payment in the day's travel
+                    // and spending, the order on Now — so there's nothing waiting on you in the mail.
                     if suggestion.status == .pending {
                         suggestion.status = .dismissed
                         try? context.save()
@@ -378,11 +387,19 @@ final class MailService {
         case .order:
             guard let order = ServiceMail.order(service, subject: message.subject, body: message.body) else { return skip }
             record(order, from: message)
+            if order.status != .cancelled, let total = PaymentMail.receiptTotal(subject: message.subject, body: message.body) {
+                recordPayment(PaymentMail.Payment(amount: total, payee: service.name, method: .other, reference: order.orderID),
+                              source: service.name, isReceipt: true, from: message)
+            }
             return MailProposal(kind: .update, title: "\(service.name): \(order.item ?? "your order") · \(order.status.label)",
                                 summary: order.orderID.map { "Order \($0)" } ?? "", usedAI: false)
         case .ticket:
             guard let ticket = ServiceMail.ticket(subject: message.subject, body: message.body, received: message.receivedAt)
             else { return skip }
+            if let total = PaymentMail.receiptTotal(subject: message.subject, body: message.body) {
+                recordPayment(PaymentMail.Payment(amount: total, payee: service.name, method: .other, reference: ticket.bookingID),
+                              source: service.name, isReceipt: true, from: message)
+            }
             // What's showing and where is read the way any event's mail is; when it is, the rules'.
             guard var proposal = await triage(message) else { return nil }
             proposal.kind = .event
@@ -396,6 +413,31 @@ final class MailService {
                 .joined(separator: " · ")
             return proposal
         }
+    }
+
+    // MARK: Payments
+
+    /// A bank's or a card's alert, or a payments app's receipt: what was paid is kept for the
+    /// day's spending, and there's nothing waiting on you in the mail. Nil when it isn't one.
+    private func readPayment(_ message: MailMessage) -> MailProposal? {
+        let sender = PaymentMail.sender(of: message.senderAddress)
+        guard let payment = PaymentMail.payment(subject: message.subject, body: message.body, isKnownSender: sender != nil)
+        else { return nil }
+        let source = sender ?? message.senderName
+        recordPayment(payment, source: source, isReceipt: false, from: message)
+        let amount = "₹\(payment.amount.formatted(.number.precision(.fractionLength(0...2))))"
+        return MailProposal(kind: .update, title: [amount, payment.payee.map { "to \($0)" }].compactMap { $0 }.joined(separator: " "),
+                            summary: [source, payment.method.label].joined(separator: " · "), usedAI: false)
+    }
+
+    private func recordPayment(_ payment: PaymentMail.Payment, source: String, isReceipt: Bool, from message: MailMessage) {
+        let id = message.id
+        let seen = (try? context.fetch(FetchDescriptor<PaymentRecord>(predicate: #Predicate { $0.messageID == id }))) ?? []
+        guard seen.isEmpty else { return }
+        context.insert(PaymentRecord(amount: payment.amount, at: message.receivedAt, payee: payment.payee, source: source,
+                                     method: payment.method, reference: payment.reference, account: payment.account,
+                                     isReceipt: isReceipt, messageID: id))
+        try? context.save()
     }
 
     private func record(_ ride: ServiceMail.Ride, from message: MailMessage) {

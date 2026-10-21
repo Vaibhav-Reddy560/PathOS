@@ -18,6 +18,8 @@ struct MonthCalendar: View {
     }
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    /// The month and year wheels, open: for going straight to any month of any year.
+    @State private var isChoosingMonth = false
     private let columns = Array(repeating: GridItem(.flexible(), spacing: 4), count: 7)
 
     var body: some View {
@@ -27,6 +29,10 @@ struct MonthCalendar: View {
         ContentTile(padding: 14) {
             VStack(spacing: 12) {
                 header(calendar: calendar)
+
+                if isChoosingMonth {
+                    monthChooser(calendar: calendar)
+                }
 
                 HStack(spacing: 4) {
                     ForEach(Array(MonthGrid.weekdaySymbols().enumerated()), id: \.offset) { _, symbol in
@@ -65,10 +71,25 @@ struct MonthCalendar: View {
             }
             .accessibilityLabel("Previous month")
 
-            Text(month.formatted(.dateTime.month(.wide).year()))
-                .font(.headline)
-                .foregroundStyle(.ice)
-                .frame(maxWidth: .infinity)
+            // Tapped, it opens wheels for the month and the year.
+            Button {
+                withAnimation(PathMotion.resolve(PathMotion.control, reduceMotion: reduceMotion)) {
+                    isChoosingMonth.toggle()
+                }
+            } label: {
+                HStack(spacing: 4) {
+                    Text(month.formatted(.dateTime.month(.wide).year()))
+                        .font(.headline)
+                        .foregroundStyle(isChoosingMonth ? .aurora : .ice)
+                    Image(systemName: "chevron.down")
+                        .font(.caption.weight(.bold))
+                        .foregroundStyle(isChoosingMonth ? .aurora : .mist)
+                        .rotationEffect(.degrees(isChoosingMonth ? 180 : 0))
+                }
+                .frame(maxWidth: .infinity, minHeight: 36)
+                .contentShape(.rect)
+            }
+            .accessibilityLabel("\(month.formatted(.dateTime.month(.wide).year())), choose a month and year")
 
             if !calendar.isDate(month, equalTo: Date(), toGranularity: .month) {
                 Button("Today") {
@@ -146,6 +167,38 @@ struct MonthCalendar: View {
             flags.contains(.note) ? "Has a note" : nil,
         ].compactMap { $0 }.joined(separator: ", "))
         .accessibilityAddTraits(isSelected ? .isSelected : [])
+    }
+
+    /// A month and a year, each on its own wheel, as in Calendar.
+    private func monthChooser(calendar: Calendar) -> some View {
+        let thisYear = calendar.component(.year, from: Date())
+        let years = Array((thisYear - 10)...(thisYear + 2))
+        return HStack(spacing: 0) {
+            Picker("Month", selection: Binding(
+                get: { calendar.component(.month, from: month) },
+                set: { set(month: $0, year: calendar.component(.year, from: month)) }
+            )) {
+                ForEach(1...12, id: \.self) { number in
+                    Text(calendar.standaloneMonthSymbols[number - 1]).tag(number)
+                }
+            }
+            Picker("Year", selection: Binding(
+                get: { calendar.component(.year, from: month) },
+                set: { set(month: calendar.component(.month, from: month), year: $0) }
+            )) {
+                ForEach(years, id: \.self) { year in
+                    Text(String(year)).tag(year)
+                }
+            }
+        }
+        .pickerStyle(.wheel)
+        .frame(height: 140)
+        .clipped()
+    }
+
+    private func set(month number: Int, year: Int) {
+        guard let date = Calendar.current.date(from: DateComponents(year: year, month: number, day: 1)) else { return }
+        month = date
     }
 
     private func step(_ months: Int) {

@@ -38,6 +38,8 @@ nonisolated struct BackupArchive: Codable, Equatable {
     var orders: [Order]?
     /// The day's travel, stretch by stretch.
     var travel: [Stretch]?
+    /// Payments read from mail.
+    var payments: [Payment]?
     /// Preferences that aren't worth a model of their own: priority senders, the preferred cab.
     var settings: [String: String] = [:]
     var settingLists: [String: [String]] = [:]
@@ -228,6 +230,19 @@ nonisolated struct BackupArchive: Codable, Equatable {
         var pickup: String?
         var drop: String?
         var vehicleRaw: String?
+        var messageID: String
+    }
+
+    nonisolated struct Payment: Codable, Equatable {
+        var id: UUID
+        var at: Date
+        var amount: Double
+        var payee: String?
+        var source: String
+        var methodRaw: String
+        var reference: String?
+        var account: String?
+        var isReceipt: Bool
         var messageID: String
     }
 

@@ -26,9 +26,15 @@ struct DayDeck: View {
     @State private var month = MonthGrid.month(0, from: Date())
     /// Your Apple Calendar's own events for the days on screen.
     @State private var calendarItems: [CalendarItem] = []
-    /// Any day of the year Year shows.
-    @State private var year = Date()
+    /// Month's overview: the month the calendar shows, or its whole year.
+    @AppStorage("pathos.monthOverviewScope") private var overviewScope: OverviewScope = .month
     @State private var isTravelShown = false
+    @State private var isSpendingShown = false
+    /// The day's payments, each once: read again when the day changes or mail brings another.
+    @State private var daySpending: [Spending.Entry] = []
+    @Query private var payments: [PaymentRecord]
+    @Query private var rideReceipts: [RideRecord]
+    @Query private var scannedBills: [Expense]
 
     var body: some View {
         ScrollView {
@@ -47,7 +53,6 @@ struct DayDeck: View {
                 switch mode {
                 case .day: dayView
                 case .month: monthView
-                case .year: yearView
                 case .mail:
                     // The day you were on: its mail, not everything waiting.
                     dayPicker
@@ -76,10 +81,17 @@ struct DayDeck: View {
         }
         .onChange(of: mode) { _, mode in
             if mode == .month { month = MonthGrid.month(0, from: day) }
-            if mode == .year { year = day }
         }
         .sheet(isPresented: $isTravelShown) {
             TravelLogSheet(day: day, recorded: dayLog?.distanceMeters ?? 0)
+        }
+        .sheet(isPresented: $isSpendingShown) {
+            SpendingSheet(day: day, entries: daySpending)
+        }
+        .task(id: "\(day.timeIntervalSince1970)·\(payments.count)·\(rideReceipts.count)·\(scannedBills.count)") {
+            let start = Calendar.current.startOfDay(for: day)
+            let end = Calendar.current.date(byAdding: .day, value: 1, to: start) ?? start
+            daySpending = state.spending(in: DateInterval(start: start, end: end))
         }
     }
 
@@ -180,73 +192,19 @@ struct DayDeck: View {
         }
         .pathSecondaryAction()
 
-        // How the month added up, the month the calendar shows.
-        PeriodOverview(period: .month(month))
-    }
-
-    /// A year of your days, one year at a time; a month opens in Month.
-    @ViewBuilder
-    private var yearView: some View {
-        yearPicker
-        PeriodOverview(period: .year(year)) { month in
+        // How the month added up, or the whole year it's in: the year is chosen on the calendar.
+        Picker("Overview of", selection: $overviewScope) {
+            Text("Month").tag(OverviewScope.month)
+            Text("Year").tag(OverviewScope.year)
+        }
+        .pickerStyle(.segmented)
+        .padding(.top, 8)
+        PeriodOverview(period: overviewScope == .month ? .month(month) : .year(month)) { chosen in
             withAnimation(PathMotion.control) {
-                self.month = month
-                day = month
-                mode = .month
+                month = chosen
+                overviewScope = .month
             }
         }
-    }
-
-    private var yearPicker: some View {
-        let calendar = Calendar.current
-        let shown = calendar.component(.year, from: year)
-        let thisYear = calendar.component(.year, from: Date())
-        // Back to the first year PathOS kept anything, on to next year's holidays.
-        let first = min(dayLogs.last.map { calendar.component(.year, from: $0.dayStart) } ?? thisYear, thisYear)
-        return HStack(spacing: 12) {
-            Button {
-                shiftYear(by: -1)
-            } label: {
-                Image(systemName: "chevron.left")
-                    .frame(width: 44, height: 40)
-                    .contentShape(.rect)
-            }
-            .buttonStyle(.plain)
-            .foregroundStyle(shown > first ? .ice : .mist.opacity(0.4))
-            .disabled(shown <= first)
-            .accessibilityLabel("Previous year")
-
-            Text(String(shown))
-                .font(.headline.monospacedDigit())
-                .foregroundStyle(.ice)
-                .frame(maxWidth: .infinity)
-
-            if shown != thisYear {
-                Button("This year") {
-                    withAnimation(PathMotion.control) { year = Date() }
-                }
-                .font(.subheadline.weight(.semibold))
-                .foregroundStyle(.aurora)
-            }
-
-            Button {
-                shiftYear(by: 1)
-            } label: {
-                Image(systemName: "chevron.right")
-                    .frame(width: 44, height: 40)
-                    .contentShape(.rect)
-            }
-            .buttonStyle(.plain)
-            .foregroundStyle(shown < thisYear + 1 ? .ice : .mist.opacity(0.4))
-            .disabled(shown >= thisYear + 1)
-            .accessibilityLabel("Next year")
-        }
-        .accessibilityElement(children: .contain)
-    }
-
-    private func shiftYear(by years: Int) {
-        guard let moved = Calendar.current.date(byAdding: .year, value: years, to: year) else { return }
-        withAnimation(PathMotion.control) { year = moved }
     }
 
     // MARK: Sections
@@ -323,7 +281,7 @@ struct DayDeck: View {
                     column(travelledMetric.fixedSize())
                     column(eventsMetric.fixedSize())
                     column(tasksMetric.fixedSize())
-                    column(savedMetric.fixedSize())
+                    column(spentMetric.fixedSize())
                 }
                 Grid(alignment: .leading, horizontalSpacing: 16, verticalSpacing: 14) {
                     GridRow {
@@ -332,7 +290,7 @@ struct DayDeck: View {
                     }
                     GridRow {
                         column(tasksMetric)
-                        column(savedMetric)
+                        column(spentMetric)
                     }
                 }
             }
@@ -376,8 +334,26 @@ struct DayDeck: View {
         MetricView(label: "Tasks done", value: "\(tasksDone)", role: .you)
     }
 
-    private var savedMetric: some View {
-        MetricView(label: "Saved here", value: "\(memoriesSaved)", role: .you)
+    /// What the day cost, from the payments your mail confirmed; opens each one.
+    private var spentMetric: some View {
+        let total = Spending.total(daySpending)
+        return Button {
+            isSpendingShown = true
+        } label: {
+            VStack(alignment: .leading, spacing: 2) {
+                HStack(spacing: 3) {
+                    InstrumentLabel("Spent")
+                    Image(systemName: "chevron.right")
+                        .font(.caption2.weight(.bold))
+                        .foregroundStyle(.mist)
+                }
+                MetricText(value: daySpending.isEmpty ? "—" : "₹\(Int(total.rounded()).formatted())", unit: nil, role: .you)
+            }
+            .contentShape(.rect)
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(daySpending.isEmpty ? "Nothing spent that PathOS knows of" : "Spent ₹\(Int(total.rounded()))")
+        .accessibilityHint("Shows each payment")
     }
 
     /// The day's reminders, ticked off here. On today, anything left undone on an earlier day is
@@ -1051,7 +1027,6 @@ private struct DayItemRow: View {
 enum DayViewMode: String, CaseIterable, Identifiable {
     case day
     case month
-    case year
     case mail
 
     var id: String { rawValue }
@@ -1059,10 +1034,15 @@ enum DayViewMode: String, CaseIterable, Identifiable {
         switch self {
         case .day: "Day"
         case .month: "Month"
-        case .year: "Year"
         case .mail: "Mail"
         }
     }
+}
+
+/// What Month's overview covers.
+enum OverviewScope: String {
+    case month
+    case year
 }
 
 /// A symbol over a word, so four fit across the deck.

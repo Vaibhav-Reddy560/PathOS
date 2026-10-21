@@ -190,11 +190,26 @@ extension AppState {
     /// The stations of the ride you're on, for the map. Nil unless you're actually on it: a
     /// journey being followed stop by stop, or the ride leg of a way.
     var rideBeingFollowed: [JourneyStop]? {
-        if let journey = transit.journey { return journey.stops }
+        rideJourney?.journey.stops
+    }
+
+    /// The ride you're on as the map draws it: along the rails, where the track is known.
+    var rideShape: [CLLocationCoordinate2D]? {
+        guard let ride = rideJourney else { return nil }
+        if let cached = cachedRideShape, cached.key == ride.key { return cached.points }
+        let points = RideLine.geometry(of: ride.journey).points
+        cachedRideShape = (ride.key, points)
+        return points
+    }
+
+    /// The ride being followed, and something that names it for as long as it's the same ride.
+    private var rideJourney: (key: String, journey: Journey)? {
+        if let journey = transit.journey { return (journey.id.uuidString, journey) }
         guard let trip, let status = tripStatus, !status.hasArrived else { return nil }
         let leg = trip.option.legs[min(status.legIndex, trip.option.legs.count - 1)]
         guard leg.mode == .metro || leg.mode == .bus else { return nil }
-        return leg.metro.map { Journey.metro($0).stops } ?? trip.ride?.stops
+        if let route = leg.metro { return (leg.id.uuidString, Journey.metro(route)) }
+        return trip.ride.map { ($0.id.uuidString, $0) }
     }
 
     /// What to do on the ride you're on — the next station, a change, getting off — and, when

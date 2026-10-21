@@ -22,6 +22,8 @@ struct PeriodOverview: View {
     @State private var summary = Overview.Summary()
     @State private var months: [Overview.MonthTotal] = []
     @State private var travel: [TravelLog.Stretch] = []
+    @State private var spending: [Spending.Entry] = []
+    @State private var isSpendingShown = false
     @State private var showsAllMissed = false
     @State private var isImporting = false
 
@@ -31,6 +33,7 @@ struct PeriodOverview: View {
             if isYear, months.count > 1 {
                 monthsSection
             }
+            spendingSection
             travelSection
             missedSection
             daysOffSection
@@ -42,6 +45,9 @@ struct PeriodOverview: View {
         .task(id: "\(interval.start.timeIntervalSince1970)·\(state.holidays.version)") { refresh() }
         .sheet(isPresented: $isImporting, onDismiss: refresh) {
             HolidayImportSheet()
+        }
+        .sheet(isPresented: $isSpendingShown) {
+            SpendingSheet(title: name, entries: spending)
         }
     }
 
@@ -62,7 +68,8 @@ struct PeriodOverview: View {
                     GridRow {
                         metric(MetricView(label: "Tasks done", value: "\(summary.tasksDone)", role: .you))
                         metric(distanceMetric)
-                        metric(MetricView(label: "Spent", value: spent.map { "₹\($0.formatted())" } ?? "—"))
+                        metric(MetricView(label: "Spent", value: spending.isEmpty ? "—" : "₹\(Int(Spending.total(spending).rounded()).formatted())",
+                                          role: .you))
                     }
                 }
             }
@@ -83,9 +90,9 @@ struct PeriodOverview: View {
 
     /// The year month by month; a month opens in the calendar above.
     private var monthsSection: some View {
-        let spentByMonth = Dictionary(grouping: travel) {
-            Calendar.current.dateInterval(of: .month, for: $0.start)?.start ?? $0.start
-        }.mapValues { $0.compactMap(\.fare).reduce(0, +) }
+        let spentByMonth = Dictionary(grouping: spending) {
+            Calendar.current.dateInterval(of: .month, for: $0.at)?.start ?? $0.at
+        }.mapValues(Spending.total)
         return VStack(alignment: .leading, spacing: 10) {
             DeckSectionHeader(title: "Month by month")
             GroupedRows(months.reversed()) { month in
@@ -120,6 +127,37 @@ struct PeriodOverview: View {
          summary.distanceMeters > 0 ? DayDistance.format(summary.distanceMeters) : nil,
          spent.flatMap { $0 > 0 ? "₹\(Int($0.rounded()).formatted())" : nil }]
             .compactMap { $0 }.joined(separator: " · ").nilIfEmpty ?? "Nothing kept"
+    }
+
+    /// Who the money went to, most first; every payment is a tap away.
+    @ViewBuilder
+    private var spendingSection: some View {
+        if !spending.isEmpty {
+            let payees = Spending.byPayee(spending)
+            VStack(alignment: .leading, spacing: 10) {
+                DeckSectionHeader(title: "Where it went", trailing: "\(spending.count) \(spending.count == 1 ? "payment" : "payments")")
+                GroupedRows(payees.prefix(6).map { PayeeTotal(payee: $0.payee, amount: $0.amount, count: $0.count) }) { total in
+                    HStack(spacing: 12) {
+                        Text(total.payee)
+                            .foregroundStyle(.ice)
+                            .lineLimit(1)
+                        Spacer(minLength: 8)
+                        Text(total.count == 1 ? "" : "\(total.count)×")
+                            .font(.subheadline)
+                            .foregroundStyle(.mist)
+                        Text("₹\(Int(total.amount.rounded()).formatted())")
+                            .font(.subheadline.weight(.semibold).monospacedDigit())
+                            .foregroundStyle(.ice)
+                    }
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 12)
+                }
+                Button("See every payment") { isSpendingShown = true }
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(.aurora)
+                    .padding(.horizontal, 4)
+            }
+        }
     }
 
     /// How you got about: walking, by road, the metro — how far, how long, what it cost.
@@ -282,12 +320,6 @@ struct PeriodOverview: View {
 
     private var isCurrent: Bool { interval.contains(Date()) }
 
-    /// What the period's travel cost, in whole rupees, where any of it is known.
-    private var spent: Int? {
-        let fares = travel.compactMap(\.fare)
-        return fares.isEmpty ? nil : Int(fares.reduce(0, +).rounded())
-    }
-
     private var sourceNote: String {
         let official = Holidays.bundled.sources.first.map { "Public holidays: \($0.notification)." } ?? ""
         return "\(official) Next year's list comes with PathOS once the state publishes it, usually in November. A college's own calendar — a photo, a PDF or pasted text — is read on your iPhone, and you check it before anything is saved."
@@ -298,6 +330,125 @@ struct PeriodOverview: View {
         summary = Overview.summary(of: days, now: Date())
         months = isYear ? Overview.byMonth(days, now: Date()) : []
         travel = state.travel(in: interval)
+        spending = state.spending(in: interval)
+    }
+}
+
+/// One payee's share of a month or a year.
+private struct PayeeTotal: Identifiable {
+    var payee: String
+    var amount: Double
+    var count: Int
+    var id: String { payee }
+}
+
+/// Every payment in a day, a month or a year: when, to whom, how much, and who said so.
+struct SpendingSheet: View {
+    var title: String
+    let entries: [Spending.Entry]
+    /// A day's payments read only the time; a month's or a year's, the date as well.
+    var showsDates = true
+
+    @Environment(\.dismiss) private var dismiss
+
+    init(title: String, entries: [Spending.Entry]) {
+        self.title = title
+        self.entries = entries
+    }
+
+    init(day: Date, entries: [Spending.Entry]) {
+        title = day.formatted(.dateTime.weekday(.wide).day().month(.wide))
+        self.entries = entries
+        showsDates = false
+    }
+
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 20) {
+                    ContentTile {
+                        HStack(alignment: .top, spacing: 12) {
+                            MetricView(label: "Spent", value: entries.isEmpty ? "—" : "₹\(Int(Spending.total(entries).rounded()).formatted())",
+                                       role: .you)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                            MetricView(label: "Payments", value: "\(entries.count)")
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                        }
+                    }
+                    if entries.isEmpty {
+                        Text("Nothing yet. Payments are read from your Gmail as they arrive: your bank's and cards' alerts, UPI apps' and shops' receipts, ride receipts — and bills you scan.")
+                            .font(.subheadline)
+                            .foregroundStyle(.mist)
+                            .padding(.horizontal, 4)
+                    } else {
+                        GroupedRows(entries.reversed()) { entry in
+                            PaymentRow(entry: entry, showsDate: showsDates)
+                        }
+                    }
+                    Text("A payment your bank tells you about and the shop sends a receipt for is counted once. Banks that only send SMS can't be read: iOS doesn't let apps read messages.")
+                        .font(.footnote)
+                        .foregroundStyle(.mist)
+                        .padding(.horizontal, 4)
+                }
+                .padding(20)
+            }
+            .background(Color.deepSurface)
+            .navigationTitle(title)
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Done") { dismiss() }
+                }
+            }
+        }
+    }
+}
+
+/// One payment.
+private struct PaymentRow: View {
+    let entry: Spending.Entry
+    let showsDate: Bool
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 14) {
+            SignalGlyph(symbol: symbol, role: .you, size: 40)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(entry.payee ?? entry.source)
+                    .font(.body.weight(.semibold))
+                    .foregroundStyle(.ice)
+                    .lineLimit(2)
+                Text(detail)
+                    .font(.subheadline)
+                    .foregroundStyle(.mist)
+                    .lineLimit(2)
+            }
+            Spacer(minLength: 8)
+            Text("₹\(entry.amount.formatted(.number.precision(.fractionLength(0...2))))")
+                .font(.subheadline.weight(.semibold).monospacedDigit())
+                .foregroundStyle(.ice)
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 12)
+        .accessibilityElement(children: .combine)
+    }
+
+    private var symbol: String {
+        switch entry.method {
+        case .upi: "qrcode"
+        case .card: "creditcard.fill"
+        case .transfer: "building.columns.fill"
+        case .wallet: "wallet.pass.fill"
+        case .other: entry.isReceipt ? "doc.plaintext.fill" : "indianrupeesign.circle.fill"
+        }
+    }
+
+    /// "9:12 AM · HDFC Bank · UPI · ••1234".
+    private var detail: String {
+        let when = showsDate ? entry.at.formatted(.dateTime.day().month(.abbreviated).hour().minute())
+            : entry.at.formatted(date: .omitted, time: .shortened)
+        let said = entry.payee == nil || entry.payee == entry.source ? nil : entry.source
+        return [when, said, entry.isReceipt ? "receipt" : entry.method.label, entry.account.map { "••\($0)" }]
+            .compactMap { $0 }.joined(separator: " · ")
     }
 }
 
