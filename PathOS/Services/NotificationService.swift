@@ -17,6 +17,8 @@ final class NotificationService: NSObject {
         static let stillGoing = "pathos.stillGoing"
         /// A ticket added from mail, with the way to take it back.
         static let ticket = "pathos.ticket"
+        /// "On the train?", answered from the notification.
+        static let ride = "pathos.ride"
     }
 
     nonisolated enum Action {
@@ -25,6 +27,7 @@ final class NotificationService: NSObject {
         static let dropDeparture = "pathos.action.dropDeparture"
         static let keepDeparture = "pathos.action.keepDeparture"
         static let undoTicket = "pathos.action.undoTicket"
+        static let onBoard = "pathos.action.onBoard"
     }
 
     private(set) var isAuthorized = false
@@ -55,6 +58,11 @@ final class NotificationService: NSObject {
                     UNNotificationAction(identifier: Action.dropDeparture, title: "Drop it", options: [.destructive]),
                     UNNotificationAction(identifier: Action.keepDeparture, title: "I'm going", options: []),
                 ],
+                intentIdentifiers: []
+            ),
+            UNNotificationCategory(
+                identifier: Category.ride,
+                actions: [UNNotificationAction(identifier: Action.onBoard, title: "On the train", options: [])],
                 intentIdentifiers: []
             ),
             UNNotificationCategory(
@@ -204,6 +212,7 @@ extension NotificationService: UNUserNotificationCenterDelegate {
         // pathos://departure?id=… becomes pathos://departure/drop?id=…, answered without opening.
         case Action.dropDeparture: link.flatMap { URL(string: $0.replacingOccurrences(of: "://departure?", with: "://departure/drop?")) }
         case Action.keepDeparture: link.flatMap { URL(string: $0.replacingOccurrences(of: "://departure?", with: "://departure/keep?")) }
+        case Action.onBoard: URL(string: "pathos://ride/boarded")
         case Action.undoTicket: link.flatMap { URL(string: $0.replacingOccurrences(of: "://ticket?", with: "://ticket/undo?")) }
         default: link.flatMap(URL.init(string:))
         }

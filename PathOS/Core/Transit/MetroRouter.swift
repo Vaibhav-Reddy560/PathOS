@@ -2,7 +2,7 @@ import CoreLocation
 import Foundation
 
 /// One ride on one line, from where you board to where you get off.
-nonisolated struct MetroRide: Hashable, Sendable {
+nonisolated struct MetroRide: Hashable, Codable, Sendable {
     var lineID: String
     var fromIndex: Int
     var toIndex: Int
@@ -31,7 +31,7 @@ nonisolated struct MetroFare: Equatable, Sendable {
 
 /// A way from one station to another: the rides, where you change, and roughly how long and
 /// how much. Times and fares are estimates and are labelled as such wherever they're shown.
-nonisolated struct MetroRoute: Hashable, Sendable {
+nonisolated struct MetroRoute: Hashable, Codable, Sendable {
     var rides: [MetroRide]
     /// Stations passed through, not counting the one you board at. BMRCL prices by this.
     var stationsTravelled: Int

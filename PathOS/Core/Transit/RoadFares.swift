@@ -28,7 +28,7 @@ nonisolated struct RoadFareData: Sendable, Decodable {
 }
 
 /// A fare as PathOS is willing to state it: a range, never a price.
-nonisolated struct FareEstimate: Hashable, Sendable {
+nonisolated struct FareEstimate: Hashable, Codable, Sendable {
     var low: Int
     var high: Int
     /// The city sets this one, so the meter should agree.

@@ -57,158 +57,189 @@ struct JourneyTrackingTests {
         #expect(MetroNetwork.station(matching: "Koramangala") == nil)
     }
 
-    // MARK: Following a journey
+    // MARK: Following a ride
 
-    @Test func aJustStartedJourneyCountsEveryStop() {
-        let journey = purpleRide
-        let progress = JourneyTracker.progress(stops: journey.stops, nearestIndex: 0, elapsed: 0)
-        #expect(journey.stops.count == 8)
-        #expect(progress.stopsRemaining == 7)
-        #expect(progress.nextStationIndex == 1)
+    /// Your morning ride: Jayadeva Hospital to Konanakunte Cross, Yellow Line to Rashtreeya
+    /// Vidyalaya Road, then the Green Line.
+    private var forumRide: Journey {
+        Journey.metro(MetroRouter.route(from: "Jayadeva Hospital", to: "Konanakunte Cross", at: afternoon)!,
+                      startedAt: afternoon)
+    }
+
+    /// A good fix this far along the ride's line, `metres` off it to one side.
+    private func fix(_ journey: Journey, along: Double, off metres: Double = 0, at: Date) -> RideFix {
+        let distances = RideLine.distances(journey.stops)
+        let point = RideLine.point(at: along, on: journey.stops, distances: distances)!
+        return RideFix(coordinate: GeoMath.coordinate(point, metres: metres, bearing: 0), accuracy: 10, at: at)
+    }
+
+    private func along(_ journey: Journey, stop: Int) -> Double {
+        RideLine.distances(journey.stops)[stop]
+    }
+
+    /// Follows a fix at each station in turn, a minute and a half apart.
+    private func ride(_ journey: Journey, to stop: Int, from start: Date) -> (RideTrack, Date) {
+        var track = RideTrack()
+        var now = start
+        for index in 0...stop {
+            track = JourneyTracker.advance(track, in: journey, fix: fix(journey, along: along(journey, stop: index), at: now), now: now)
+            // Changing: on the next train once it's moving.
+            if track.isOnBoard == false, index > 0, index < stop {
+                track = JourneyTracker.board(track, now: now)
+            }
+            now = now.addingTimeInterval(90)
+        }
+        return (track, now)
+    }
+
+    @Test func theRideIsBuiltAsItsTrains() {
+        let journey = forumRide
+        #expect(journey.stops.map(\.name) == ["Jayadeva Hospital", "Ragigudda", "Rashtreeya Vidyalaya Road", "Banashankari",
+                                               "Jaya Prakash Nagar", "Yelachenahalli", "Konanakunte Cross"])
+        #expect(journey.parts.count == 2)
+        #expect(journey.parts[0].train.hasPrefix("Yellow Line towards"))
+        #expect(journey.parts[1].train == "Green Line towards Silk Institute")
+        #expect(journey.parts[0].lastStop == 2 && journey.parts[1].firstStop == 2)
+    }
+
+    /// On the platform: which train, nothing counted down, and the wait for it in the minutes.
+    @Test func onThePlatformItSaysWhichTrainToBoard() {
+        let journey = forumRide
+        let start = afternoon
+        let track = JourneyTracker.advance(RideTrack(), in: journey, fix: fix(journey, along: 20, at: start), now: start)
+        let progress = JourneyTracker.progress(of: track, in: journey, now: start)
+        #expect(progress.isWaiting && !progress.isChanging)
+        #expect(progress.currentIndex == 0 && progress.stopsRemaining == 6)
+        let instruction = JourneyTracker.instruction(for: progress, in: journey)
+        #expect(instruction.headline.hasPrefix("Board the Yellow Line towards"))
+        #expect(instruction.detail.contains("Next: Ragigudda"))
+    }
+
+    /// The fault on the morning ride: twenty minutes on the platform used to count as twenty
+    /// minutes of riding, and "get off at the next stop" came while you were three stops short.
+    @Test func waitingForATrainDoesntMoveYouAlong() {
+        let journey = forumRide
+        let start = afternoon
+        var track = JourneyTracker.advance(RideTrack(), in: journey, fix: fix(journey, along: 20, at: start), now: start)
+        let later = start.addingTimeInterval(20 * 60)
+        track = JourneyTracker.advance(track, in: journey, fix: fix(journey, along: 40, at: later), now: later)
+        let progress = JourneyTracker.progress(of: track, in: journey, now: later)
+        #expect(progress.currentIndex == 0)
+        #expect(progress.stopsRemaining == 6)
         #expect(!progress.isArrivingNext)
+    }
+
+    /// Moving along the line is boarding, without being told.
+    @Test func movingAlongTheLineIsBeingOnTheTrain() {
+        let journey = forumRide
+        let start = afternoon
+        var track = JourneyTracker.advance(RideTrack(), in: journey, fix: fix(journey, along: 0, at: start), now: start)
+        let moving = start.addingTimeInterval(60)
+        track = JourneyTracker.advance(track, in: journey, fix: fix(journey, along: 500, at: moving), now: moving)
+        #expect(track.isOnBoard)
+        let progress = JourneyTracker.progress(of: track, in: journey, now: moving)
+        #expect(!progress.isWaiting)
+        #expect(JourneyTracker.instruction(for: progress, in: journey).headline == "Next: Ragigudda")
+        #expect(progress.metresToNext.map { abs($0 - (along(journey, stop: 1) - 500)) < 1 } == true)
+    }
+
+    /// The dot that jumped back to Jayadeva: a fix behind where you've been seen is left out, and
+    /// so is one further ahead than any train could have gone.
+    @Test func aFixThatJumpsIsLeftOut() {
+        let journey = forumRide
+        let (track, now) = ride(journey, to: 1, from: afternoon)
+        let back = JourneyTracker.advance(track, in: journey, fix: fix(journey, along: 0, at: now), now: now)
+        #expect(back.along == track.along)
+        let leap = JourneyTracker.advance(track, in: journey, fix: fix(journey, along: along(journey, stop: 5), at: now.addingTimeInterval(10)),
+                                          now: now.addingTimeInterval(10))
+        #expect(leap.along == track.along)
+    }
+
+    /// A fix well off the line — a road beside it, a poor reading — doesn't move you along it.
+    @Test func aFixOffTheLineDoesntCount() {
+        let journey = forumRide
+        let (track, now) = ride(journey, to: 1, from: afternoon)
+        let off = JourneyTracker.advance(track, in: journey, fix: fix(journey, along: along(journey, stop: 1) + 600, off: 900, at: now), now: now)
+        #expect(off.along == track.along)
+    }
+
+    /// Underground, with no fix, you're carried on at the train's pace — but never past the next
+    /// station, and a guess never says you've arrived.
+    @Test func withoutAFixTheGuessStopsAtTheNextStation() {
+        let journey = forumRide
+        let (track, now) = ride(journey, to: 4, from: afternoon)
+        let much = now.addingTimeInterval(20 * 60)
+        let progress = JourneyTracker.progress(of: track, in: journey, now: much)
+        #expect(progress.currentIndex <= 5)
         #expect(!progress.hasArrived)
-        #expect(progress.nextChangeIndex == nil)
     }
 
-    @Test func gpsMovesYouAlongTheLine() {
-        let progress = JourneyTracker.progress(stops: purpleRide.stops, nearestIndex: 6, elapsed: 8 * 60)
-        #expect(progress.currentIndex == 6)
-        #expect(progress.isArrivingNext)
-        #expect(progress.isTrackingByLocation)
+    /// At the change, you're on the next train's platform: said, and asked.
+    @Test func atTheChangeItSaysWhereToChangeTo() {
+        let journey = forumRide
+        var track = RideTrack()
+        var now = afternoon
+        for stop in 0...2 {
+            track = JourneyTracker.advance(track, in: journey, fix: fix(journey, along: along(journey, stop: stop), at: now), now: now)
+            now = now.addingTimeInterval(90)
+        }
+        let progress = JourneyTracker.progress(of: track, in: journey, now: now)
+        #expect(progress.isWaiting && progress.isChanging)
+        #expect(progress.currentIndex == 2)
+        #expect(JourneyTracker.instruction(for: progress, in: journey).headline == "Change here: Green Line towards Silk Institute")
+        // The stop before: said while still on the Yellow Line.
+        var before = RideTrack()
+        now = afternoon
+        for stop in 0...1 {
+            before = JourneyTracker.advance(before, in: journey, fix: fix(journey, along: along(journey, stop: stop), at: now), now: now)
+            now = now.addingTimeInterval(90)
+        }
+        let coming = JourneyTracker.progress(of: before, in: journey, now: now)
+        #expect(coming.isChangingNext)
+        #expect(JourneyTracker.instruction(for: coming, in: journey).detail.hasSuffix("To the Green Line towards Silk Institute"))
     }
 
-    @Test func undergroundTheClockKeepsTheEstimateGoing() {
-        let stops = purpleRide.stops
-        // No usable fix: the clock says you've just passed the fifth stop.
-        let progress = JourneyTracker.progress(stops: stops, nearestIndex: nil, elapsed: (stops[4].minutesFromStart + 0.1) * 60)
-        #expect(progress.currentIndex == 4)
-        #expect(!progress.isTrackingByLocation)
-        // The first stop takes longest to reach: it includes waiting for a train.
-        #expect(stops[1].minutesFromStart > stops[2].minutesFromStart - stops[1].minutesFromStart)
-    }
-
-    @Test func aStrayFixBehindYouIsIgnored() {
-        let stops = purpleRide.stops
-        let progress = JourneyTracker.progress(stops: stops, nearestIndex: 0, elapsed: stops[5].minutesFromStart * 60)
-        #expect(progress.currentIndex == 5)
-    }
-
-    @Test func arrivalEndsTheJourney() {
-        let progress = JourneyTracker.progress(stops: purpleRide.stops, nearestIndex: 7, elapsed: 20 * 60)
+    /// Arriving is GPS putting you at the last station, nothing less.
+    @Test func arrivingIsBeingAtTheLastStation() {
+        let journey = forumRide
+        let (nearly, now) = ride(journey, to: 5, from: afternoon)
+        let coming = JourneyTracker.progress(of: nearly, in: journey, now: now)
+        #expect(coming.isArrivingNext && !coming.hasArrived)
+        #expect(JourneyTracker.instruction(for: coming, in: journey, then: "Walk to PVR INOX").headline
+                == "Get off at the next stop: Konanakunte Cross")
+        let there = JourneyTracker.advance(nearly, in: journey, fix: fix(journey, along: along(journey, stop: 6) - 40, at: now), now: now)
+        let progress = JourneyTracker.progress(of: there, in: journey, now: now)
         #expect(progress.hasArrived)
-        #expect(progress.nextStationIndex == nil)
+        #expect(JourneyTracker.instruction(for: progress, in: journey, then: "Walk to PVR INOX").detail == "Exit, then walk to PVR INOX")
         #expect(JourneyTracker.summary(progress) == "You've arrived")
     }
 
-    @Test func aChangeIsFlaggedTheStopBefore() {
-        // Indiranagar → Lalbagh: Purple to Majestic, then Green.
-        let journey = Journey.metro(MetroRouter.route(from: indiranagar, to: "Lalbagh", at: afternoon)!, startedAt: afternoon)
-        let changeIndex = journey.stops.firstIndex { $0.name == majestic }!
-        #expect(journey.stops[changeIndex].changeInstruction == "Change to the Green Line towards Silk Institute")
-        let before = JourneyTracker.progress(stops: journey.stops, nearestIndex: changeIndex - 1, elapsed: 0)
-        #expect(before.isChangingNext)
-        #expect(before.nextChangeIndex == changeIndex)
-        let after = JourneyTracker.progress(stops: journey.stops, nearestIndex: changeIndex, elapsed: 0)
-        #expect(!after.isChangingNext)
-        #expect(after.nextChangeIndex == nil)
+    /// The minutes left come from how much line is left and the waits still ahead.
+    @Test func minutesLeftComeFromTheLineLeft() {
+        let journey = forumRide
+        let (early, now) = ride(journey, to: 1, from: afternoon)
+        let (late, then) = ride(journey, to: 4, from: afternoon)
+        #expect(JourneyTracker.progress(of: early, in: journey, now: now).estimatedMinutesRemaining
+                > JourneyTracker.progress(of: late, in: journey, now: then).estimatedMinutesRemaining)
     }
 
-    @Test func nearestStopNeedsYouToBeNearIt() {
-        let stops = purpleRide.stops
-        let atIndiranagar = CLLocationCoordinate2D(latitude: stops[0].latitude + 0.0005, longitude: stops[0].longitude)
-        #expect(JourneyTracker.nearestStopIndex(to: atIndiranagar, stops: stops, radius: 700) == 0)
-        let farAway = CLLocationCoordinate2D(latitude: 12.90, longitude: 77.50)
-        #expect(JourneyTracker.nearestStopIndex(to: farAway, stops: stops, radius: 700) == nil)
-    }
-
-    /// Once GPS has put you at a stop, a stray fix from the one before doesn't send you back.
-    @Test func theRideNeverGoesBackAStop() {
-        let stops = purpleRide.stops
-        let progress = JourneyTracker.progress(stops: stops, nearestIndex: 3, elapsed: 0, reached: 4)
-        #expect(progress.currentIndex == 4)
-        // GPS is still believed over the clock when the train is running late.
-        let late = JourneyTracker.progress(stops: stops, nearestIndex: 4, elapsed: (stops[5].minutesFromStart + 0.1) * 60,
-                                           reached: 4)
-        #expect(late.currentIndex == 4)
-    }
-
-    /// Halfway between two stations, the one ahead isn't reached yet; at its platform, it is.
-    @Test func aStationIsReachedAtItNotHalfwayToIt() {
-        let journey = Journey.metro(MetroRouter.route(from: "Ragigudda", to: "Central Silk Board", at: afternoon)!,
-                                    startedAt: afternoon)
-        let ragigudda = journey.stops[0].coordinate, jayadeva = journey.stops[1].coordinate
-        let mostOfTheWay = CLLocationCoordinate2D(latitude: ragigudda.latitude + (jayadeva.latitude - ragigudda.latitude) * 0.7,
-                                                  longitude: ragigudda.longitude + (jayadeva.longitude - ragigudda.longitude) * 0.7)
-        #expect(JourneyTracker.reachedIndex(at: mostOfTheWay, stops: journey.stops, radius: 700) == 0)
-        let atPlatform = GeoMath.coordinate(jayadeva, metres: 80, bearing: 270)
-        #expect(JourneyTracker.reachedIndex(at: atPlatform, stops: journey.stops, radius: 700) == 1)
-        #expect(JourneyTracker.reachedIndex(at: CLLocationCoordinate2D(latitude: 12.99, longitude: 77.59),
-                                            stops: journey.stops, radius: 700) == nil)
-    }
-
-    // MARK: What to do
-
-    @Test func atTheFirstStationItSaysWhichTrainToBoard() {
-        let journey = Journey.metro(MetroRouter.route(from: "Ragigudda", to: "Central Silk Board", at: afternoon)!,
-                                    startedAt: afternoon)
-        let progress = JourneyTracker.progress(stops: journey.stops, nearestIndex: 0, elapsed: 0)
-        let instruction = JourneyTracker.instruction(for: progress, in: journey)
-        #expect(instruction.headline == "Board the Yellow Line towards Delta Electronics Bommasandra")
-        #expect(instruction.detail.hasPrefix("Next: Jayadeva Hospital · 3 stops to Central Silk Board"))
-        #expect(!instruction.isAction)
-    }
-
-    /// Pulled out of the first station, it's the next station, not which train to board.
-    @Test func onceMovingItStopsSayingBoard() {
-        let journey = Journey.metro(MetroRouter.route(from: "Ragigudda", to: "Central Silk Board", at: afternoon)!,
-                                    startedAt: afternoon)
-        var progress = JourneyTracker.progress(stops: journey.stops, nearestIndex: 0, elapsed: 0)
-        progress.metresToNext = 400
-        let instruction = JourneyTracker.instruction(for: progress, in: journey)
-        #expect(instruction.headline == "Next: Jayadeva Hospital")
-        #expect(instruction.detail.hasPrefix("400 m away"))
-    }
-
-    @Test func alongTheWayItSaysTheNextStation() {
-        let journey = Journey.metro(MetroRouter.route(from: "Ragigudda", to: "Central Silk Board", at: afternoon)!,
-                                    startedAt: afternoon)
-        let progress = JourneyTracker.progress(stops: journey.stops, nearestIndex: 1, elapsed: 0)
-        let instruction = JourneyTracker.instruction(for: progress, in: journey)
-        #expect(instruction.headline == "Next: BTM Layout")
-        #expect(instruction.detail.hasPrefix("2 stops to Central Silk Board · about "))
-    }
-
-    @Test func theStopBeforeItSaysToGetOffAndWhatsNext() {
-        let journey = Journey.metro(MetroRouter.route(from: "Ragigudda", to: "Central Silk Board", at: afternoon)!,
-                                    startedAt: afternoon)
-        let progress = JourneyTracker.progress(stops: journey.stops, nearestIndex: 2, elapsed: 0)
-        let instruction = JourneyTracker.instruction(for: progress, in: journey, then: "Walk to HSR BDA Complex")
-        #expect(instruction.headline == "Get off at the next stop: Central Silk Board")
-        #expect(instruction.detail.hasSuffix("then walk to HSR BDA Complex"))
-        #expect(instruction.isAction)
-
-        let off = JourneyTracker.progress(stops: journey.stops, nearestIndex: 3, elapsed: 0)
-        let after = JourneyTracker.instruction(for: off, in: journey, then: "Walk to HSR BDA Complex")
-        #expect(after.headline == "You're at Central Silk Board")
-        #expect(after.detail == "Exit, then walk to HSR BDA Complex")
-    }
-
-    @Test func theStopBeforeAChangeSaysWhereToChangeTo() {
-        let journey = Journey.metro(MetroRouter.route(from: indiranagar, to: "Lalbagh", at: afternoon)!, startedAt: afternoon)
-        let changeIndex = journey.stops.firstIndex { $0.name == majestic }!
-        let progress = JourneyTracker.progress(stops: journey.stops, nearestIndex: changeIndex - 1, elapsed: 0)
-        let instruction = JourneyTracker.instruction(for: progress, in: journey)
-        #expect(instruction.headline == "Change at the next stop: \(majestic)")
-        #expect(instruction.detail == "To the Green Line towards Silk Institute")
-        #expect(instruction.isAction)
-        // Further back, the change is mentioned along with the next station.
-        let earlier = JourneyTracker.progress(stops: journey.stops, nearestIndex: 1, elapsed: 0)
-        #expect(JourneyTracker.instruction(for: earlier, in: journey).detail.contains("change at \(majestic)"))
+    /// Drawn on the line, always: the point the map puts you at is on the ride.
+    @Test func youAreDrawnOnTheLine() {
+        let journey = forumRide
+        let start = afternoon
+        let track = JourneyTracker.advance(RideTrack(), in: journey,
+                                           fix: fix(journey, along: 700, off: 120, at: start), now: start)
+        let progress = JourneyTracker.progress(of: track, in: journey, now: start)
+        let distances = RideLine.distances(journey.stops)
+        let drawn = try! #require(progress.coordinate)
+        #expect(RideLine.locate(drawn, on: journey.stops, distances: distances)!.offset < 1)
     }
 
     @Test func summaryAlwaysReadsAsAnEstimate() {
-        let progress = JourneyTracker.progress(stops: purpleRide.stops, nearestIndex: 3, elapsed: 0)
-        #expect(JourneyTracker.summary(progress).hasPrefix("4 stops · about "))
-        #expect(JourneyTracker.summary(progress).hasSuffix(" min"))
+        let journey = forumRide
+        let (track, now) = ride(journey, to: 2, from: afternoon)
+        let summary = JourneyTracker.summary(JourneyTracker.progress(of: track, in: journey, now: now))
+        #expect(summary.hasPrefix("4 stops · about "))
+        #expect(summary.hasSuffix(" min"))
     }
 }

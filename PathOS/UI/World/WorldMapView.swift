@@ -90,22 +90,32 @@ struct WorldMapView: View {
                 MapPolyline(coordinates: ride.map(\.coordinate))
                     .stroke(Color.ion, style: StrokeStyle(lineWidth: 6, lineCap: .round, lineJoin: .round))
                     .mapOverlayLevel(level: .aboveRoads)
-                // Every station named: where you board, change and get off always, the ones passed
-                // through as there's room, the way Maps names its own places.
+                // Every station named, always: MapKit's own titles dropped the one you were nearing
+                // whenever your dot sat over it. Where you board, change and get off stand out, and
+                // the next station most of all.
+                let next = state.transit.progress?.nextStationIndex
                 ForEach(Array(ride.enumerated()), id: \.offset) { index, stop in
                     let isKey = index == 0 || index == ride.count - 1 || stop.changeInstruction != nil
                     Annotation(stop.name, coordinate: stop.coordinate, anchor: .center) {
-                        RideStopDot(name: isKey ? stop.name : nil, isEnd: isKey)
+                        RideStopDot(name: stop.name, isEnd: isKey, isNext: index == next)
                     }
-                    .annotationTitles(isKey ? .hidden : .automatic)
+                    .annotationTitles(.hidden)
+                }
+                // You, on the line: where the ride has you, not wherever GPS wandered.
+                if let onLine = state.transit.progress?.coordinate {
+                    Annotation("You", coordinate: onLine, anchor: .center) {
+                        UserMarker(isScanning: false)
+                    }
+                    .annotationTitles(.hidden)
                 }
             }
 
-            if let route = state.guidanceRoute, route.coordinates.count > 1 {
-                MapPolyline(coordinates: route.coordinates)
+            if let walk = Self.walkAhead(state.guidanceRoute?.coordinates ?? [], from: here,
+                                         to: state.compassTarget?.coordinate) {
+                MapPolyline(coordinates: walk)
                     .stroke(Color.void, style: StrokeStyle(lineWidth: 9, lineCap: .round, lineJoin: .round))
                     .mapOverlayLevel(level: .aboveRoads)
-                MapPolyline(coordinates: route.coordinates)
+                MapPolyline(coordinates: walk)
                     .stroke(Color.aurora, style: StrokeStyle(lineWidth: 5, lineCap: .round, lineJoin: .round))
                     .mapOverlayLevel(level: .aboveRoads)
             }
@@ -133,10 +143,13 @@ struct WorldMapView: View {
                 .tag(signal.id)
             }
 
-            UserAnnotation {
-                UserMarker(isScanning: radar.isLoading && state.trip == nil)
+            // On a ride you're drawn on its line instead.
+            if !isOnRideLine {
+                UserAnnotation {
+                    UserMarker(isScanning: radar.isLoading && state.trip == nil)
+                }
+                .annotationSubtitles(.hidden)
             }
-            .annotationSubtitles(.hidden)
         }
         // On your way, the map is the journey and nothing else: no cafés along the route, and no
         // traffic drawn beside every road — the route carries its own.
@@ -232,6 +245,11 @@ struct WorldMapView: View {
         return state.transit.journey?.id.uuidString ?? "none"
     }
 
+    /// On a ride with a place on its line to draw you at.
+    private var isOnRideLine: Bool {
+        state.rideBeingFollowed != nil && state.transit.progress?.coordinate != nil
+    }
+
     /// A way or a ride being followed: the map is about the journey.
     private var isTravelling: Bool {
         state.trip != nil || state.transit.journey != nil
@@ -249,7 +267,8 @@ struct WorldMapView: View {
 
         if let ride = state.rideBeingFollowed, ride.count > 1 {
             withAnimation(motion) {
-                camera = .region(Self.region(around: ride.map(\.coordinate) + [state.location.location?.coordinate].compactMap { $0 }))
+                camera = .region(Self.region(around: ride.map(\.coordinate)
+                    + [state.transit.progress?.coordinate ?? state.location.location?.coordinate].compactMap { $0 }))
             }
             return
         }
@@ -273,6 +292,24 @@ struct WorldMapView: View {
         return signals
     }
 
+    /// The part of a walk to a saved spot still ahead of you — and none of it once you're close or
+    /// have left it. The whole route was drawn as fetched when you set off, so walking past part
+    /// of it, or coming at the spot another way, left its tail poking out of the marker.
+    static func walkAhead(_ route: [CLLocationCoordinate2D], from here: CLLocationCoordinate2D?,
+                          to target: CLLocationCoordinate2D?) -> [CLLocationCoordinate2D]? {
+        guard route.count > 1, let here else { return nil }
+        // Within sight of it, the pointer does the rest.
+        if let target, GeoMath.distance(from: here, to: target) <= lastStretch { return nil }
+        guard let match = RouteProgress.match(route, at: here), match.offset <= offWalk else { return nil }
+        let ahead = RouteProgress.ahead(of: route, from: match)
+        return ahead.count > 1 ? ahead : nil
+    }
+
+    /// Nearer the spot than this, a line to it is only in the way.
+    static let lastStretch = 60.0
+    /// Further off the walk than this and it's no longer the way you're going.
+    static let offWalk = 40.0
+
     /// A region holding all of these, with room around them.
     static func region(around coordinates: [CLLocationCoordinate2D]) -> MKCoordinateRegion {
         guard let first = coordinates.first else { return MKCoordinateRegion() }
@@ -294,23 +331,25 @@ struct WorldMapView: View {
     private struct RideStopDot: View {
         var name: String?
         var isEnd = false
+        /// The station coming up.
+        var isNext = false
 
         var body: some View {
             Circle()
-                .fill(isEnd ? Color.ion : Color.void)
-                .stroke(Color.ion, lineWidth: isEnd ? 0 : 2)
-                .frame(width: isEnd ? 12 : 8, height: isEnd ? 12 : 8)
+                .fill(isEnd || isNext ? Color.ion : Color.void)
+                .stroke(Color.ion, lineWidth: isEnd || isNext ? 0 : 2)
+                .frame(width: isEnd || isNext ? 12 : 8, height: isEnd || isNext ? 12 : 8)
                 // Under the dot, outside its frame, so the dot itself stays on the station.
                 .overlay(alignment: .top) {
                     if let name {
                         Text(name)
-                            .font(.caption.weight(.semibold))
-                            .foregroundStyle(.ice)
+                            .font(.caption.weight(isEnd || isNext ? .bold : .semibold))
+                            .foregroundStyle(isNext ? Color.void : .ice)
                             .lineLimit(1)
                             .fixedSize()
                             .padding(.horizontal, 7)
                             .padding(.vertical, 3)
-                            .background(Color.void.opacity(0.85), in: .capsule)
+                            .background(isNext ? Color.ion : Color.void.opacity(0.85), in: .capsule)
                             .offset(y: 16)
                     }
                 }

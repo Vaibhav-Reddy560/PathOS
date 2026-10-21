@@ -2,8 +2,9 @@ import CoreLocation
 import Foundation
 import UIKit
 
-/// A journey you said you'd make, and when you set off.
-nonisolated struct ActiveTrip: Sendable {
+/// A journey you said you'd make, and when you set off. Kept on disk while it lasts, so closing
+/// PathOS doesn't end it — only End route does.
+nonisolated struct ActiveTrip: Codable, Sendable {
     var option: DoorToDoor.Option
     var destinationName: String
     var startedAt: Date
@@ -14,13 +15,19 @@ nonisolated struct ActiveTrip: Sendable {
     var longitude: Double
     /// Where you set off from, which says how short the first leg is and so how near its end
     /// counts as arriving.
-    var origin: CLLocationCoordinate2D?
+    var originLatitude: Double?
+    var originLongitude: Double?
     /// The ride, stop by stop, for a way built around a metro or bus journey you planned station
     /// to station: it's followed from the moment you reach the first one.
     var ride: Journey?
 
     var coordinate: CLLocationCoordinate2D {
         CLLocationCoordinate2D(latitude: latitude, longitude: longitude)
+    }
+
+    var origin: CLLocationCoordinate2D? {
+        guard let originLatitude, let originLongitude else { return nil }
+        return CLLocationCoordinate2D(latitude: originLatitude, longitude: originLongitude)
     }
 }
 
@@ -93,9 +100,11 @@ extension AppState {
         let origin = location.location?.coordinate
         tripArrival = nil
         stoppedNearEndSince = nil
+        closestToEnd = nil
         tripLegsReached = 0
         trip = ActiveTrip(option: option, destinationName: name, startedAt: startedAt, arriveBy: arriveBy,
-                          latitude: destination.latitude, longitude: destination.longitude, origin: origin)
+                          latitude: destination.latitude, longitude: destination.longitude,
+                          originLatitude: origin?.latitude, originLongitude: origin?.longitude)
         // The map that leads you needs both of these, and both used to arrive a frame or two later:
         // the browsing map showed instead, with its own marker and rings, and then vanished.
         tripStatus = TripGuide.status(for: option, startedAt: startedAt, now: startedAt,
@@ -119,6 +128,7 @@ extension AppState {
         startNavigationLoop()
         // A metro leg inside the journey needs the travel loop too, or its stops never advance.
         startTravelLoop()
+        saveTravel()
         Task { await refreshTrip() }
         showToast("Following your way to \(name)", symbol: option.legs.first?.mode.symbol ?? "point.topleft.down.to.point.bottomright.curvepath")
     }
@@ -164,10 +174,12 @@ extension AppState {
         )
         tripLegsReached = 0
         trip = ActiveTrip(option: option, destinationName: last.name, startedAt: Date(), arriveBy: nil,
-                          latitude: last.latitude, longitude: last.longitude, origin: location.location?.coordinate,
-                          ride: journey)
+                          latitude: last.latitude, longitude: last.longitude,
+                          originLatitude: location.location?.coordinate.latitude,
+                          originLongitude: location.location?.coordinate.longitude, ride: journey)
         announcedTripLeg = 0
         announcedTripDelay = 0
+        saveTravel()
         await refreshTrip()
     }
 
@@ -220,6 +232,7 @@ extension AppState {
         trip = nil
         tripArrival = nil
         stoppedNearEndSince = nil
+        closestToEnd = nil
         tripLegsReached = 0
         tripStatus = nil
         tripNav = nil
@@ -243,6 +256,7 @@ extension AppState {
         if transit.journey != nil {
             transit.end()
         }
+        saveTravel()
         location.endHeadingUpdates()
         refreshBackgroundSession()
         Task {
@@ -299,8 +313,16 @@ extension AppState {
             tripMatch = match
             tripFix = fix(here, on: match)
             tripStep = StepGuide.position(in: nav.steps, at: here.coordinate, near: tripStep?.stepIndex)
-            // Stopped a short walk from the end of the road: parked, which is arriving.
-            if let match, match.remaining <= Self.stoppedNearEnd, here.speed >= 0, here.speed < 1 {
+            // Stopped a short walk from the end of the road: parked, which is arriving. On foot,
+            // inside the place itself — a mall, a campus — you're still moving, just not getting
+            // any nearer, and that's arriving too: it used to keep leading you round the mall.
+            if let match, leg.mode == .walk {
+                if match.remaining <= Self.walkNearEnd, !isClosingIn(on: match.remaining, now: now) {
+                    stoppedNearEndSince = stoppedNearEndSince ?? now
+                } else {
+                    stoppedNearEndSince = nil
+                }
+            } else if let match, match.remaining <= Self.stoppedNearEnd, here.speed >= 0, here.speed < 1 {
                 stoppedNearEndSince = stoppedNearEndSince ?? now
             } else {
                 stoppedNearEndSince = nil
@@ -315,6 +337,11 @@ extension AppState {
                 offRouteSamples = isOff ? offRouteSamples + 1 : 0
                 if match.offset > limit * 2 {
                     offRouteSamples = max(offRouteSamples, Self.offRouteSamplesBeforeReroute)
+                }
+                // Walking into the place at the end isn't leaving the route, however far GPS
+                // indoors puts you from it.
+                if leg.mode == .walk, match.remaining <= Self.walkNearEnd {
+                    offRouteSamples = 0
                 }
             }
         } else if !isRoad {
@@ -415,6 +442,7 @@ extension AppState {
         // seconds of fetching is tens of metres, and the new line would start that far behind you.
         let arrived = location.location ?? here
         if let found {
+            if isNewLeg { closestToEnd = nil }
             tripNav = found
             navLegID = leg.id
             place(on: found, at: arrived)
@@ -434,9 +462,13 @@ extension AppState {
     /// reached stays reached, whatever the next fix by a station's gate says.
     func progress(of trip: ActiveTrip, now: Date) -> TripGuide.Status? {
         let here = location.location?.coordinate
+        // On a ride followed along its line, that's what says you're off the train.
+        let current = trip.option.legs[safe: tripLegsReached]
+        let isRide = current?.mode == .metro || current?.mode == .bus
+        let rideFinished: Bool? = isRide && transit.journey != nil ? transit.progress?.hasArrived == true : nil
         guard let status = TripGuide.status(for: trip.option, startedAt: trip.startedAt, now: now, location: here,
                                             origin: trip.origin, roadEnd: roadEnd(of: trip),
-                                            reached: tripLegsReached) else { return nil }
+                                            reached: tripLegsReached, rideFinished: rideFinished) else { return nil }
         // Only what the map saw counts as reached; the clock's guess underground doesn't.
         if here != nil {
             tripLegsReached = max(tripLegsReached, status.hasArrived ? trip.option.legs.count : status.legIndex)
@@ -551,6 +583,12 @@ extension AppState {
     /// The plan's status, timed instead by what's left of the route you're on in today's traffic,
     /// once there's a route and a place on it to measure from.
     func liveAdjusted(_ status: TripGuide.Status, trip: ActiveTrip, now: Date) -> TripGuide.Status {
+        // On a ride, what's left is what's left of the line from where you are, and the waits.
+        if !status.hasArrived, let leg = trip.option.legs[safe: status.legIndex], leg.mode == .metro || leg.mode == .bus,
+           transit.journey != nil, let ride = transit.progress {
+            return TripGuide.adjusting(status, in: trip.option, startedAt: trip.startedAt, now: now,
+                                       legMinutesLeft: Double(ride.estimatedMinutesRemaining))
+        }
         guard !status.hasArrived, let nav = tripNav, let match = tripMatch,
               navLegID == trip.option.legs[safe: status.legIndex]?.id else { return status }
         // Apple Maps' time for what's left, at your pace rather than its average driver's.
@@ -560,6 +598,17 @@ extension AppState {
 
     /// Stopped within this of the end of the road, for this long, and you've arrived.
     static let stoppedNearEnd = 150.0
+    /// On foot, this near the end and no nearer for a while, and you're there.
+    static let walkNearEnd = 200.0
+
+    /// Still getting nearer the end: closer than the nearest yet, or was within the last while.
+    func isClosingIn(on remaining: Double, now: Date) -> Bool {
+        if let closest = closestToEnd, remaining >= closest.metres - 15 {
+            return now.timeIntervalSince(closest.at) < 45
+        }
+        closestToEnd = (remaining, now)
+        return true
+    }
     static let parkedAfter: TimeInterval = 30
 
     /// Two fixes off the route, a second apart — or one well off it — and it re-routes: a wrong
@@ -606,7 +655,8 @@ extension AppState {
         if leg.mode == .metro || leg.mode == .bus {
             if transit.journey == nil, var ride = trip.ride ?? leg.metro.map({ Journey.metro($0) }) {
                 ride.startedAt = now
-                transit.start(ride)
+                transit.start(ride, location: location.location)
+                saveTravel()
             }
         } else if transit.journey != nil {
             transit.end()
@@ -614,6 +664,7 @@ extension AppState {
 
         if announcedTripLeg != status.legIndex {
             announcedTripLeg = status.legIndex
+            saveTravel()
             if status.legIndex > 0 {
                 await announceTrip(title: status.headline, body: status.detail, id: "leg\(status.legIndex)")
             }
@@ -769,4 +820,60 @@ extension AppState {
     }
 
     var tripNotificationPrefix: String { "pathos.trip." }
+
+    // MARK: Kept while it lasts
+
+    /// What's being followed, as it stands: written whenever it moves on, so PathOS closed — or
+    /// stopped by iOS in your pocket — picks it up where it was when it opens again. A way ends
+    /// when you press End route or get there, not when the app does.
+    nonisolated struct Travel: Codable {
+        var trip: ActiveTrip?
+        var legsReached: Int
+        var journey: Journey?
+        var track: RideTrack
+        var savedAt: Date
+    }
+
+    static let travelKey = "pathos.travel"
+    /// Longer than any journey across Bengaluru: something older was left behind, not paused.
+    static let travelKeptFor: TimeInterval = 8 * 3_600
+
+    func saveTravel() {
+        guard trip != nil || transit.journey != nil else {
+            UserDefaults.standard.removeObject(forKey: Self.travelKey)
+            return
+        }
+        let travel = Travel(trip: trip, legsReached: tripLegsReached, journey: transit.journey, track: transit.track,
+                            savedAt: Date())
+        if let data = try? JSONEncoder().encode(travel) {
+            UserDefaults.standard.set(data, forKey: Self.travelKey)
+        }
+    }
+
+    /// Picks up a way or a ride that was under way when PathOS last closed.
+    func restoreTravel(now: Date = Date()) {
+        guard trip == nil, transit.journey == nil,
+              let data = UserDefaults.standard.data(forKey: Self.travelKey),
+              let travel = try? JSONDecoder().decode(Travel.self, from: data) else { return }
+        let started = travel.trip?.startedAt ?? travel.journey?.startedAt ?? travel.savedAt
+        guard now.timeIntervalSince(started) < Self.travelKeptFor else {
+            UserDefaults.standard.removeObject(forKey: Self.travelKey)
+            return
+        }
+        if let journey = travel.journey {
+            transit.start(journey, track: travel.track, location: location.location)
+        }
+        if let restored = travel.trip {
+            trip = restored
+            tripLegsReached = travel.legsReached
+            tripStatus = progress(of: restored, now: now)
+            announcedTripLeg = tripStatus?.legIndex
+            startNavigationLoop()
+        }
+        location.startUpdates()
+        location.beginHeadingUpdates()
+        refreshBackgroundSession()
+        startTravelLoop()
+        Task { await refreshTrip() }
+    }
 }

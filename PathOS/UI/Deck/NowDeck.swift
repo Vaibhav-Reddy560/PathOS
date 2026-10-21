@@ -17,10 +17,11 @@ struct NowDeck: View {
                     permissionTile
                 }
                 contextTile
+                // One card for what you're following: the way, with its ride inside it — or the
+                // ride on its own. Two used to sit one above the other, each with its own stop.
                 if let trip = state.trip, let status = state.tripStatus {
                     FollowingTripCard(trip: trip, status: status)
-                }
-                if let journey = state.transit.journey, let progress = state.transit.progress {
+                } else if let journey = state.transit.journey, let progress = state.transit.progress {
                     ActiveJourneyCard(journey: journey, progress: progress)
                 }
                 DeliveriesCard()

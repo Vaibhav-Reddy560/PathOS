@@ -302,6 +302,11 @@ final class AppState {
     @ObservationIgnored var lastJamCheck = Date.distantPast
     /// When you stopped within a short walk of the end of the road, while you're still stopped.
     @ObservationIgnored var stoppedNearEndSince: Date?
+    /// On foot near the end: the nearest you've got, and when — inside a mall you keep walking
+    /// without getting any closer, which is having arrived.
+    @ObservationIgnored var closestToEnd: (metres: Double, at: Date)?
+    /// When the walk to a spot was last fetched again.
+    @ObservationIgnored var lastGuidanceFetch = Date.distantPast
     /// The furthest the map has seen you get along the way being followed, in legs: progress
     /// never goes back from it.
     @ObservationIgnored var tripLegsReached = 0
@@ -399,6 +404,8 @@ final class AppState {
 
         haptics.isAdaptive = adaptiveSound
         mail.whereYouAre = { [weak self] in self?.location.location }
+        // A ride that moves on is kept, so closing PathOS doesn't lose it.
+        transit.onChange = { [weak self] in self?.saveTravel() }
         // Deleted, skipped, a day off: what's next and its reminders follow at once.
         eventStore.onPlansChanged = { [weak self] in self?.plansChanged() }
         timetable.onPlansChanged = { [weak self] in self?.plansChanged() }
@@ -414,6 +421,13 @@ final class AppState {
             recordDistance(to: fix)
             if isForeground {
                 barometer.recordGPS(altitude: fix.altitude, verticalAccuracy: fix.verticalAccuracy, at: fix.timestamp)
+            }
+            // On a ride, every fix moves you along the line, not just one every ten seconds.
+            if transit.journey != nil {
+                followRide(location: fix)
+            }
+            if compassTarget != nil {
+                refreshGuidanceRouteIfLeft(from: fix)
             }
             // Following a way, the map moves with the fix rather than with a timer: a line trimmed
             // on the next tick of a one-second loop always trails the puck.
@@ -462,6 +476,8 @@ final class AppState {
         await notifications.refreshStatus()
         // The public holidays that ship with PathOS, ready to be asked about.
         holidays.addBundled()
+        // A way or a ride under way when PathOS last closed carries on.
+        restoreTravel()
         await vault.syncGeofences(userLocation: location.location)
         scheduleBackgroundRefresh()
         // A copy of everything, every couple of days, so the data outlives the app itself.
@@ -811,6 +827,11 @@ final class AppState {
                 showToast("Taken off your Day", symbol: "arrow.uturn.backward.circle.fill")
             } else {
                 showDeck(.day)
+            }
+        case "ride":
+            // "On the train", from the notification or a button.
+            if path.first == "boarded" {
+                boardTrain()
             }
         case "timetable": isTimetablePresented = true
         case "event": eventSheet = EventSheetRequest(editing: nil, text: value("text"))
@@ -1178,7 +1199,8 @@ final class AppState {
     // MARK: Journeys
 
     func startJourney(_ journey: Journey) {
-        transit.start(journey)
+        transit.start(journey, location: location.location)
+        saveTravel()
         location.startUpdates()
         refreshBackgroundSession()
         startTravelLoop()
@@ -1226,11 +1248,9 @@ final class AppState {
             // used to fall outside this, so its stops never advanced.
             while !Task.isCancelled, transit.journey != nil || trackedLegID != nil || trip != nil {
                 if transit.journey != nil {
-                    let before = transit.progress?.currentIndex
-                    transit.update(location: location.location)
-                    if let before, let after = transit.progress?.currentIndex, after > before {
-                        announceStation()
-                    }
+                    // Without a fresh fix — underground — the line still moves you on, at the
+                    // train's pace, up to the next station.
+                    followRide(location: nil)
                     await updateJourneyActivity()
                 }
                 if trackedLegID != nil {
@@ -1325,6 +1345,29 @@ final class AppState {
             return
         }
         await updateLegActivity()
+    }
+
+    /// Moves the ride on by a fix — or, with none, by the time since the last — and says each
+    /// station as it's reached.
+    func followRide(location fix: CLLocation?) {
+        let before = transit.progress?.currentIndex
+        let wasWaiting = transit.progress?.isWaiting
+        transit.update(location: fix)
+        guard let after = transit.progress else { return }
+        if let before, after.currentIndex > before || (wasWaiting == true && !after.isWaiting) {
+            announceStation()
+        }
+        if trip != nil, after.hasArrived {
+            // Off the train: the way moves on to what comes after the ride.
+            Task { await refreshTrip() }
+        }
+    }
+
+    /// You've said you're on the train.
+    func boardTrain() {
+        transit.board()
+        haptics.success()
+        Task { await updateJourneyActivity() }
     }
 
     /// The metro journey has the Lock Screen while it runs; a leg shows otherwise.
@@ -1443,6 +1486,20 @@ final class AppState {
             if compassTarget?.id == target.id {
                 guidanceRoute = route
             }
+        }
+    }
+
+    /// Walked off the way to a spot, still a fair way from it: a new way from where you are. The
+    /// map stops drawing the old one as soon as you leave it.
+    private func refreshGuidanceRouteIfLeft(from here: CLLocation, now: Date = Date()) {
+        guard let target = compassTarget, let route = guidanceRoute, now.timeIntervalSince(lastGuidanceFetch) > 30,
+              here.distance(from: CLLocation(latitude: target.latitude, longitude: target.longitude)) > 150,
+              let match = RouteProgress.match(route.coordinates, at: here.coordinate),
+              match.offset > WorldMapView.offWalk else { return }
+        lastGuidanceFetch = now
+        Task {
+            let fresh = await places.walkingRoute(to: target.coordinate, from: here)
+            if compassTarget?.id == target.id, let fresh { guidanceRoute = fresh }
         }
     }
 

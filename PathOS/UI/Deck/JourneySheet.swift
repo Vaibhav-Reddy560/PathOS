@@ -462,63 +462,36 @@ struct ActiveJourneyCard: View {
 
     @Environment(AppState.self) private var state
 
-    private var actNow: Bool { progress.isArrivingNext || progress.isChangingNext }
-
     var body: some View {
+        let instruction = JourneyTracker.instruction(for: progress, in: journey)
         ContentTile {
             VStack(alignment: .leading, spacing: 14) {
-                HStack(spacing: 12) {
-                    SignalGlyph(symbol: progress.isChangingNext ? "arrow.triangle.swap" : journey.symbol, role: actNow ? .attention : .you, size: 44)
-                    VStack(alignment: .leading, spacing: 2) {
-                        InstrumentLabel(journey.lineName, role: actNow ? .attention : .you)
-                        Text(progress.hasArrived ? "You've arrived" : "To \(journey.destination)")
+                HStack(alignment: .top, spacing: 12) {
+                    SignalGlyph(symbol: instruction.symbol, role: instruction.isAction ? .attention : .you, size: 44)
+                    VStack(alignment: .leading, spacing: 3) {
+                        InstrumentLabel("To \(journey.destination)", role: instruction.isAction ? .attention : .you)
+                        Text(instruction.headline)
                             .font(.headline)
                             .foregroundStyle(.ice)
-                            .lineLimit(1)
-                        Text(subtitle)
+                            .lineLimit(2)
+                        Text(instruction.detail)
                             .font(.subheadline)
                             .foregroundStyle(.mist)
-                            .lineLimit(2)
+                            .lineLimit(3)
                     }
                     Spacer(minLength: 0)
-                    if !progress.hasArrived {
-                        MetricText(value: "\(progress.stopsRemaining)", unit: progress.stopsRemaining == 1 ? "stop" : "stops", role: actNow ? .attention : .you)
-                    }
                 }
                 .accessibilityElement(children: .combine)
 
-                if progress.isArrivingNext {
-                    Label("Get off at the next stop", systemImage: "figure.walk.departure")
-                        .font(.subheadline.weight(.semibold))
-                        .foregroundStyle(.amber)
-                } else if let index = progress.nextChangeIndex, let instruction = journey.stops[safe: index]?.changeInstruction {
-                    Label("\(progress.isChangingNext ? "Next stop" : "At \(journey.stationName(at: index))"): \(instruction.prefix(1).lowercased() + instruction.dropFirst())",
-                          systemImage: "arrow.triangle.swap")
-                        .font(.subheadline.weight(progress.isChangingNext ? .semibold : .regular))
-                        .foregroundStyle(progress.isChangingNext ? .amber : .ion)
-                }
-
-                HStack(spacing: 10) {
-                    if let nextIndex = progress.nextStationIndex {
-                        Label("Next: \(journey.stationName(at: nextIndex))", systemImage: "arrow.right")
-                            .font(.subheadline)
-                            .foregroundStyle(.mist)
-                            .lineLimit(1)
+                HStack(spacing: 8) {
+                    if progress.isWaiting {
+                        OnTheTrainButton()
+                    } else {
+                        Spacer(minLength: 0)
                     }
-                    Spacer(minLength: 0)
-                    Button("End") {
-                        state.endJourney()
-                    }
-                    .font(.subheadline.weight(.semibold))
-                    .pathSecondaryAction()
+                    EndRouteButton { state.endJourney() }
                 }
             }
         }
-    }
-
-    private var subtitle: String {
-        if progress.hasArrived { return "\(journey.origin) → \(journey.destination)" }
-        let source = progress.isTrackingByLocation ? "tracking your position" : "estimated from the clock"
-        return "\(JourneyTracker.summary(progress)) · \(source)"
     }
 }

@@ -12,7 +12,7 @@ import Foundation
 /// no Indian operator publishes live positions, and app fares move with demand.
 nonisolated enum DoorToDoor {
 
-    nonisolated enum Mode: String, Hashable, Sendable {
+    nonisolated enum Mode: String, Hashable, Codable, Sendable {
         case walk
         case auto
         case bikeTaxi
@@ -45,13 +45,13 @@ nonisolated enum DoorToDoor {
 
     /// One fare for one way of covering a leg. A road leg has one of these for the auto, the bike
     /// taxi and the cab, because they're the same leg at different prices.
-    nonisolated struct LegFare: Hashable, Sendable {
+    nonisolated struct LegFare: Hashable, Codable, Sendable {
         var mode: Mode
         var estimate: FareEstimate
         var note: String
     }
 
-    nonisolated struct Leg: Hashable, Sendable, Identifiable {
+    nonisolated struct Leg: Hashable, Codable, Sendable, Identifiable {
         var id = UUID()
         var mode: Mode
         /// "By road to Jayadeva Hospital", "Yellow Line to BTM Layout".
@@ -81,7 +81,7 @@ nonisolated enum DoorToDoor {
         }
     }
 
-    nonisolated struct Option: Hashable, Sendable, Identifiable {
+    nonisolated struct Option: Hashable, Codable, Sendable, Identifiable {
         var id = UUID()
         /// What the journey is, in a few words: "Metro, with an auto to the station".
         var headline: String

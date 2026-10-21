@@ -1,6 +1,7 @@
 import CoreLocation
 import Foundation
 import Observation
+import UIKit
 
 /// The metro or bus journey you're on, and how far along you are.
 ///
@@ -10,17 +11,22 @@ import Observation
 final class TransitService {
     private(set) var journey: Journey?
     private(set) var progress: JourneyProgress?
+    /// Where you are on the ride, kept from fix to fix.
+    private(set) var track = RideTrack()
     /// Bus stops and metro stations around you, for the map.
     private(set) var nearbyStops: [TransitStopInput] = []
     /// Loaded the first time it's needed; decoding takes a moment, so never on launch.
     private(set) var busNetwork: BusNetwork?
     @ObservationIgnored private var lastNearbyLocation: CLLocation?
+    /// Told whenever the ride moves on, so it can be kept across PathOS being closed.
+    @ObservationIgnored var onChange: (() -> Void)?
 
     @ObservationIgnored private let notifications: NotificationService
     /// "change@3", "getOff" — each said once per journey.
     @ObservationIgnored private var announced: Set<String> = []
-    /// The furthest stop GPS has put you at: the ride never goes back from it.
-    @ObservationIgnored private var reached = 0
+
+    /// Waiting this long on a platform, you're asked whether you're on the train.
+    static let askAfter: TimeInterval = 4 * 60
 
     init(notifications: NotificationService) {
         self.notifications = notifications
@@ -28,12 +34,13 @@ final class TransitService {
         UserDefaults.standard.removeObject(forKey: "pathos.stationFixes")
     }
 
-    func start(_ journey: Journey) {
+    /// Starts following a ride — afresh, or where it had got to before PathOS was closed.
+    func start(_ journey: Journey, track: RideTrack = RideTrack(), location: CLLocation? = nil) {
         guard journey.stops.count > 1 else { return }
         self.journey = journey
+        self.track = track
         announced = []
-        reached = 0
-        update(location: nil)
+        update(location: location)
     }
 
     func end() {
@@ -42,28 +49,30 @@ final class TransitService {
         }
         journey = nil
         progress = nil
+        track = RideTrack()
+        onChange?()
     }
 
-    /// Recomputes progress. Called every few seconds while travelling, in the background too.
-    func update(location: CLLocation?) {
+    /// Moves the ride on by the latest fix. Called on every fix while you're on it, in the
+    /// background too.
+    func update(location: CLLocation?, now: Date = Date()) {
         guard let journey else { return }
-        let nearest = location.flatMap {
-            JourneyTracker.reachedIndex(at: $0.coordinate, stops: journey.stops, radius: journey.stopRadius)
-        }
-        var updated = JourneyTracker.progress(
-            stops: journey.stops,
-            nearestIndex: nearest,
-            elapsed: Date().timeIntervalSince(journey.startedAt),
-            reached: reached
-        )
-        if updated.isTrackingByLocation {
-            reached = max(reached, updated.currentIndex)
-        }
-        if let location, updated.isTrackingByLocation, let next = updated.nextStationIndex.flatMap({ journey.stops[safe: $0] }) {
-            updated.metresToNext = location.distance(from: CLLocation(latitude: next.latitude, longitude: next.longitude))
-        }
+        let fix = location.map { RideFix(coordinate: $0.coordinate, accuracy: $0.horizontalAccuracy, at: $0.timestamp) }
+        let moved = JourneyTracker.advance(track, in: journey, fix: fix, now: now)
+        let changed = moved != track
+        track = moved
+        let updated = JourneyTracker.progress(of: track, in: journey, now: now)
         progress = updated
-        announceIfNeeded(updated, journey: journey)
+        announceIfNeeded(updated, journey: journey, now: now)
+        if changed { onChange?() }
+    }
+
+    /// You've said you're on the train: the minutes count from now.
+    func board(now: Date = Date()) {
+        guard journey != nil else { return }
+        track = JourneyTracker.board(track, now: now)
+        update(location: nil, now: now)
+        onChange?()
     }
 
     /// Loads the bus network if it isn't already, off the main thread.
@@ -115,8 +124,21 @@ final class TransitService {
         nearbyStops = found.sorted { $0.distanceMeters < $1.distanceMeters }
     }
 
-    /// One notification before each change, and one when your stop is next.
-    private func announceIfNeeded(_ progress: JourneyProgress, journey: Journey) {
+    /// One notification before each change, one when your stop is next, and — after a while on a
+    /// platform with PathOS in your pocket — one asking whether you're on the train yet.
+    private func announceIfNeeded(_ progress: JourneyProgress, journey: Journey, now: Date) {
+        if progress.isWaiting, let since = track.since, now.timeIntervalSince(since) >= Self.askAfter,
+           !track.askedOnBoard.contains(track.part), UIApplication.shared.applicationState != .active {
+            track.askedOnBoard.append(track.part)
+            notifications.post(
+                id: "pathos.journey.\(journey.id.uuidString).aboard\(track.part)",
+                title: "On the \(progress.train ?? journey.lineName)?",
+                body: "Tap On the train once you've boarded, and the stops count from there.",
+                category: NotificationService.Category.ride,
+                link: URL(string: "pathos://ride/boarded"),
+                timeSensitive: true
+            )
+        }
         if progress.isChangingNext, let index = progress.nextStationIndex,
            let instruction = journey.stops[safe: index]?.changeInstruction,
            announced.insert("change@\(index)").inserted {

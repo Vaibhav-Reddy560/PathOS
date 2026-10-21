@@ -53,7 +53,7 @@ struct WorldView: View {
             ControlRail(scope: mapScope)
                 // Clear of the turn banner while the map is leading you, and of the taller arrival
                 // banner, with its buttons, once you're there.
-                .padding(.top, isNavigating || isRiding ? (state.tripArrival != nil ? 290 : 210) : 60)
+                .padding(.top, isNavigating || isRiding ? (hasTallBanner ? 290 : 210) : 60)
                 .padding(.trailing, 12)
                 .animation(PathMotion.resolve(PathMotion.control, reduceMotion: reduceMotion), value: isNavigating || isRiding)
         }
@@ -86,8 +86,9 @@ struct WorldView: View {
             }
         }
         .overlay(alignment: .bottomLeading) {
-            // How fast you're going, where a glance down finds it, as in any navigation app.
-            if isDrivingALeg, let fix = state.tripFix {
+            // How fast you're going, where a glance down finds it, as in any navigation app — on
+            // the road. Walking, it's a number nobody needs.
+            if isDrivingALeg, !isWalkingALeg, let fix = state.tripFix {
                 SpeedReadout(metresPerSecond: fix.speed)
                     .padding(.leading, 12)
                     .padding(.bottom, mapBottomInset + 12)
@@ -189,6 +190,18 @@ struct WorldView: View {
     /// something else, so the banner and the rail's offset stand down.
     private var isNavigating: Bool {
         (state.isLeadingTheWay || state.tripArrival != nil) && state.deckStop == .collapsed
+    }
+
+    /// The banner has buttons under it — the arrival's, or "On the train" — and the rail moves down
+    /// clear of them.
+    private var hasTallBanner: Bool {
+        state.tripArrival != nil || state.transit.progress?.isWaiting == true
+    }
+
+    /// On foot: the same map, without a speed.
+    private var isWalkingALeg: Bool {
+        guard let trip = state.trip, let status = state.tripStatus else { return false }
+        return trip.option.legs[safe: status.legIndex]?.mode == .walk
     }
 
     /// On a metro or bus journey followed on its own, with the map there to see it on.

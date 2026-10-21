@@ -21,7 +21,9 @@ struct DoorToDoorTests {
     }
 
     @Test func aCrossCityJourneyOffersRoadAndMetro() async {
-        let options = await DoorToDoor.options(from: home, to: office, destinationName: "Office", now: noon, road: roads())
+        // Seven hundred metres from Mahatma Gandhi Road station: a walk at the far end.
+        let offices = CLLocationCoordinate2D(latitude: 12.9810, longitude: 77.6100)
+        let options = await DoorToDoor.options(from: home, to: offices, destinationName: "Office", now: noon, road: roads())
         #expect(options.contains { $0.legs.allSatisfy { $0.mode == .auto } })
 
         let metro = try! #require(options.first { $0.legs.contains { $0.mode == .metro } })
@@ -172,6 +174,14 @@ struct DoorToDoorTests {
     }
 
     /// Without Apple Maps, the legs still get times rather than disappearing.
+    /// A place right outside a station is reached by the ride itself: no walk of a few metres
+    /// from the station to it.
+    @Test func noWalkFromAStationToItsOwnDoor() async {
+        let options = await DoorToDoor.options(from: home, to: office, destinationName: "Office", now: noon, road: roads())
+        let metro = try! #require(options.first { $0.legs.contains { $0.mode == .metro } })
+        #expect(metro.legs.last?.mode == .metro)
+    }
+
     @Test func itStillPlansWithoutAppleMaps() async {
         let options = await DoorToDoor.options(from: home, to: office, destinationName: "Office", now: noon, road: { _, _, _ in nil })
         #expect(!options.isEmpty)

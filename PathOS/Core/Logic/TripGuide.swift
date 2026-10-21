@@ -106,15 +106,22 @@ nonisolated enum TripGuide {
     /// still being at the station, not a reason to send you walking to it again. A road or a walk
     /// is finished when you're at the place it ends, and the furthest one wins, so skipping a
     /// leg — an auto straight there instead — still moves you on. A ride only once you're on it:
-    /// standing at one station, the next is often near enough to look reached.
+    /// standing at one station, the next is often near enough to look reached. And a ride being
+    /// followed on its line (`rideFinished`) is over when that says so — when GPS has you at the
+    /// last station — not when you come within a circle of it from the train.
     static func legsDone(_ option: DoorToDoor.Option, at location: CLLocationCoordinate2D?,
-                         origin: CLLocationCoordinate2D? = nil, roadEnd: RoadEnd? = nil, reached: Int = 0) -> Int? {
+                         origin: CLLocationCoordinate2D? = nil, roadEnd: RoadEnd? = nil, reached: Int = 0,
+                         rideFinished: Bool? = nil) -> Int? {
         guard let location else { return nil }
         var done = min(max(0, reached), option.legs.count)
         for index in done..<option.legs.count {
             let leg = option.legs[index]
             let isRide = leg.mode == .metro || leg.mode == .bus
             if isRide, index > done { continue }
+            if isRide, let rideFinished {
+                if rideFinished { done = index + 1 }
+                continue
+            }
             // Each leg sets off from where the one before it ended; the first from where you were.
             let start = index == 0 ? origin : option.legs[index - 1].endCoordinate
             let next = option.legs[safe: index + 1]
@@ -133,7 +140,7 @@ nonisolated enum TripGuide {
 
     static func status(for option: DoorToDoor.Option, startedAt: Date, now: Date,
                        location: CLLocationCoordinate2D?, origin: CLLocationCoordinate2D? = nil,
-                       roadEnd: RoadEnd? = nil, reached: Int = 0) -> Status? {
+                       roadEnd: RoadEnd? = nil, reached: Int = 0, rideFinished: Bool? = nil) -> Status? {
         guard !option.legs.isEmpty else { return nil }
         let plan = schedule(option)
         let elapsed = max(0, now.timeIntervalSince(startedAt) / 60)
@@ -141,7 +148,8 @@ nonisolated enum TripGuide {
         // Without a fix, the clock carries the plan, which is what happens underground. It can
         // move you along the legs but never past the end: arriving is something the map has to see.
         let byClock = max(min(reached, option.legs.count - 1), min(plan.filter { $0 <= elapsed }.count, option.legs.count - 1))
-        let done = min(legsDone(option, at: location, origin: origin, roadEnd: roadEnd, reached: reached) ?? byClock,
+        let done = min(legsDone(option, at: location, origin: origin, roadEnd: roadEnd, reached: reached,
+                                rideFinished: rideFinished) ?? byClock,
                        option.legs.count)
 
         if done >= option.legs.count {

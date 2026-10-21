@@ -12,7 +12,7 @@ struct NavigationBanner: View {
     @Environment(AppState.self) private var state
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: 10) {
             HStack(alignment: .top, spacing: 14) {
                 Image(systemName: symbol)
                     .font(.title.weight(.semibold))
@@ -33,6 +33,10 @@ struct NavigationBanner: View {
                         .lineLimit(2)
                 }
                 Spacer(minLength: 0)
+            }
+            // On the platform: the stops count from when you say you're on.
+            if ride != nil, state.transit.progress?.isWaiting == true {
+                OnTheTrainButton()
             }
         }
         .bannerCard()
@@ -114,7 +118,10 @@ struct NavigationBanner: View {
 struct RideBanner: View {
     let instruction: JourneyTracker.Instruction
 
+    @Environment(AppState.self) private var state
+
     var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
         HStack(alignment: .top, spacing: 14) {
             Image(systemName: instruction.symbol)
                 .font(.title.weight(.semibold))
@@ -134,9 +141,13 @@ struct RideBanner: View {
             }
             Spacer(minLength: 0)
         }
-        .bannerCard()
         .accessibilityElement(children: .combine)
         .accessibilityLabel("\(instruction.headline). \(instruction.detail)")
+            if state.transit.progress?.isWaiting == true {
+                OnTheTrainButton()
+            }
+        }
+        .bannerCard()
     }
 }
 

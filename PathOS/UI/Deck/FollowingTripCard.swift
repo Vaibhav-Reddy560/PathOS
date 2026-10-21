@@ -1,9 +1,8 @@
 import SwiftUI
 
 /// The journey you're making: the leg you're on, what's left, and whether you're behind the plan.
-///
-/// The metro ride inside it is followed stop by stop by the journey card; this is the level above,
-/// which knows that the ride is one part of getting somewhere.
+/// On the ride, it says what the ride needs of you — the train to board, the next station, the
+/// change, getting off — rather than a second card saying it beside this one.
 struct FollowingTripCard: View {
     let trip: ActiveTrip
     let status: TripGuide.Status
@@ -17,11 +16,11 @@ struct FollowingTripCard: View {
                     SignalGlyph(symbol: status.symbol, role: status.isBehind ? .attention : .you, size: 44)
                     VStack(alignment: .leading, spacing: 3) {
                         InstrumentLabel("To \(trip.destinationName)", role: status.isBehind ? .attention : .you)
-                        Text(status.headline)
+                        Text(ride?.headline ?? status.headline)
                             .font(.headline)
                             .foregroundStyle(.ice)
                             .lineLimit(2)
-                        Text(status.detail)
+                        Text(ride?.detail ?? status.detail)
                             .font(.subheadline)
                             .foregroundStyle(status.isBehind ? .amber : .mist)
                             .lineLimit(3)
@@ -54,6 +53,9 @@ struct FollowingTripCard: View {
                                 .frame(maxWidth: .infinity, minHeight: 34)
                         }
                         .pathSecondaryAction()
+                    // On the platform: say so, and the stops count from now.
+                    } else if state.transit.progress?.isWaiting == true, ride != nil {
+                        OnTheTrainButton()
                     // The pointer is for the last stretch — finding the building — not for a
                     // place kilometres off that the map is already leading you to.
                     } else if state.pointerIsUseful(to: currentLeg.endCoordinate) {
@@ -76,19 +78,16 @@ struct FollowingTripCard: View {
                     }
 
                     if state.tripArrival == nil {
-                        Button("Stop", systemImage: "xmark") {
-                            state.endTrip()
-                        }
-                        .labelStyle(.iconOnly)
-                        .font(.subheadline.weight(.bold))
-                        .frame(width: 36, height: 36)
-                        .pathSecondaryAction()
-                        .buttonBorderShape(.circle)
-                        .accessibilityLabel("Stop following this way")
+                        EndRouteButton { state.endTrip() }
                     }
                 }
             }
         }
+    }
+
+    /// What the ride needs of you, while you're on it.
+    private var ride: JourneyTracker.Instruction? {
+        currentLeg.mode == .metro || currentLeg.mode == .bus ? state.rideInstruction : nil
     }
 
     private var currentLeg: DoorToDoor.Leg {
@@ -123,5 +122,38 @@ struct FollowingTripCard: View {
         }
         .accessibilityElement(children: .combine)
         .accessibilityLabel("Leg \(status.legIndex + 1) of \(trip.option.legs.count): \(status.headline)")
+    }
+}
+
+/// Ending what's being followed: said in words, the one way to do it, wherever it's offered.
+struct EndRouteButton: View {
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Label("End route", systemImage: "xmark")
+                .font(.subheadline.weight(.semibold))
+                .lineLimit(1)
+                .padding(.horizontal, 6)
+                .frame(minHeight: 34)
+        }
+        .pathSecondaryAction()
+    }
+}
+
+/// On the platform: once you're on the train, the stops and minutes count from here.
+struct OnTheTrainButton: View {
+    @Environment(AppState.self) private var state
+
+    var body: some View {
+        Button {
+            state.boardTrain()
+        } label: {
+            Label("On the train", systemImage: "tram.fill")
+                .font(.subheadline.weight(.semibold))
+                .lineLimit(1)
+                .frame(maxWidth: .infinity, minHeight: 34)
+        }
+        .pathPrimaryAction()
     }
 }
