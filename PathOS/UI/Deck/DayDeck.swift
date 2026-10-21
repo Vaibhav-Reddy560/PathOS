@@ -26,6 +26,9 @@ struct DayDeck: View {
     @State private var month = MonthGrid.month(0, from: Date())
     /// Your Apple Calendar's own events for the days on screen.
     @State private var calendarItems: [CalendarItem] = []
+    /// Any day of the year Year shows.
+    @State private var year = Date()
+    @State private var isTravelShown = false
 
     var body: some View {
         ScrollView {
@@ -44,6 +47,7 @@ struct DayDeck: View {
                 switch mode {
                 case .day: dayView
                 case .month: monthView
+                case .year: yearView
                 case .mail:
                     // The day you were on: its mail, not everything waiting.
                     dayPicker
@@ -72,6 +76,10 @@ struct DayDeck: View {
         }
         .onChange(of: mode) { _, mode in
             if mode == .month { month = MonthGrid.month(0, from: day) }
+            if mode == .year { year = day }
+        }
+        .sheet(isPresented: $isTravelShown) {
+            TravelLogSheet(day: day, recorded: dayLog?.distanceMeters ?? 0)
         }
     }
 
@@ -171,6 +179,74 @@ struct DayDeck: View {
                 .frame(maxWidth: .infinity, minHeight: 32)
         }
         .pathSecondaryAction()
+
+        // How the month added up, the month the calendar shows.
+        PeriodOverview(period: .month(month))
+    }
+
+    /// A year of your days, one year at a time; a month opens in Month.
+    @ViewBuilder
+    private var yearView: some View {
+        yearPicker
+        PeriodOverview(period: .year(year)) { month in
+            withAnimation(PathMotion.control) {
+                self.month = month
+                day = month
+                mode = .month
+            }
+        }
+    }
+
+    private var yearPicker: some View {
+        let calendar = Calendar.current
+        let shown = calendar.component(.year, from: year)
+        let thisYear = calendar.component(.year, from: Date())
+        // Back to the first year PathOS kept anything, on to next year's holidays.
+        let first = min(dayLogs.last.map { calendar.component(.year, from: $0.dayStart) } ?? thisYear, thisYear)
+        return HStack(spacing: 12) {
+            Button {
+                shiftYear(by: -1)
+            } label: {
+                Image(systemName: "chevron.left")
+                    .frame(width: 44, height: 40)
+                    .contentShape(.rect)
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(shown > first ? .ice : .mist.opacity(0.4))
+            .disabled(shown <= first)
+            .accessibilityLabel("Previous year")
+
+            Text(String(shown))
+                .font(.headline.monospacedDigit())
+                .foregroundStyle(.ice)
+                .frame(maxWidth: .infinity)
+
+            if shown != thisYear {
+                Button("This year") {
+                    withAnimation(PathMotion.control) { year = Date() }
+                }
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(.aurora)
+            }
+
+            Button {
+                shiftYear(by: 1)
+            } label: {
+                Image(systemName: "chevron.right")
+                    .frame(width: 44, height: 40)
+                    .contentShape(.rect)
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(shown < thisYear + 1 ? .ice : .mist.opacity(0.4))
+            .disabled(shown >= thisYear + 1)
+            .accessibilityLabel("Next year")
+        }
+        .accessibilityElement(children: .contain)
+    }
+
+    private func shiftYear(by years: Int) {
+        guard let moved = Calendar.current.date(byAdding: .year, value: years, to: year) else { return }
+        withAnimation(PathMotion.control) { year = moved }
     }
 
     // MARK: Sections
@@ -268,15 +344,28 @@ struct DayDeck: View {
         metric.frame(maxWidth: .infinity, alignment: .leading)
     }
 
+    /// Opens the day's travel: each stretch, how you went, and what it cost.
     private var travelledMetric: some View {
         let distance = dayLog?.distanceMeters ?? 0
         let parts = DayDistance.format(distance).split(separator: " ")
-        return MetricView(
-            label: "Travelled",
-            value: distance > 0 ? String(parts.first ?? "0") : "—",
-            unit: distance > 0 && parts.count > 1 ? String(parts[1]) : nil,
-            role: .you
-        )
+        return Button {
+            isTravelShown = true
+        } label: {
+            VStack(alignment: .leading, spacing: 2) {
+                HStack(spacing: 3) {
+                    InstrumentLabel("Travelled")
+                    Image(systemName: "chevron.right")
+                        .font(.caption2.weight(.bold))
+                        .foregroundStyle(.mist)
+                }
+                MetricText(value: distance > 0 ? String(parts.first ?? "0") : "—",
+                           unit: distance > 0 && parts.count > 1 ? String(parts[1]) : nil, role: .you)
+            }
+            .contentShape(.rect)
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Travelled \(distance > 0 ? DayDistance.format(distance) : "nothing")")
+        .accessibilityHint("Shows each stretch, how you went and what it cost")
     }
 
     private var eventsMetric: some View {
@@ -962,6 +1051,7 @@ private struct DayItemRow: View {
 enum DayViewMode: String, CaseIterable, Identifiable {
     case day
     case month
+    case year
     case mail
 
     var id: String { rawValue }
@@ -969,6 +1059,7 @@ enum DayViewMode: String, CaseIterable, Identifiable {
         switch self {
         case .day: "Day"
         case .month: "Month"
+        case .year: "Year"
         case .mail: "Mail"
         }
     }

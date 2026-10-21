@@ -1,7 +1,7 @@
 import SwiftUI
 
 /// A holiday coming up that you haven't said about: is it a day off for you? Asked once, in the
-/// month before it; the answer can be changed in Settings → Overview.
+/// month before it; the answer can be changed in Day → Month or Year.
 struct HolidayQuestion: View {
     let holiday: Holiday
 

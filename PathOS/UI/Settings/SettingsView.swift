@@ -41,16 +41,6 @@ struct SettingsView: View {
                     .accessibilityElement(children: .combine)
                 }
 
-                Section {
-                    NavigationLink {
-                        OverviewView()
-                    } label: {
-                        Label("Overview", systemImage: "chart.bar.doc.horizontal")
-                    }
-                } footer: {
-                    Text("What you went to and missed, holidays and days off, tasks done.")
-                }
-
                 appIconSection
                 dataSection
 

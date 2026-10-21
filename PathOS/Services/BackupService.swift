@@ -99,6 +99,11 @@ final class BackupService {
             .init(id: $0.id, serviceRaw: $0.serviceRaw, at: $0.at, fare: $0.fare, distanceKm: $0.distanceKm,
                   minutes: $0.minutes, pickup: $0.pickup, drop: $0.drop, vehicleRaw: $0.vehicleRaw, messageID: $0.messageID)
         }
+        archive.travel = fetch(TravelSegment.self).map {
+            .init(id: $0.id, start: $0.start, end: $0.end, modeRaw: $0.modeRaw, distanceMeters: $0.distanceMeters,
+                  fromName: $0.fromName, toName: $0.toName, fare: $0.fare, fareIsEstimate: $0.fareIsEstimate,
+                  sourceRaw: $0.sourceRaw)
+        }
         archive.orders = fetch(OrderUpdate.self).map {
             .init(id: $0.id, serviceRaw: $0.serviceRaw, orderID: $0.orderID, item: $0.item, statusRaw: $0.statusRaw,
                   firstSeenAt: $0.firstSeenAt, updatedAt: $0.updatedAt, messageID: $0.messageID)
@@ -323,6 +328,13 @@ final class BackupService {
             ride.id = item.id
             context.insert(ride)
         }
+        for item in archive.travel ?? [] {
+            let segment = TravelSegment(mode: WayTravelled(rawValue: item.modeRaw) ?? .road, start: item.start, end: item.end,
+                                        distanceMeters: item.distanceMeters, from: item.fromName, to: item.toName,
+                                        fare: item.fare, fareIsEstimate: item.fareIsEstimate, source: item.sourceRaw)
+            segment.id = item.id
+            context.insert(segment)
+        }
         for item in archive.orders ?? [] {
             let order = OrderUpdate(ServiceMail.Order(service: ServiceMail.Service(rawValue: item.serviceRaw) ?? .amazon,
                                                       orderID: item.orderID,
@@ -419,6 +431,7 @@ final class BackupService {
         try context.delete(model: Holiday.self)
         try context.delete(model: RideRecord.self)
         try context.delete(model: OrderUpdate.self)
+        try context.delete(model: TravelSegment.self)
         try context.delete(model: Reminder.self)
     }
 

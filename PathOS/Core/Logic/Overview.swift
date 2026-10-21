@@ -1,33 +1,8 @@
 import Foundation
 
-/// What your days added up to, over a week, a month or everything: what you went to and what you
-/// missed, the days off and holidays you took, what you got done and how far you went.
+/// What your days added up to, a month or a year at a time: what you went to and what you missed,
+/// the days off and holidays you took, what you got done and how far you went.
 nonisolated enum Overview {
-    nonisolated enum Span: String, CaseIterable, Identifiable, Sendable {
-        case week
-        case month
-        case all
-
-        var id: String { rawValue }
-
-        var title: String {
-            switch self {
-            case .week: "This week"
-            case .month: "This month"
-            case .all: "Everything"
-            }
-        }
-
-        /// Where the span starts: the week's or the month's first day, or nil for everything.
-        func start(now: Date, calendar: Calendar = .current) -> Date? {
-            switch self {
-            case .week: calendar.dateInterval(of: .weekOfYear, for: now)?.start
-            case .month: calendar.dateInterval(of: .month, for: now)?.start
-            case .all: nil
-            }
-        }
-    }
-
     /// Something on a day's plan: a session, an event, a calendar entry.
     nonisolated struct Item: Hashable, Sendable {
         var id: String
@@ -109,5 +84,19 @@ nonisolated enum Overview {
         summary.missed.sort { $0.start > $1.start }
         summary.daysOff.sort { $0.dayStart > $1.dayStart }
         return summary
+    }
+
+    /// One month of a year, added up.
+    nonisolated struct MonthTotal: Identifiable, Equatable, Sendable {
+        var month: Date
+        var summary: Summary
+        var id: Date { month }
+    }
+
+    /// A year's days, month by month, in order: only months with a day in them.
+    static func byMonth(_ days: [Day], now: Date, calendar: Calendar = .current) -> [MonthTotal] {
+        Dictionary(grouping: days) { calendar.dateInterval(of: .month, for: $0.dayStart)?.start ?? $0.dayStart }
+            .map { MonthTotal(month: $0.key, summary: summary(of: $0.value, now: now)) }
+            .sorted { $0.month < $1.month }
     }
 }

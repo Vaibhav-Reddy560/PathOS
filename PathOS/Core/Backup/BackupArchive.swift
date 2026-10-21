@@ -36,6 +36,8 @@ nonisolated struct BackupArchive: Codable, Equatable {
     /// Rides and orders read from mail.
     var rides: [Ride]?
     var orders: [Order]?
+    /// The day's travel, stretch by stretch.
+    var travel: [Stretch]?
     /// Preferences that aren't worth a model of their own: priority senders, the preferred cab.
     var settings: [String: String] = [:]
     var settingLists: [String: [String]] = [:]
@@ -227,6 +229,19 @@ nonisolated struct BackupArchive: Codable, Equatable {
         var drop: String?
         var vehicleRaw: String?
         var messageID: String
+    }
+
+    nonisolated struct Stretch: Codable, Equatable {
+        var id: UUID
+        var start: Date
+        var end: Date
+        var modeRaw: String
+        var distanceMeters: Double
+        var fromName: String?
+        var toName: String?
+        var fare: Double?
+        var fareIsEstimate: Bool
+        var sourceRaw: String
     }
 
     nonisolated struct Order: Codable, Equatable {

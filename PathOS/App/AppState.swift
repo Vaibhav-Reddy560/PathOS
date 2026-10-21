@@ -305,6 +305,13 @@ final class AppState {
     /// On foot near the end: the nearest you've got, and when — inside a mall you keep walking
     /// without getting any closer, which is having arrived.
     @ObservationIgnored var closestToEnd: (metres: Double, at: Date)?
+    /// Travel noticed from movement while nothing's being followed.
+    @ObservationIgnored var segmenter = MotionSegmenter()
+    /// The leg of a way under way: when it began, and how far you've gone on it.
+    @ObservationIgnored var legStartedAt: Date?
+    @ObservationIgnored var legMeters = 0.0
+    /// The ride on its own already written to the day, so it's written once.
+    @ObservationIgnored var loggedJourneyID: UUID?
     /// When the walk to a spot was last fetched again.
     @ObservationIgnored var lastGuidanceFetch = Date.distantPast
     /// The furthest the map has seen you get along the way being followed, in legs: progress
@@ -347,7 +354,7 @@ final class AppState {
                 for: SavedPlace.self, SpatialNote.self, ScanRecord.self, Expense.self, DepartureLog.self,
                 PathEvent.self, DayLog.self, NotePhoto.self, TimetableEntry.self, TimetableException.self,
                 Trip.self, TripLeg.self, MailSuggestion.self, Reminder.self, Holiday.self,
-                RideRecord.self, OrderUpdate.self
+                RideRecord.self, OrderUpdate.self, TravelSegment.self
             )
         } catch {
             fatalError("PathOS couldn't open its storage: \(error)")
@@ -429,6 +436,11 @@ final class AppState {
             if compassTarget != nil {
                 refreshGuidanceRouteIfLeft(from: fix)
             }
+            // Nothing being followed: the day's travel is noticed from how you're moving.
+            if trip == nil, transit.journey == nil {
+                logNoticed(segmenter.feed(fix.coordinate, at: fix.timestamp, speed: fix.speed >= 0 ? fix.speed : nil,
+                                          accuracy: fix.horizontalAccuracy))
+            }
             // Following a way, the map moves with the fix rather than with a timer: a line trimmed
             // on the next tick of a one-second loop always trails the puck.
             if trip != nil {
@@ -438,6 +450,20 @@ final class AppState {
         // Headphones went on, or a call ended: the noise sensor may be able to listen again.
         sound.onMayResume = { [weak self] in
             Task { await self?.resumeListening() }
+        }
+        // A way or a ride under way carries on at once — before anything waits. Relaunched in the
+        // background by iOS after closing PathOS for memory, location only keeps coming if its
+        // session is started again straight away.
+        restoreTravel()
+        // Swiped away mid-journey: iOS won't bring PathOS back for that, so say so while it can.
+        NotificationCenter.default.addObserver(forName: UIApplication.willTerminateNotification, object: nil,
+                                               queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                // What was being noticed goes in the day before PathOS goes.
+                self.logNoticed(self.segmenter.finish())
+                self.warnClosedWhileTravelling()
+            }
         }
         Task { await bootstrap() }
     }
@@ -476,8 +502,6 @@ final class AppState {
         await notifications.refreshStatus()
         // The public holidays that ship with PathOS, ready to be asked about.
         holidays.addBundled()
-        // A way or a ride under way when PathOS last closed carries on.
-        restoreTravel()
         await vault.syncGeofences(userLocation: location.location)
         scheduleBackgroundRefresh()
         // A copy of everything, every couple of days, so the data outlives the app itself.
@@ -658,6 +682,7 @@ final class AppState {
         case .count(let metres):
             log.distanceMeters += metres
             distanceAnchor = here
+            if trip != nil || transit.journey != nil { legMeters += metres }
         }
         // Saved every half minute, not every second.
         if Date().timeIntervalSince(lastDayLogSave) > 30 {
@@ -1199,6 +1224,8 @@ final class AppState {
     // MARK: Journeys
 
     func startJourney(_ journey: Journey) {
+        logNoticed(segmenter.finish())
+        legMeters = 0
         transit.start(journey, location: location.location)
         saveTravel()
         location.startUpdates()
@@ -1209,6 +1236,7 @@ final class AppState {
     }
 
     func endJourney() {
+        logJourney()
         transit.end()
         refreshBackgroundSession()
         Task {
@@ -1233,6 +1261,11 @@ final class AppState {
     /// that ends in your pocket doesn't leave GPS running until you next open the app.
     func refreshBackgroundSession() {
         location.setBackgroundSessionActive(needsBackgroundLocation)
+        // While something's being followed, a move of a few hundred metres also brings PathOS
+        // back if iOS has closed it.
+        if needsBackgroundLocation {
+            location.setSignificantChangesActive(true)
+        }
         if !isForeground && !needsBackgroundLocation {
             location.stopUpdates()
         }
@@ -1360,7 +1393,105 @@ final class AppState {
         if trip != nil, after.hasArrived {
             // Off the train: the way moves on to what comes after the ride.
             Task { await refreshTrip() }
+        } else if trip == nil, after.hasArrived {
+            logJourney()
         }
+    }
+
+    /// PathOS is being closed — swiped away — while a way or a ride is being followed. iOS won't
+    /// reopen it for that, so the way can't be followed until you open it again: said now, while
+    /// there's still time to.
+    func warnClosedWhileTravelling() {
+        guard trip != nil || transit.journey != nil else { return }
+        saveTravel()
+        let name = trip?.destinationName ?? transit.journey?.destination ?? "where you're going"
+        notifications.post(
+            id: "pathos.travel.closed",
+            title: "Your way to \(name) isn't being followed",
+            body: "PathOS was closed. Open it to carry on — it picks up from where you are.",
+            category: NotificationService.Category.tripLeg,
+            link: URL(string: "pathos://dashboard"),
+            timeSensitive: true
+        )
+    }
+
+    // MARK: The day's travel
+
+    /// Stretches noticed from movement, written to the day.
+    func logNoticed(_ pieces: [MotionSegmenter.Piece]) {
+        guard !pieces.isEmpty else { return }
+        for piece in pieces {
+            let from = CLLocationCoordinate2D(latitude: piece.fromLatitude, longitude: piece.fromLongitude)
+            let to = CLLocationCoordinate2D(latitude: piece.toLatitude, longitude: piece.toLongitude)
+            modelContainer.mainContext.insert(TravelSegment(
+                mode: piece.mode, start: piece.start, end: piece.end, distanceMeters: piece.distanceMeters,
+                from: placeName(near: from), to: placeName(near: to), source: "noticed"
+            ))
+        }
+        try? modelContainer.mainContext.save()
+    }
+
+    /// A leg of a way, written to the day as it finishes: how it was meant to be travelled, how far
+    /// you went on it, and what it was reckoned to cost until a receipt says.
+    ///
+    /// A leg finished goes in at its planned length at least: underground, or with PathOS woken
+    /// only now and then, GPS counts a ride short. One ended part-way goes in as far as you went.
+    func logLeg(_ index: Int, of trip: ActiveTrip, until end: Date, finished: Bool = true) {
+        defer {
+            legStartedAt = end
+            legMeters = 0
+        }
+        guard let leg = trip.option.legs[safe: index] else { return }
+        let mode = WayTravelled(leg.mode)
+        let distance = finished ? max(leg.distanceMeters, legMeters) : legMeters
+        guard distance >= 50 else { return }
+        let fare = leg.headlineFare.map { Double($0.estimate.low + $0.estimate.high) / 2 }
+        let from = index == 0 ? (trip.origin.flatMap(placeName(near:)) ?? "Start") : trip.option.legs[index - 1].endName
+        logSegment(TravelSegment(
+            mode: mode, start: min(legStartedAt ?? trip.startedAt, end), end: end, distanceMeters: distance,
+            from: from, to: leg.endName, fare: mode == .walk ? nil : fare
+        ), counted: legMeters)
+    }
+
+    /// Writes a stretch to the day. Whatever it covered beyond what GPS counted is added to the
+    /// day's distance, so a ride underground isn't missing from it.
+    func logSegment(_ segment: TravelSegment, counted: Double) {
+        let context = modelContainer.mainContext
+        context.insert(segment)
+        let uncounted = segment.distanceMeters - counted
+        if uncounted > 0 {
+            let log = todaysLog(for: segment.end)
+            log.distanceMeters += uncounted
+        }
+        try? context.save()
+    }
+
+    /// A metro or bus ride followed on its own, written once: as far along the line as you got.
+    func logJourney(now: Date = Date()) {
+        // A ride that's a leg of a way is written as that leg.
+        guard trip == nil, let journey = transit.journey, loggedJourneyID != journey.id else { return }
+        loggedJourneyID = journey.id
+        saveTravel()
+        let distances = RideLine.distances(journey.stops)
+        let reached = transit.progress?.currentIndex ?? 0
+        let distance = min(transit.track.along, distances.last ?? 0)
+        defer { legMeters = 0 }
+        guard distance >= 300 else { return }
+        let fare: Double? = journey.kind == .metro
+            ? Double(MetroRouter.fare(stationsTravelled: max(1, reached), at: journey.startedAt).token) : nil
+        logSegment(TravelSegment(
+            mode: journey.kind == .metro ? .metro : .bus, start: transit.track.since ?? journey.startedAt, end: now,
+            distanceMeters: distance, from: journey.origin, to: journey.stationName(at: reached), fare: fare
+        ), counted: legMeters)
+    }
+
+    /// Home, Work or a saved place within a short walk, to name where a stretch began or ended.
+    func placeName(near coordinate: CLLocationCoordinate2D) -> String? {
+        let places = (try? modelContainer.mainContext.fetch(FetchDescriptor<SavedPlace>())) ?? []
+        return places
+            .map { ($0, GeoMath.distance(from: coordinate, to: CLLocationCoordinate2D(latitude: $0.latitude, longitude: $0.longitude))) }
+            .filter { $0.1 <= 200 }
+            .min { $0.1 < $1.1 }?.0.name
     }
 
     /// You've said you're on the train.
@@ -1857,6 +1988,11 @@ final class AppState {
     /// becomes a notification. Open, the foreground loop already does all this.
     private func movedInBackground(to here: CLLocation) async {
         guard !isForeground else { return }
+        // In your pocket, these are the fixes there are: travel is still noticed from them.
+        if trip == nil, transit.journey == nil {
+            logNoticed(segmenter.feed(here.coordinate, at: here.timestamp, speed: here.speed >= 0 ? here.speed : nil,
+                                      accuracy: here.horizontalAccuracy))
+        }
         await context.refresh(location: here)
         await refreshDeparture()
         recordAttendance()
@@ -1984,22 +2120,24 @@ final class AppState {
     /// What the days in a span added up to: what you went to and missed, days off and holidays,
     /// tasks done and how far you went. Each day's plan is read again, so something missed can
     /// be named however long ago it was.
-    func overview(_ span: Overview.Span, now: Date = Date()) -> Overview.Summary {
+    /// The days of a month or a year so far, as the overview reads them. Only from the first day
+    /// PathOS saw: before that, nothing is known about what you went to.
+    func overviewDays(in interval: DateInterval, now: Date = Date()) -> [Overview.Day] {
         let calendar = Calendar.current
         let today = calendar.startOfDay(for: now)
         let logs = (try? modelContainer.mainContext.fetch(FetchDescriptor<DayLog>())) ?? []
         let logsByDay = Dictionary(logs.map { (calendar.startOfDay(for: $0.dayStart), $0) }, uniquingKeysWith: { first, _ in first })
         let earliest = logs.map(\.dayStart).min().map(calendar.startOfDay(for:)) ?? today
-        // A year at most: further back, the weekly schedule of the time isn't known anyway.
-        let floor = calendar.date(byAdding: .day, value: -365, to: today) ?? today
-        let start = max(span.start(now: now, calendar: calendar).map(calendar.startOfDay(for:)) ?? earliest, floor)
+        let start = max(calendar.startOfDay(for: interval.start), earliest)
+        let last = min(today, calendar.date(byAdding: .day, value: -1, to: interval.end).map(calendar.startOfDay(for:)) ?? today)
+        guard start <= last else { return [] }
 
         let dayOffs = timetable.exceptions().filter { $0.entryID == nil }
         let holidaysOff = holidays.all().filter { $0.isOff == true }
         let finished = (try? modelContainer.mainContext.fetch(FetchDescriptor<Reminder>())) ?? []
         let mirrored = Set(eventStore.all().compactMap(\.calendarEventID))
-        let tomorrow = calendar.date(byAdding: .day, value: 1, to: today) ?? today
-        let calendarItems = CalendarEventSource.items(from: start, to: tomorrow, excluding: mirrored).filter { !$0.isAllDay }
+        let afterLast = calendar.date(byAdding: .day, value: 1, to: last) ?? last
+        let calendarItems = CalendarEventSource.items(from: start, to: afterLast, excluding: mirrored).filter { !$0.isAllDay }
         // Read once, not once a day: a year of days asked SwiftData for everything seven hundred times.
         let slots = timetable.entries().map(TimetableService.slot)
         let skips = timetable.exceptions().map(TimetableService.skip)
@@ -2007,7 +2145,7 @@ final class AppState {
 
         var days: [Overview.Day] = []
         var day = start
-        while day <= today {
+        while day <= last {
             let log = logsByDay[day]
             let dayEnd = calendar.date(byAdding: .day, value: 1, to: day) ?? day
             var planned = TimetableRoutine.sessions(slots: slots, skips: skips, on: day).map {
@@ -2031,7 +2169,28 @@ final class AppState {
             ))
             day = dayEnd
         }
-        return Overview.summary(of: days, now: now)
+        return days
+    }
+
+    /// The travel of a day, a month or a year: every stretch written, priced by the ride receipts
+    /// of the time, and the receipts for rides PathOS didn't see.
+    func travel(in interval: DateInterval) -> [TravelLog.Stretch] {
+        let context = modelContainer.mainContext
+        let start = interval.start, end = interval.end
+        let segments = (try? context.fetch(FetchDescriptor<TravelSegment>(
+            predicate: #Predicate { $0.start >= start && $0.start < end }))) ?? []
+        // A receipt comes as the ride ends: one a little into the next day can still be the last ride's.
+        let late = end.addingTimeInterval(30 * 60)
+        let rides = (try? context.fetch(FetchDescriptor<RideRecord>(
+            predicate: #Predicate { $0.at >= start && $0.at < late }))) ?? []
+        let receipts = rides.map { ride in
+            TravelLog.Receipt(at: ride.at, fare: ride.fare, vehicle: ride.vehicle, provider: ride.service.name,
+                              distanceMeters: ride.distanceKm.map { $0 * 1_000 }, minutes: ride.minutes,
+                              pickup: ride.pickup?.components(separatedBy: ",").first,
+                              drop: ride.drop?.components(separatedBy: ",").first)
+        }
+        return TravelLog.priced(segments.map(\.stretch), receipts: receipts)
+            .filter { $0.start >= start && $0.start < end }
     }
 
     // MARK: Rides

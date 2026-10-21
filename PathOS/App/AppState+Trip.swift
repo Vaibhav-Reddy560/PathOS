@@ -102,6 +102,10 @@ extension AppState {
         stoppedNearEndSince = nil
         closestToEnd = nil
         tripLegsReached = 0
+        // What was being noticed ends here; the way is written leg by leg from now.
+        logNoticed(segmenter.finish())
+        legStartedAt = startedAt
+        legMeters = 0
         trip = ActiveTrip(option: option, destinationName: name, startedAt: startedAt, arriveBy: arriveBy,
                           latitude: destination.latitude, longitude: destination.longitude,
                           originLatitude: origin?.latitude, originLongitude: origin?.longitude)
@@ -229,6 +233,10 @@ extension AppState {
 
     func endTrip(saying: Bool = true) {
         let name = saying ? trip?.destinationName : nil
+        // Ended part-way: the leg you were on still happened, as far as you went.
+        if let trip, tripArrival == nil {
+            logLeg(tripStatus?.legIndex ?? tripLegsReached, of: trip, until: Date(), finished: false)
+        }
         trip = nil
         tripArrival = nil
         stoppedNearEndSince = nil
@@ -634,6 +642,10 @@ extension AppState {
             // Said, and shown: the driving view stays up with where the place is, until you're
             // done with it. It used to end the moment you were within a couple of hundred metres.
             guard tripArrival == nil else { return }
+            let last = trip.option.legs.count - 1
+            for leg in min(announcedTripLeg ?? last, last)...last {
+                logLeg(leg, of: trip, until: now)
+            }
             let minutes = Int(now.timeIntervalSince(trip.startedAt) / 60)
             tripArrival = TripArrival(destinationName: trip.destinationName, latitude: trip.latitude,
                                       longitude: trip.longitude, side: arrivalSide(of: trip), at: now,
@@ -663,6 +675,12 @@ extension AppState {
         }
 
         if announcedTripLeg != status.legIndex {
+            // The legs just finished go in the day: more than one when PathOS wasn't running.
+            if let finished = announcedTripLeg, finished < status.legIndex {
+                for leg in finished..<status.legIndex {
+                    logLeg(leg, of: trip, until: now)
+                }
+            }
             announcedTripLeg = status.legIndex
             saveTravel()
             if status.legIndex > 0 {
@@ -832,6 +850,13 @@ extension AppState {
         var journey: Journey?
         var track: RideTrack
         var savedAt: Date
+        /// The leg last shown, and when it began and how far it's gone: to write the day's
+        /// travel on from where it was.
+        var announcedLeg: Int?
+        var legStartedAt: Date?
+        var legMeters: Double?
+        /// The ride on its own already written to the day.
+        var loggedJourney: UUID?
     }
 
     static let travelKey = "pathos.travel"
@@ -844,7 +869,8 @@ extension AppState {
             return
         }
         let travel = Travel(trip: trip, legsReached: tripLegsReached, journey: transit.journey, track: transit.track,
-                            savedAt: Date())
+                            savedAt: Date(), announcedLeg: announcedTripLeg, legStartedAt: legStartedAt,
+                            legMeters: legMeters, loggedJourney: loggedJourneyID)
         if let data = try? JSONEncoder().encode(travel) {
             UserDefaults.standard.set(data, forKey: Self.travelKey)
         }
@@ -863,11 +889,15 @@ extension AppState {
         if let journey = travel.journey {
             transit.start(journey, track: travel.track, location: location.location)
         }
+        legStartedAt = travel.legStartedAt
+        legMeters = travel.legMeters ?? 0
+        loggedJourneyID = travel.loggedJourney
         if let restored = travel.trip {
             trip = restored
             tripLegsReached = travel.legsReached
             tripStatus = progress(of: restored, now: now)
-            announcedTripLeg = tripStatus?.legIndex
+            // Legs finished while closed are written to the day on the next refresh.
+            announcedTripLeg = travel.announcedLeg ?? tripStatus?.legIndex
             startNavigationLoop()
         }
         location.startUpdates()

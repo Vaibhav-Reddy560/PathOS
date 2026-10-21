@@ -4,7 +4,7 @@ import Foundation
 ///
 /// The national and Karnataka lists ship with PathOS, from the state's own notification. A
 /// holiday isn't assumed to be a day off — a college can teach through Mahanavami — so each is
-/// asked about once, close to it, and the answer can be changed later in the Overview.
+/// asked about once, close to it, and the answer can be changed later in Day → Month or Year.
 nonisolated enum Holidays {
     nonisolated enum Kind: String, Codable, CaseIterable, Sendable {
         case national
