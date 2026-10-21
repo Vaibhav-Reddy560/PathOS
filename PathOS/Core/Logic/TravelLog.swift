@@ -246,8 +246,38 @@ nonisolated enum TravelLog {
         var fareIsEstimate: Bool
         /// The ride app whose receipt priced it.
         var provider: String? = nil
+        /// The payment found to be for it, and why it's believed.
+        var paid: Paid? = nil
 
         var minutes: Int { max(0, Int((end.timeIntervalSince(start) / 60).rounded())) }
+
+        /// "Metro · Jayadeva Hospital → Konanakunte Cross".
+        var title: String {
+            let places = [from, to].compactMap { $0 }
+            return places.count == 2 ? "\(mode.name) · \(places[0]) → \(places[1])"
+                : places.first.map { "\(mode.name) · \(to == nil ? "from" : "to") \($0)" } ?? mode.name
+        }
+    }
+
+    /// What a stretch was paid with: a receipt, or a payment whose time and amount fit it.
+    nonisolated struct Paid: Equatable, Sendable {
+        nonisolated enum Evidence: String, Sendable {
+            /// The ride app's own receipt, at the time and over the distance travelled.
+            case receipt
+            /// Paid for what this costs, when it would have been bought.
+            case fareAndTime
+            /// Paid just as it would have been — at the station, or getting out — but for a fare
+            /// PathOS didn't know.
+            case time
+        }
+
+        var amount: Double
+        /// "Namma Metro", "Uber", "Ramesh K".
+        var to: String
+        var at: Date
+        /// The payment, or the receipt, it was.
+        var paymentID: UUID
+        var evidence: Evidence
     }
 
     /// A ride receipt from mail, as matched to a stretch.
@@ -281,7 +311,8 @@ nonisolated enum TravelLog {
             Stretch(id: receipt.id, mode: WayTravelled(receipt: receipt.vehicle) ?? .road,
                     start: receipt.at.addingTimeInterval(-Double(receipt.minutes ?? 0) * 60), end: receipt.at,
                     distanceMeters: receipt.distanceMeters ?? 0, from: receipt.pickup, to: receipt.drop,
-                    fare: receipt.fare, fareIsEstimate: false, provider: receipt.provider)
+                    fare: receipt.fare, fareIsEstimate: false, provider: receipt.provider,
+                    paid: receipt.fare.map { Paid(amount: $0, to: receipt.provider, at: receipt.at, paymentID: receipt.id, evidence: .receipt) })
         }
         return priced.sorted { $0.start < $1.start }
     }
@@ -289,8 +320,13 @@ nonisolated enum TravelLog {
     private static func receiptIndex(for stretch: Stretch, in receipts: [Receipt]) -> Int? {
         guard stretch.mode.isRoad else { return nil }
         let window = stretch.start.addingTimeInterval(-10 * 60)...stretch.end.addingTimeInterval(30 * 60)
-        return receipts.indices.filter { window.contains(receipts[$0].at) }
-            .min { abs(receipts[$0].at.timeIntervalSince(stretch.end)) < abs(receipts[$1].at.timeIntervalSince(stretch.end)) }
+        return receipts.indices.filter { index in
+            // Where both say how far, the receipt's ride has to be about this one's length.
+            guard window.contains(receipts[index].at) else { return false }
+            guard let receipted = receipts[index].distanceMeters, receipted > 0, stretch.distanceMeters > 0 else { return true }
+            return (0.6...1.6).contains(receipted / stretch.distanceMeters)
+        }
+        .min { abs(receipts[$0].at.timeIntervalSince(stretch.end)) < abs(receipts[$1].at.timeIntervalSince(stretch.end)) }
     }
 
     private static func applying(_ receipt: Receipt, to stretch: Stretch) -> Stretch {
@@ -301,7 +337,90 @@ nonisolated enum TravelLog {
         }
         matched.mode = WayTravelled(receipt: receipt.vehicle) ?? stretch.mode
         matched.provider = receipt.provider
+        if let fare = receipt.fare {
+            matched.paid = Paid(amount: fare, to: receipt.provider, at: receipt.at, paymentID: receipt.id, evidence: .receipt)
+        }
         return matched
+    }
+
+    // MARK: Payments to stretches
+
+    /// A metro ticket is bought on the day, up to this long before boarding — ahead of time, or
+    /// at the station.
+    static let ticketBoughtBefore: TimeInterval = 3 * 3_600
+    /// Bought at the station: paid this close to boarding is the ticket, whatever its amount.
+    static let ticketAtStation: TimeInterval = 45 * 60
+    /// An auto paid by UPI is paid as you get out: this long either side of the stretch's end.
+    static let paidOnArrivalBefore: TimeInterval = 10 * 60
+    static let paidOnArrivalAfter: TimeInterval = 20 * 60
+
+    /// The day's payments put to the stretches they paid for, only where the evidence says so:
+    ///
+    /// - a metro ride, to a payment to Namma Metro that day before the ride ended — for its fare
+    ///   (a QR ticket's or a card's discount allowed), or bought at the station just before;
+    /// - a ride by road with no receipt, to a payment as it ended for about its fare: an auto
+    ///   paid by UPI.
+    ///
+    /// Anything that doesn't fit is left as it was: an estimate, not a guess dressed as a fact.
+    /// `payments` are banks' and cards' word for payments not already a receipt's.
+    static func linked(_ stretches: [Stretch], payments: [Spending.Entry], maxTicket: Double = 90,
+                       calendar: Calendar = .current) -> [Stretch] {
+        var used = Set<UUID>()
+        var result = stretches
+        for index in result.indices where result[index].paid == nil {
+            let stretch = result[index]
+            let found: (Spending.Entry, Paid.Evidence)?
+            if stretch.mode == .metro {
+                found = metroTicket(for: stretch, in: payments.filter { !used.contains($0.id) }, maxTicket: maxTicket,
+                                    calendar: calendar)
+            } else if stretch.mode.isRoad {
+                found = paidOnArrival(for: stretch, in: payments.filter { !used.contains($0.id) })
+            } else {
+                found = nil
+            }
+            guard let (payment, evidence) = found else { continue }
+            used.insert(payment.id)
+            result[index].fare = payment.amount
+            result[index].fareIsEstimate = false
+            result[index].paid = Paid(amount: payment.amount, to: payment.payee ?? payment.source, at: payment.at,
+                                      paymentID: payment.id, evidence: evidence)
+        }
+        return result
+    }
+
+    private static func metroTicket(for stretch: Stretch, in payments: [Spending.Entry], maxTicket: Double,
+                                    calendar: Calendar) -> (Spending.Entry, Paid.Evidence)? {
+        let tickets = payments.filter { payment in
+            PaymentMail.isMetro(payment.payee) && payment.amount <= maxTicket
+                && calendar.isDate(payment.at, inSameDayAs: stretch.start)
+                && payment.at >= stretch.start.addingTimeInterval(-ticketBoughtBefore) && payment.at <= stretch.end
+        }
+        let nearest = { (a: Spending.Entry, b: Spending.Entry) in
+            abs(a.at.timeIntervalSince(stretch.start)) < abs(b.at.timeIntervalSince(stretch.start))
+        }
+        // This ride's fare, give or take a QR ticket's or a smart card's discount.
+        if let fare = stretch.fareIsEstimate ? stretch.fare : nil,
+           let ticket = tickets.filter({ abs($0.amount - fare) <= max(2, fare * 0.1) }).min(by: nearest) {
+            return (ticket, .fareAndTime)
+        }
+        let atStation = stretch.start.addingTimeInterval(-ticketAtStation)...stretch.start.addingTimeInterval(10 * 60)
+        return tickets.filter { atStation.contains($0.at) }.min(by: nearest).map { ($0, .time) }
+    }
+
+    private static func paidOnArrival(for stretch: Stretch, in payments: [Spending.Entry]) -> (Spending.Entry, Paid.Evidence)? {
+        let fare = stretch.fareIsEstimate ? stretch.fare : nil
+        // Without a fare to go by, only a payment right as it ended.
+        let window = fare == nil
+            ? stretch.end.addingTimeInterval(-5 * 60)...stretch.end.addingTimeInterval(10 * 60)
+            : stretch.end.addingTimeInterval(-paidOnArrivalBefore)...stretch.end.addingTimeInterval(paidOnArrivalAfter)
+        let fitting = payments.filter { payment in
+            guard window.contains(payment.at), !PaymentMail.isMetro(payment.payee) else { return false }
+            // About what the ride costs: an auto's meter and a tip, not a meal.
+            if let fare { return (fare * 0.5...fare * 2).contains(payment.amount) }
+            return (20...1_500).contains(payment.amount)
+        }
+        return fitting.min { abs($0.at.timeIntervalSince(stretch.end)) < abs($1.at.timeIntervalSince(stretch.end)) }
+            .map { ($0, fare == nil ? .time : .fareAndTime) }
     }
 
     nonisolated struct ModeTotal: Identifiable, Equatable, Sendable {

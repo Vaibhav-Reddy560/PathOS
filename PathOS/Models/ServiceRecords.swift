@@ -112,7 +112,8 @@ final class PaymentRecord {
     var method: PaymentMail.Method { PaymentMail.Method(rawValue: methodRaw) ?? .other }
 
     var entry: Spending.Entry {
-        Spending.Entry(id: id, at: at, amount: amount, payee: payee, source: source, method: method, reference: reference,
-                       account: account, isReceipt: isReceipt)
+        // Kept as the bank printed it; read as it's known — "Bangalor" is Namma Metro.
+        Spending.Entry(id: id, at: at, amount: amount, payee: PaymentMail.canonicalPayee(payee), source: source, method: method,
+                       reference: reference, account: account, isReceipt: isReceipt)
     }
 }

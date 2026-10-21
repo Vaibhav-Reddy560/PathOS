@@ -2174,11 +2174,24 @@ final class AppState {
     }
 
     /// What was spent in a day, a month or a year: every payment a mail confirmed — banks' and
-    /// cards' alerts, UPI apps', shops' and ride apps' receipts — and every bill you scanned, each once.
+    /// cards' alerts, UPI apps', shops' and ride apps' receipts — and every bill you scanned, each
+    /// once, with the travel each one paid for.
     func spending(in interval: DateInterval) -> [Spending.Entry] {
+        ledger(in: interval).spending
+    }
+
+    /// The travel of a day, a month or a year: every stretch written, with what it was found to
+    /// cost — a ride app's receipt, a metro ticket, an auto paid by UPI — or else the estimate.
+    func travel(in interval: DateInterval) -> [TravelLog.Stretch] {
+        ledger(in: interval).travel
+    }
+
+    /// Travel and spending together, each put to the other where the evidence says.
+    func ledger(in interval: DateInterval) -> (travel: [TravelLog.Stretch], spending: [Spending.Entry]) {
         let context = modelContainer.mainContext
-        // A little either side, so an alert and its receipt either side of midnight still meet.
-        let start = interval.start.addingTimeInterval(-Spending.receiptAfterDebit)
+        // A little either side, so an alert and its receipt either side of midnight still meet,
+        // and a ticket bought before a ride just after midnight is still seen.
+        let start = interval.start.addingTimeInterval(-max(Spending.receiptAfterDebit, TravelLog.ticketBoughtBefore))
         let end = interval.end.addingTimeInterval(Spending.receiptAfterDebit)
         let payments = (try? context.fetch(FetchDescriptor<PaymentRecord>(
             predicate: #Predicate { $0.at >= start && $0.at < end }))) ?? []
@@ -2186,6 +2199,10 @@ final class AppState {
             predicate: #Predicate { $0.at >= start && $0.at < end }))) ?? []
         let scanned = (try? context.fetch(FetchDescriptor<Expense>(
             predicate: #Predicate { $0.date >= start && $0.date < end }))) ?? []
+        let intervalStart = interval.start, intervalEnd = interval.end
+        let segments = (try? context.fetch(FetchDescriptor<TravelSegment>(
+            predicate: #Predicate { $0.start >= intervalStart && $0.start < intervalEnd }))) ?? []
+
         var entries = payments.map(\.entry)
         entries += rides.compactMap { ride in
             ride.fare.map {
@@ -2198,28 +2215,30 @@ final class AppState {
                            payee: expense.merchant.isEmpty ? nil : expense.merchant, source: "Scanned bill",
                            method: .other, reference: nil, account: nil, isReceipt: true)
         }
-        return Spending.combined(entries).filter { interval.contains($0.at) }
-    }
+        let spending = Spending.combined(entries)
 
-    /// The travel of a day, a month or a year: every stretch written, priced by the ride receipts
-    /// of the time, and the receipts for rides PathOS didn't see.
-    func travel(in interval: DateInterval) -> [TravelLog.Stretch] {
-        let context = modelContainer.mainContext
-        let start = interval.start, end = interval.end
-        let segments = (try? context.fetch(FetchDescriptor<TravelSegment>(
-            predicate: #Predicate { $0.start >= start && $0.start < end }))) ?? []
-        // A receipt comes as the ride ends: one a little into the next day can still be the last ride's.
-        let late = end.addingTimeInterval(30 * 60)
-        let rides = (try? context.fetch(FetchDescriptor<RideRecord>(
-            predicate: #Predicate { $0.at >= start && $0.at < late }))) ?? []
+        // Ride apps' receipts first, by time and distance; then metro tickets and autos paid by
+        // UPI, from the payments that aren't a receipt's already.
         let receipts = rides.map { ride in
             TravelLog.Receipt(at: ride.at, fare: ride.fare, vehicle: ride.vehicle, provider: ride.service.name,
                               distanceMeters: ride.distanceKm.map { $0 * 1_000 }, minutes: ride.minutes,
                               pickup: ride.pickup?.components(separatedBy: ",").first,
-                              drop: ride.drop?.components(separatedBy: ",").first)
+                              drop: ride.drop?.components(separatedBy: ",").first, id: ride.id)
         }
-        return TravelLog.priced(segments.map(\.stretch), receipts: receipts)
-            .filter { $0.start >= start && $0.start < end }
+        let maxTicket = Double(MetroNetwork.data.fares.slabs.map(\.fare).max() ?? 90)
+        let travel = TravelLog.linked(TravelLog.priced(segments.map(\.stretch), receipts: receipts),
+                                      payments: spending.filter { !$0.isReceipt && $0.receiptID == nil },
+                                      maxTicket: maxTicket)
+            .filter { $0.start >= interval.start && $0.start < interval.end }
+
+        let paidFor = Dictionary(travel.compactMap { stretch in stretch.paid.map { ($0.paymentID, stretch.title) } },
+                                 uniquingKeysWith: { first, _ in first })
+        let annotated = spending.map { entry in
+            var entry = entry
+            entry.forTravel = paidFor[entry.id] ?? entry.receiptID.flatMap { paidFor[$0] }
+            return entry
+        }
+        return (travel, annotated.filter { interval.contains($0.at) })
     }
 
     // MARK: Rides

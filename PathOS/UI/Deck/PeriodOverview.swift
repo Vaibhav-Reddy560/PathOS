@@ -421,6 +421,12 @@ private struct PaymentRow: View {
                     .font(.subheadline)
                     .foregroundStyle(.mist)
                     .lineLimit(2)
+                if let travel = entry.forTravel {
+                    Label("For \(travel)", systemImage: "point.topleft.down.to.point.bottomright.curvepath.fill")
+                        .font(.footnote)
+                        .foregroundStyle(.aurora)
+                        .lineLimit(2)
+                }
             }
             Spacer(minLength: 8)
             Text("₹\(entry.amount.formatted(.number.precision(.fractionLength(0...2))))")
@@ -584,7 +590,7 @@ struct TravelLogSheet: View {
                             .foregroundStyle(.mist)
                             .padding(.horizontal, 4)
                     }
-                    Text("Fares are PathOS's estimate until a ride's receipt arrives. A metro ride is its token fare. Travel is noticed only while PathOS is running, open or in the background.")
+                    Text("A fare is PathOS's estimate until a payment is found for it: a ride app's receipt for that time and distance, a payment to Namma Metro that day for the ride's fare or at the station, or a UPI payment as an auto ride ended for about its fare. Travel is noticed only while PathOS is running, open or in the background.")
                         .font(.footnote)
                         .foregroundStyle(.mist)
                         .padding(.horizontal, 4)
@@ -638,7 +644,7 @@ private struct StretchRow: View {
         HStack(alignment: .top, spacing: 14) {
             SignalGlyph(symbol: stretch.mode.symbol, role: .you, size: 40)
             VStack(alignment: .leading, spacing: 2) {
-                Text(title)
+                Text(stretch.title)
                     .font(.body.weight(.semibold))
                     .foregroundStyle(.ice)
                     .lineLimit(2)
@@ -646,6 +652,13 @@ private struct StretchRow: View {
                     .font(.subheadline)
                     .foregroundStyle(.mist)
                     .lineLimit(2)
+                // What paid for it, and why that payment is believed to be this ride's.
+                if let paid = stretch.paid {
+                    Label(paidLine(paid), systemImage: "checkmark.seal.fill")
+                        .font(.footnote)
+                        .foregroundStyle(.aurora)
+                        .lineLimit(2)
+                }
             }
             Spacer(minLength: 8)
             if let fare = stretch.fare, fare > 0 {
@@ -653,9 +666,9 @@ private struct StretchRow: View {
                     Text("₹\(Int(fare.rounded()).formatted())")
                         .font(.subheadline.weight(.semibold).monospacedDigit())
                         .foregroundStyle(.ice)
-                    Text(stretch.provider ?? (stretch.fareIsEstimate ? "estimate" : "fare"))
+                    Text(stretch.paid != nil ? "paid" : stretch.fareIsEstimate ? "estimate" : "fare")
                         .font(.caption)
-                        .foregroundStyle(.mist)
+                        .foregroundStyle(stretch.paid != nil ? .aurora : .mist)
                 }
             }
         }
@@ -664,11 +677,14 @@ private struct StretchRow: View {
         .accessibilityElement(children: .combine)
     }
 
-    /// "Auto · Home → Jayadeva Hospital".
-    private var title: String {
-        let places = [stretch.from, stretch.to].compactMap { $0 }
-        return places.count == 2 ? "\(stretch.mode.name) · \(places[0]) → \(places[1])"
-            : places.first.map { "\(stretch.mode.name) · \(stretch.to == nil ? "from" : "to") \($0)" } ?? stretch.mode.name
+    /// "Paid Namma Metro at 8:41, for its fare", "Uber's receipt".
+    private func paidLine(_ paid: TravelLog.Paid) -> String {
+        let time = paid.at.formatted(date: .omitted, time: .shortened)
+        switch paid.evidence {
+        case .receipt: return "\(paid.to)'s receipt"
+        case .fareAndTime: return "Paid \(paid.to) at \(time), for its fare"
+        case .time: return stretch.mode == .metro ? "Paid \(paid.to) at \(time), at the station" : "Paid \(paid.to) at \(time), as it ended"
+        }
     }
 
     /// "9:12–9:40 AM · 4.2 km · 28 min".

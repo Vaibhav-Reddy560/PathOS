@@ -121,6 +121,13 @@ struct PaymentMailTests {
         #expect(PaymentMail.receiptTotal(subject: "Your order has been cancelled", body: "Order Total ₹362") == nil)
     }
 
+    /// Union Bank cuts Bangalore Metro Rail Corporation to "Bangalor": it's Namma Metro.
+    @Test func theMetroByAnyName() {
+        #expect(PaymentMail.canonicalPayee("Bangalor") == "Namma Metro")
+        #expect(PaymentMail.canonicalPayee("BMRCL") == "Namma Metro")
+        #expect(PaymentMail.canonicalPayee("Bangalore Electricity Supply") == "Bangalore Electricity Supply")
+    }
+
     @Test func banksAreKnownBySender() {
         #expect(PaymentMail.sender(of: "alerts@hdfcbank.net") == "HDFC Bank")
         #expect(PaymentMail.sender(of: "credit_cards@icicibank.com") == "ICICI Bank")

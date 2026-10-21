@@ -66,6 +66,23 @@ nonisolated enum PaymentMail {
         ("slice", ["sliceit.com"]),
     ]
 
+    // MARK: Who was paid
+
+    /// Namma Metro, however the bank prints it: Union Bank cuts "Bangalore Metro Rail Corporation"
+    /// to "Bangalor"; others say BMRCL. Its tickets are paid to it, and no other mail says so.
+    static let metroName = "Namma Metro"
+
+    static func isMetro(_ payee: String?) -> Bool {
+        guard let name = payee?.lowercased().trimmingCharacters(in: .whitespaces) else { return false }
+        return name == "bangalor" || name == metroName.lowercased()
+            || ["bangalore metro", "bengaluru metro", "bangalore metr", "bmrc", "namma metro"].contains(where: name.contains)
+    }
+
+    /// The payee as it's best known: "Bangalor" is Namma Metro.
+    static func canonicalPayee(_ payee: String?) -> String? {
+        isMetro(payee) ? metroName : payee
+    }
+
     /// Banks' own names for themselves on `.bank.in`, the domain only an Indian bank can hold —
     /// they've been moving their mail there since 2025: noreplyubi-txn@ubi.bank.in is Union Bank.
     static let bankInNames: [String: String] = [
@@ -128,7 +145,8 @@ nonisolated enum PaymentMail {
         let reference = reference(in: text)
         let lower = text.lowercased()
         guard isKnownSender || account != nil || reference != nil || lower.contains("upi") else { return nil }
-        return Payment(amount: amount, payee: payee(in: text), method: method(lower), reference: reference, account: account)
+        return Payment(amount: amount, payee: named(payee(in: text), in: lower), method: method(lower), reference: reference,
+                       account: account)
     }
 
     /// An alert laid out as fields — "Payee Name : …", "Amount : 50.00" — with the debit said in
@@ -151,8 +169,13 @@ nonisolated enum PaymentMail {
         guard isKnownSender || account != nil || reference != nil else { return nil }
         let named = body.firstMatch(of: #/(?i)\b(?:payee|beneficiary|merchant)\s*(?:name)?\s*[:\-–]\s*([A-Za-z][A-Za-z0-9 .&'\-]{0,50}?)(?=\s+\d{1,2}\.\s|\s{2,}|\n|$|\s+(?:payee|vpa|amount|account|a\/c|date|time|rrn|upi|ref|transaction|remarks?|beneficiary)\b)/#)
             .map { tidy(String($0.1)) }
-        return Payment(amount: amount, payee: named ?? payee(in: body), method: method(lower), reference: reference,
-                       account: account)
+        return Payment(amount: amount, payee: Self.named(named ?? payee(in: body), in: lower), method: method(lower),
+                       reference: reference, account: account)
+    }
+
+    /// The payee, as it's best known; a BMRCL handle anywhere in the alert makes it the metro.
+    private static func named(_ payee: String?, in lower: String) -> String? {
+        lower.contains("bmrc") ? metroName : canonicalPayee(payee)
     }
 
     /// Words that say an alert's money went out, in a subject or an opening line.
@@ -305,6 +328,10 @@ nonisolated enum Spending {
         var account: String?
         /// A shop's or a ride app's own receipt, rather than the bank's word for it.
         var isReceipt: Bool
+        /// The receipt a bank's alert was found to be the same payment as.
+        var receiptID: UUID? = nil
+        /// The stretch of travel it paid for: "Metro · Jayadeva Hospital → Konanakunte Cross".
+        var forTravel: String? = nil
     }
 
     /// A shop's receipt comes up to a couple of hours after the bank's alert: a food order's, once
@@ -351,6 +378,7 @@ nonisolated enum Spending {
             matched.insert(debit.id)
             var merged = debit
             merged.payee = receipt.payee ?? receipt.source
+            merged.receiptID = receipt.id
             result.append(merged)
         }
         result += debits.filter { !matched.contains($0.id) } + unmatchedReceipts
