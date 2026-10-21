@@ -68,13 +68,12 @@ struct JourneyTrackingTests {
 
     /// A good fix this far along the ride's line, `metres` off it to one side.
     private func fix(_ journey: Journey, along: Double, off metres: Double = 0, at: Date) -> RideFix {
-        let distances = RideLine.distances(journey.stops)
-        let point = RideLine.point(at: along, on: journey.stops, distances: distances)!
+        let point = RideLine.point(at: along, on: RideLine.geometry(of: journey))!
         return RideFix(coordinate: GeoMath.coordinate(point, metres: metres, bearing: 0), accuracy: 10, at: at)
     }
 
     private func along(_ journey: Journey, stop: Int) -> Double {
-        RideLine.distances(journey.stops)[stop]
+        RideLine.geometry(of: journey).stops[stop]
     }
 
     /// Follows a fix at each station in turn, a minute and a half apart.
@@ -223,6 +222,33 @@ struct JourneyTrackingTests {
                 > JourneyTracker.progress(of: late, in: journey, now: then).estimatedMinutesRemaining)
     }
 
+    /// The ride follows the rails: a little longer than straight lines between its stations,
+    /// with every station on it, in order.
+    @Test func aRideFollowsTheTrack() {
+        let journey = forumRide
+        let line = RideLine.geometry(of: journey)
+        #expect(line.followsTrack)
+        #expect(line.points.count > journey.stops.count)
+        let straight = zip(journey.stops, journey.stops.dropFirst())
+            .map { GeoMath.distance(from: $0.coordinate, to: $1.coordinate) }.reduce(0, +)
+        #expect(line.length > straight && line.length < straight * 1.3)
+        for stop in journey.stops {
+            #expect(RideLine.locate(stop.coordinate, on: line)!.offset < 150)
+        }
+        #expect(line.stops == line.stops.sorted())
+        #expect(line.stops.first == 0)
+    }
+
+    /// A bus has no track to follow: its line runs straight from stop to stop.
+    @Test func aBusRunsStraightBetweenStops() {
+        let stops = [JourneyStop(name: "A", latitude: 12.97, longitude: 77.59, minutesFromStart: 0),
+                     JourneyStop(name: "B", latitude: 12.98, longitude: 77.60, minutesFromStart: 4)]
+        let line = RideLine.geometry(of: Journey(kind: .bus, lineName: "500D", stops: stops, startedAt: afternoon))
+        #expect(!line.followsTrack)
+        #expect(line.points.count == 2)
+        #expect(abs(line.length - GeoMath.distance(from: stops[0].coordinate, to: stops[1].coordinate)) < 1)
+    }
+
     /// Drawn on the line, always: the point the map puts you at is on the ride.
     @Test func youAreDrawnOnTheLine() {
         let journey = forumRide
@@ -230,9 +256,8 @@ struct JourneyTrackingTests {
         let track = JourneyTracker.advance(RideTrack(), in: journey,
                                            fix: fix(journey, along: 700, off: 120, at: start), now: start)
         let progress = JourneyTracker.progress(of: track, in: journey, now: start)
-        let distances = RideLine.distances(journey.stops)
         let drawn = try! #require(progress.coordinate)
-        #expect(RideLine.locate(drawn, on: journey.stops, distances: distances)!.offset < 1)
+        #expect(RideLine.locate(drawn, on: RideLine.geometry(of: journey))!.offset < 1)
     }
 
     @Test func summaryAlwaysReadsAsAnEstimate() {

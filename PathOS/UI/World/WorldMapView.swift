@@ -83,11 +83,13 @@ struct WorldMapView: View {
             }
 
             // On the train, the ride itself is the line, with the stations along it.
+            // Along the rails, where the track is known.
             if let ride = state.rideBeingFollowed {
-                MapPolyline(coordinates: ride.map(\.coordinate))
+                let shape = state.rideShape ?? ride.map(\.coordinate)
+                MapPolyline(coordinates: shape)
                     .stroke(Color.void.opacity(0.8), style: StrokeStyle(lineWidth: 11, lineCap: .round, lineJoin: .round))
                     .mapOverlayLevel(level: .aboveRoads)
-                MapPolyline(coordinates: ride.map(\.coordinate))
+                MapPolyline(coordinates: shape)
                     .stroke(Color.ion, style: StrokeStyle(lineWidth: 6, lineCap: .round, lineJoin: .round))
                     .mapOverlayLevel(level: .aboveRoads)
                 // Every station named, always: MapKit's own titles dropped the one you were nearing

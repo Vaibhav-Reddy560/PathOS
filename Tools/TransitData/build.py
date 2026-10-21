@@ -2,6 +2,7 @@
 """Builds the transit data PathOS bundles, from open sources.
 
     python3 Tools/TransitData/build.py metro    # Namma Metro: stations, coordinates, service, fares
+    python3 Tools/TransitData/build.py track    # only each metro line's track, into metro.json as it is
     python3 Tools/TransitData/build.py bus      # BMTC: stops, routes, how often they run
     python3 Tools/TransitData/build.py city     # the launch screen's map of central Bengaluru
                                                 # (add --from saved.json to reuse an Overpass answer)
@@ -106,6 +107,7 @@ def build_metro() -> None:
             if gap > 3_500:
                 failures.append(f"{line['name']}: {a['name']} → {b['name']} is {gap:.0f} m apart")
         line["stations"] = stations
+        failures += add_track(line, line["osmRelation"])
         del line["osmRelation"]
 
     if failures:
@@ -113,7 +115,140 @@ def build_metro() -> None:
 
     service.pop("_comment", None)
     service["generated"] = date.today().isoformat()
+    credit_track(service)
     write("metro.json", service)
+
+
+def build_track() -> None:
+    """Adds each line's track to the metro.json already there, leaving its stations alone."""
+    metro = json.loads((OUT / "metro.json").read_text())
+    relations = {line["id"]: line["osmRelation"] for line in json.loads((HERE / "metro_service.json").read_text())["lines"]}
+    failures = []
+    for line in metro["lines"]:
+        failures += add_track(line, relations[line["id"]])
+    if failures:
+        sys.exit("Metro track didn't check out:\n  " + "\n  ".join(failures))
+    credit_track(metro)
+    write("metro.json", metro)
+
+
+def credit_track(metro: dict) -> None:
+    """Says where the track came from, among the data's other sources."""
+    metro["sources"] = [source for source in metro.get("sources", []) if source["what"] != "Track as laid"] + [{
+        "what": "Track as laid",
+        "url": "https://www.openstreetmap.org/relation/1798771",
+        "licence": "ODbL 1.0, © OpenStreetMap contributors",
+        "retrieved": date.today().isoformat(),
+    }]
+
+
+# The track is kept to within this of the rails as laid: well inside GPS's own error, and a
+# twentieth of the points.
+TRACK_TOLERANCE = 2.5
+# Every station has to sit this close to its line's track, or the track is the wrong one.
+STATION_TO_TRACK = 60.0
+
+
+def add_track(line: dict, relation_id: int) -> list:
+    """The line as laid, from its OpenStreetMap route: the route's ways joined end to end into one
+    line from the first station to the last. A way the route leaves out is found among the
+    rails around the gap. Returns what didn't check out."""
+    full = json.loads(fetch(f"https://api.openstreetmap.org/api/0.6/relation/{relation_id}/full.json"))["elements"]
+    relation = next(e for e in full if e["type"] == "relation" and e["id"] == relation_id)
+    ways = {e["id"]: e["nodes"] for e in full if e["type"] == "way"}
+    nodes = {e["id"]: (e["lat"], e["lon"]) for e in full if e["type"] == "node"}
+    members = [ways[m["ref"]] for m in relation["members"]
+               if m["type"] == "way" and m["role"] in ("", "route", "forward", "backward")]
+    if not members:
+        return [f"{line['name']}: its OpenStreetMap route has no track"]
+
+    chain = list(members[0])
+    if len(members) > 1 and chain[0] in (members[1][0], members[1][-1]):
+        chain.reverse()
+    for way in members[1:]:
+        if chain[-1] not in (way[0], way[-1]):
+            bridge = rails_between(chain[-1], {way[0], way[-1]}, nodes)
+            if bridge is None:
+                return [f"{line['name']}: a gap in the track near {nodes[chain[-1]]} that no rails close"]
+            chain += bridge[1:]
+        chain += (way if way[0] == chain[-1] else list(reversed(way)))[1:]
+    points = [nodes[n] for n in chain]
+
+    # Running from the first station, as the stations are listed.
+    first = (line["stations"][0]["lat"], line["stations"][0]["lon"])
+    if distance(first, points[-1]) < distance(first, points[0]):
+        points.reverse()
+
+    # In flat metres around the line's start for simplifying, then back.
+    lat0 = math.radians(points[0][0])
+    flat = [(lon * math.cos(lat0) * 111_320, lat * 111_320) for lat, lon in points]
+    kept = douglas_peucker(flat, TRACK_TOLERANCE)
+    track = [[round(y / 111_320, 6), round(x / (math.cos(lat0) * 111_320), 6)] for x, y in kept]
+
+    failures = []
+    along_before = -1.0
+    for station in line["stations"]:
+        offset, along = locate((station["lat"], station["lon"]), track)
+        if offset > STATION_TO_TRACK:
+            failures.append(f"{line['name']}: {station['name']} is {offset:.0f} m from the track")
+        if along <= along_before:
+            failures.append(f"{line['name']}: {station['name']} comes before the station listed ahead of it")
+        along_before = along
+    length = sum(distance(a, b) for a, b in zip(track, track[1:]))
+    print(f"  {line['name']}: {len(track)} points, {length / 1000:.1f} km of track")
+    line["track"] = track
+    return failures
+
+
+def rails_between(start: int, ends: set, nodes: dict):
+    """The rails from one node to any of a set of others, by way of the metro track around them:
+    for a route that leaves a way out. Nodes from the answer are added to `nodes`."""
+    lats = [nodes[start][0]] + [nodes[n][0] for n in ends if n in nodes]
+    lons = [nodes[start][1]] + [nodes[n][1] for n in ends if n in nodes]
+    bbox = f"{min(lats) - 0.01},{min(lons) - 0.01},{max(lats) + 0.01},{max(lons) + 0.01}"
+    answer = overpass(f'[out:json][timeout:60];way["railway"="subway"]({bbox});out body;>;out skel qt;')
+    neighbours = defaultdict(set)
+    for element in answer["elements"]:
+        if element["type"] == "node":
+            nodes[element["id"]] = (element["lat"], element["lon"])
+        elif element["type"] == "way":
+            for a, b in zip(element["nodes"], element["nodes"][1:]):
+                neighbours[a].add(b)
+                neighbours[b].add(a)
+    # Shortest by distance along the rails.
+    import heapq
+    best, came, queue = {start: 0.0}, {}, [(0.0, start)]
+    while queue:
+        cost, node = heapq.heappop(queue)
+        if node in ends:
+            path = [node]
+            while path[-1] != start:
+                path.append(came[path[-1]])
+            return path[::-1]
+        if cost > best.get(node, math.inf):
+            continue
+        for other in neighbours[node]:
+            step = cost + distance(nodes[node], nodes[other])
+            if step < best.get(other, math.inf):
+                best[other], came[other] = step, node
+                heapq.heappush(queue, (step, other))
+    return None
+
+
+def locate(point, track):
+    """Metres from a point to a track, and how far along the track it falls."""
+    best, along, total = (math.inf, 0.0), 0.0, 0.0
+    for a, b in zip(track, track[1:]):
+        scale = math.cos(math.radians(a[0])) * 111_320
+        bx, by = (b[1] - a[1]) * scale, (b[0] - a[0]) * 111_320
+        px, py = (point[1] - a[1]) * scale, (point[0] - a[0]) * 111_320
+        length = math.hypot(bx, by)
+        t = min(max((px * bx + py * by) / (length * length), 0), 1) if length > 0 else 0
+        offset = math.hypot(px - bx * t, py - by * t)
+        if offset < best[0]:
+            best = (offset, total + length * t)
+        total += length
+    return best
 
 
 # MARK: Bus
@@ -451,9 +586,11 @@ def write(name: str, payload, folder: Path = OUT) -> None:
 
 
 if __name__ == "__main__":
-    targets = [a for a in sys.argv[1:] if a in ("metro", "bus", "city")] or ["metro", "bus", "city"]
+    targets = [a for a in sys.argv[1:] if a in ("metro", "track", "bus", "city")] or ["metro", "bus", "city"]
     if "metro" in targets:
         build_metro()
+    elif "track" in targets:
+        build_track()
     if "bus" in targets:
         build_bus()
     if "city" in targets:

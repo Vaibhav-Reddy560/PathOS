@@ -28,10 +28,17 @@ nonisolated struct MetroLine: Identifiable, Hashable, Sendable, Decodable {
     var name: String
     var service: MetroServiceHours
     var stops: [MetroStation]
+    /// The line as laid, from the first station to the last, as [latitude, longitude] pairs.
+    var track: [[Double]]?
 
     private enum CodingKeys: String, CodingKey {
-        case id, name, service
+        case id, name, service, track
         case stops = "stations"
+    }
+
+    /// The track, for drawing and following a ride along it; empty where it isn't known.
+    var trackPoints: [CLLocationCoordinate2D] {
+        (track ?? []).compactMap { $0.count == 2 ? CLLocationCoordinate2D(latitude: $0[0], longitude: $0[1]) : nil }
     }
 
     var stations: [String] { stops.map(\.name) }

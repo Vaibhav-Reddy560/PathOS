@@ -33,6 +33,8 @@ nonisolated struct Journey: Identifiable, Codable, Sendable {
         var everyMinutes: Int?
         /// Minutes to walk to this train's platform, on a change.
         var changeWalk: Int = 0
+        /// The metro line it runs on, for following the ride along its track.
+        var lineID: String? = nil
     }
 
     var id = UUID()
@@ -78,7 +80,8 @@ nonisolated struct Journey: Identifiable, Codable, Sendable {
             }
             parts.append(Part(firstStop: first, lastStop: first + ride.stops, train: "\(ride.lineName) towards \(ride.towards)",
                               everyMinutes: every,
-                              changeWalk: index == 0 ? 0 : MetroNetwork.interchangeWalkMinutes(at: ride.boardAt)))
+                              changeWalk: index == 0 ? 0 : MetroNetwork.interchangeWalkMinutes(at: ride.boardAt),
+                              lineID: ride.lineID))
             first += ride.stops
         }
         return Journey(kind: .metro, lineName: route.lineSummary, stops: stops, startedAt: startedAt,
@@ -150,53 +153,128 @@ nonisolated struct RideFix: Sendable {
     var at: Date
 }
 
-/// The ride's line, as it's drawn: straight from each station to the next.
-nonisolated enum RideLine {
+/// The ride's line, as it's drawn and followed: along the track where it's known, straight from
+/// each station to the next where it isn't, as on a bus.
+nonisolated struct RideGeometry: Sendable {
+    var points: [CLLocationCoordinate2D]
+    /// Metres along the line to each point.
+    var along: [Double]
     /// Metres along the line to each stop.
-    static func distances(_ stops: [JourneyStop]) -> [Double] {
+    var stops: [Double]
+    /// Measured along the rails, rather than straight between stations.
+    var followsTrack: Bool
+
+    var length: Double { along.last ?? 0 }
+}
+
+nonisolated enum RideLine {
+    /// The journey's line: each train's stretch of its own line's track, end to end.
+    static func geometry(of journey: Journey) -> RideGeometry {
+        let stops = journey.stops
+        guard stops.count > 1 else {
+            return RideGeometry(points: stops.map(\.coordinate), along: stops.map { _ in 0 }, stops: stops.map { _ in 0 },
+                                followsTrack: false)
+        }
+        var points: [CLLocationCoordinate2D] = []
+        var followsTrack = journey.kind == .metro
+        for part in journey.rideParts {
+            let first = min(part.firstStop, stops.count - 1), last = min(part.lastStop, stops.count - 1)
+            var piece: [CLLocationCoordinate2D]?
+            if let id = part.lineID, let track = MetroNetwork.line(id: id)?.trackPoints, track.count > 1 {
+                piece = slice(track, from: stops[first].coordinate, to: stops[last].coordinate)
+            }
+            if piece == nil {
+                followsTrack = false
+                piece = stops[first...last].map(\.coordinate)
+            }
+            points += piece ?? []
+        }
+        let along = cumulative(points)
+        // Each stop where it falls on the line, never behind the one before.
+        var stopAlong: [Double] = []
+        var segment = 0
+        for stop in stops {
+            let spot = project(stop.coordinate, onto: points, along: along, from: segment)
+            segment = spot.segment
+            stopAlong.append(max(spot.along, stopAlong.last ?? 0))
+        }
+        return RideGeometry(points: points, along: along, stops: stopAlong, followsTrack: followsTrack)
+    }
+
+    /// Where a point falls on the line: metres along it, and how far off it.
+    static func locate(_ point: CLLocationCoordinate2D, on line: RideGeometry) -> (along: Double, offset: Double)? {
+        guard let first = line.points.first else { return nil }
+        guard line.points.count > 1 else { return (0, GeoMath.distance(from: point, to: first)) }
+        let spot = project(point, onto: line.points, along: line.along, from: 0)
+        return (spot.along, spot.offset)
+    }
+
+    /// The point a distance along the line, to draw you on it.
+    static func point(at along: Double, on line: RideGeometry) -> CLLocationCoordinate2D? {
+        point(at: along, on: line.points, along: line.along)
+    }
+
+    // MARK: Working it out
+
+    /// Metres from the first point to each.
+    static func cumulative(_ points: [CLLocationCoordinate2D]) -> [Double] {
         var total = 0.0
-        return stops.enumerated().map { index, stop in
-            if index > 0 { total += GeoMath.distance(from: stops[index - 1].coordinate, to: stop.coordinate) }
+        return points.enumerated().map { index, point in
+            if index > 0 { total += GeoMath.distance(from: points[index - 1], to: point) }
             return total
         }
     }
 
-    /// Where a point falls on the line: metres along it, and how far off it.
-    static func locate(_ point: CLLocationCoordinate2D, on stops: [JourneyStop],
-                       distances: [Double]) -> (along: Double, offset: Double)? {
-        guard stops.count > 1 else {
-            return stops.first.map { (0, GeoMath.distance(from: point, to: $0.coordinate)) }
+    /// The nearest place on a polyline to a point, from a segment on.
+    static func project(_ point: CLLocationCoordinate2D, onto points: [CLLocationCoordinate2D], along: [Double],
+                        from start: Int) -> (segment: Int, along: Double, offset: Double) {
+        guard points.count > 1 else {
+            return (0, 0, points.first.map { GeoMath.distance(from: point, to: $0) } ?? .infinity)
         }
-        var best: (along: Double, offset: Double)?
-        for index in 0..<(stops.count - 1) {
-            let a = stops[index].coordinate, b = stops[index + 1].coordinate
-            // Flat metres around the segment's start: plenty for a kilometre or two of track.
+        var best = (segment: start, along: along[min(start, along.count - 1)], offset: Double.infinity)
+        for index in min(start, points.count - 2)..<(points.count - 1) {
+            let a = points[index], b = points[index + 1]
+            // Flat metres around the segment's start: plenty for a stretch of track.
             let scale = cos(a.latitude * .pi / 180) * 111_320.0
             let bx = (b.longitude - a.longitude) * scale, by = (b.latitude - a.latitude) * 111_320.0
             let px = (point.longitude - a.longitude) * scale, py = (point.latitude - a.latitude) * 111_320.0
-            let length = max(1, (bx * bx + by * by).squareRoot())
-            let t = min(max((px * bx + py * by) / (length * length), 0), 1)
+            let squared = bx * bx + by * by
+            let t = squared > 0 ? min(max((px * bx + py * by) / squared, 0), 1) : 0
             let dx = px - bx * t, dy = py - by * t
             let offset = (dx * dx + dy * dy).squareRoot()
-            if best == nil || offset < best!.offset {
-                best = (distances[index] + (distances[index + 1] - distances[index]) * t, offset)
+            if offset < best.offset {
+                best = (index, along[index] + (along[index + 1] - along[index]) * t, offset)
             }
         }
         return best
     }
 
-    /// The point a distance along the line, to draw you on it.
-    static func point(at along: Double, on stops: [JourneyStop], distances: [Double]) -> CLLocationCoordinate2D? {
-        guard let first = stops.first else { return nil }
-        guard along > 0 else { return first.coordinate }
-        for index in 0..<max(0, stops.count - 1) where along <= distances[index + 1] {
-            let span = max(1, distances[index + 1] - distances[index])
-            let t = (along - distances[index]) / span
-            let a = stops[index].coordinate, b = stops[index + 1].coordinate
+    static func point(at distance: Double, on points: [CLLocationCoordinate2D], along: [Double]) -> CLLocationCoordinate2D? {
+        guard let first = points.first else { return nil }
+        guard distance > 0 else { return first }
+        for index in 0..<max(0, points.count - 1) where distance <= along[index + 1] {
+            let span = along[index + 1] - along[index]
+            let t = span > 0 ? (distance - along[index]) / span : 0
+            let a = points[index], b = points[index + 1]
             return CLLocationCoordinate2D(latitude: a.latitude + (b.latitude - a.latitude) * t,
                                           longitude: a.longitude + (b.longitude - a.longitude) * t)
         }
-        return stops.last?.coordinate
+        return points.last
+    }
+
+    /// The stretch of a line's track between two stations, in the direction you ride it.
+    static func slice(_ track: [CLLocationCoordinate2D], from a: CLLocationCoordinate2D,
+                      to b: CLLocationCoordinate2D) -> [CLLocationCoordinate2D]? {
+        let along = cumulative(track)
+        let start = project(a, onto: track, along: along, from: 0)
+        let end = project(b, onto: track, along: along, from: 0)
+        // A station that isn't on this track means the wrong line: straight lines are better.
+        guard start.offset <= 150, end.offset <= 150 else { return nil }
+        let low = min(start.along, end.along), high = max(start.along, end.along)
+        var piece = [point(at: low, on: track, along: along)].compactMap { $0 }
+        piece += track.indices.filter { along[$0] > low && along[$0] < high }.map { track[$0] }
+        if let last = point(at: high, on: track, along: along) { piece.append(last) }
+        return start.along <= end.along ? piece : piece.reversed()
     }
 }
 
@@ -213,9 +291,11 @@ nonisolated enum JourneyTracker {
     static let boardedAfter = 300.0
     /// Nothing on rails here goes faster than this; a fix further on than it allows is a jump.
     static let fastest = 25.0
-    /// Average speed along the line, stops included: BMRCL's end-to-end running times, over the
-    /// straight lines between stations the line is measured by.
-    static let cruise = MetroRouter.averageSpeedKmh / 3.6 / MetroRouter.trackFactor
+    /// Average speed along the track, stops included: BMRCL's end-to-end running times. Where the
+    /// line is straight from station to station it's shorter than the track, and so is the speed.
+    static func cruise(on line: RideGeometry) -> Double {
+        MetroRouter.averageSpeedKmh / 3.6 / (line.followsTrack ? 1 : MetroRouter.trackFactor)
+    }
     /// Minutes to wait for a train when how often they run isn't known.
     static let unknownWait = 8
 
@@ -225,11 +305,11 @@ nonisolated enum JourneyTracker {
     static func advance(_ track: RideTrack, in journey: Journey, fix: RideFix?, now: Date) -> RideTrack {
         var track = track
         if track.since == nil { track.since = now }
-        let stops = journey.stops
-        let distances = RideLine.distances(stops)
+        let line = RideLine.geometry(of: journey)
+        let distances = line.stops
         let parts = journey.rideParts
         guard let fix, fix.accuracy > 0, fix.accuracy <= goodFix,
-              let spot = RideLine.locate(fix.coordinate, on: stops, distances: distances),
+              let spot = RideLine.locate(fix.coordinate, on: line),
               spot.offset <= max(onLine, fix.accuracy * 2) else { return track }
 
         let reach = track.seenAt.map { track.along + max(500, fix.at.timeIntervalSince($0) * fastest) } ?? .infinity
@@ -274,21 +354,26 @@ nonisolated enum JourneyTracker {
     /// there's no fix — underground — but never past the next station. A guess doesn't get to
     /// say you've passed one.
     static func estimatedAlong(_ track: RideTrack, in journey: Journey, now: Date) -> Double {
-        let distances = RideLine.distances(journey.stops)
+        estimatedAlong(track, on: RideLine.geometry(of: journey), now: now)
+    }
+
+    static func estimatedAlong(_ track: RideTrack, on line: RideGeometry, now: Date) -> Double {
+        let distances = line.stops
         guard track.isOnBoard, !track.hasArrived, let seen = track.seenAt ?? track.since,
               now.timeIntervalSince(seen) > 30 else { return track.along }
         let next = distances.first { $0 > track.along + atStation } ?? distances.last ?? track.along
-        return min(track.along + now.timeIntervalSince(seen) * cruise, next)
+        return min(track.along + now.timeIntervalSince(seen) * cruise(on: line), next)
     }
 
     /// Where you are along the ride, worked out from where you are on the line — never from how
     /// long it's been since you set off, which ran ahead of the train while you waited for it.
     static func progress(of track: RideTrack, in journey: Journey, now: Date) -> JourneyProgress {
         let stops = journey.stops
-        let distances = RideLine.distances(stops)
+        let line = RideLine.geometry(of: journey)
+        let distances = line.stops
         let parts = journey.rideParts
         let last = max(0, stops.count - 1)
-        let position = track.hasArrived ? (distances.last ?? 0) : estimatedAlong(track, in: journey, now: now)
+        let position = track.hasArrived ? (distances.last ?? 0) : estimatedAlong(track, on: line, now: now)
         var current = stops.indices.last { distances[$0] <= position + atStation } ?? 0
         if !track.hasArrived { current = min(current, max(0, last - 1)) }
         let next: Int? = track.hasArrived ? nil : current + 1
@@ -297,7 +382,7 @@ nonisolated enum JourneyTracker {
 
         // What's left, from here: the track at the trains' pace, and a wait for each train still
         // to come — half the time between them, on average.
-        var minutes = max(0, (distances.last ?? 0) - position) / cruise / 60
+        var minutes = max(0, (distances.last ?? 0) - position) / cruise(on: line) / 60
         if !track.isOnBoard, !track.hasArrived {
             minutes += Double(part.everyMinutes ?? unknownWait) / 2
         }
@@ -305,7 +390,7 @@ nonisolated enum JourneyTracker {
             minutes += Double(later.changeWalk) + Double(later.everyMinutes ?? unknownWait) / 2
         }
         let isFresh = track.seenAt.map { now.timeIntervalSince($0) <= 60 } ?? false
-        let point = RideLine.point(at: position, on: stops, distances: distances)
+        let point = RideLine.point(at: position, on: line)
 
         return JourneyProgress(
             currentIndex: current,
