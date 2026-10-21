@@ -72,6 +72,9 @@ final class MailService {
         static func lastChecked(_ email: String) -> String { "pathos.mail.lastChecked." + email }
         /// Where the next search of that account starts. Only moves once everything before it has been read.
         static func cursor(_ email: String) -> String { "pathos.mail.cursor." + email }
+        /// The account's recent payment mail has been looked back through once, for what was spent
+        /// before PathOS read payments; the version says which reader looked.
+        static func paymentsLookedBack(_ email: String) -> String { "pathos.mail.paymentsLookedBack." + email }
 
         // From before there could be more than one account.
         static let legacyAccount = "pathos.mail.account"
@@ -312,6 +315,10 @@ final class MailService {
             if readAll {
                 defaults.set(startedAt, forKey: Keys.cursor(email))
             }
+            // A long read: with PathOS open, not in the seconds a background check is given.
+            if !notify {
+                await lookBackForPayments(email, session: session)
+            }
             defaults.set(startedAt, forKey: Keys.lastChecked(email))
             if let index = accounts.firstIndex(where: { $0.email == email }) {
                 accounts[index].lastCheckedAt = startedAt
@@ -428,6 +435,36 @@ final class MailService {
         let amount = "₹\(payment.amount.formatted(.number.precision(.fractionLength(0...2))))"
         return MailProposal(kind: .update, title: [amount, payment.payee.map { "to \($0)" }].compactMap { $0 }.joined(separator: " "),
                             summary: [source, payment.method.label].joined(separator: " · "), usedAI: false)
+    }
+
+    /// What reads payments has changed since it last looked back: Union Bank's alerts on
+    /// ubi.bank.in, for one, weren't recognised at first.
+    static let paymentReader = 2
+    /// How far back the look reaches, and how many mails it reads at most.
+    static let lookBackDays = 45
+    static let lookBackLimit = 150
+
+    /// Once for each account, and again whenever the reader learns new alerts: the last few weeks'
+    /// payment mail read for what was spent — mail already read before PathOS kept payments
+    /// included, which the check above never reads twice.
+    private func lookBackForPayments(_ email: String, session: GoogleSession) async {
+        let defaults = UserDefaults.standard
+        guard defaults.integer(forKey: Keys.paymentsLookedBack(email)) < Self.paymentReader else { return }
+        let since = Date().addingTimeInterval(-Double(Self.lookBackDays) * 86_400)
+        guard let ids = try? await session.messageIDs(matching: PaymentMail.searchQuery(since: since), max: Self.lookBackLimit)
+        else { return }
+        let recorded = Set(((try? context.fetch(FetchDescriptor<PaymentRecord>())) ?? []).map(\.messageID))
+        for id in ids where !recorded.contains(id) {
+            guard let raw = try? await session.message(id: id) else { return }
+            let message = MailParsing.message(from: raw)
+            // Ride apps' and shops' mail is read where it's first seen; this is for banks' and UPI apps'.
+            guard ServiceMail.service(of: message.senderAddress) == nil, !isMuted(message.senderAddress) else { continue }
+            let sender = PaymentMail.sender(of: message.senderAddress)
+            if let payment = PaymentMail.payment(subject: message.subject, body: message.body, isKnownSender: sender != nil) {
+                recordPayment(payment, source: sender ?? message.senderName, isReceipt: false, from: message)
+            }
+        }
+        defaults.set(Self.paymentReader, forKey: Keys.paymentsLookedBack(email))
     }
 
     private func recordPayment(_ payment: PaymentMail.Payment, source: String, isReceipt: Bool, from message: MailMessage) {

@@ -66,9 +66,29 @@ nonisolated enum PaymentMail {
         ("slice", ["sliceit.com"]),
     ]
 
+    /// Banks' own names for themselves on `.bank.in`, the domain only an Indian bank can hold —
+    /// they've been moving their mail there since 2025: noreplyubi-txn@ubi.bank.in is Union Bank.
+    static let bankInNames: [String: String] = [
+        "ubi": "Union Bank", "unionbankofindia": "Union Bank", "sbi": "SBI", "onlinesbi": "SBI", "hdfc": "HDFC Bank",
+        "hdfcbank": "HDFC Bank", "icici": "ICICI Bank", "icicibank": "ICICI Bank", "axis": "Axis Bank",
+        "axisbank": "Axis Bank", "kotak": "Kotak", "pnb": "PNB", "bob": "Bank of Baroda", "bankofbaroda": "Bank of Baroda",
+        "canara": "Canara Bank", "canarabank": "Canara Bank", "idfcfirst": "IDFC FIRST Bank", "idfcfirstbank": "IDFC FIRST Bank",
+        "yes": "Yes Bank", "yesbank": "Yes Bank", "indusind": "IndusInd Bank", "federal": "Federal Bank",
+        "federalbank": "Federal Bank", "au": "AU Bank", "aubank": "AU Bank", "rbl": "RBL Bank", "rblbank": "RBL Bank",
+        "iob": "Indian Overseas Bank", "indianbank": "Indian Bank", "boi": "Bank of India", "bankofindia": "Bank of India",
+        "centralbank": "Central Bank of India", "uco": "UCO Bank", "ucobank": "UCO Bank", "mahabank": "Bank of Maharashtra",
+        "idbi": "IDBI Bank", "idbibank": "IDBI Bank", "karnatakabank": "Karnataka Bank", "kvb": "Karur Vysya Bank",
+        "southindianbank": "South Indian Bank", "sib": "South Indian Bank", "dcb": "DCB Bank", "csb": "CSB Bank",
+    ]
+
     /// The bank or payments app a mail is from, by the address's domain or a subdomain of it.
     static func sender(of address: String) -> String? {
         guard let domain = address.lowercased().split(separator: "@").last.map(String.init) else { return nil }
+        if domain.hasSuffix(".bank.in") {
+            // The bank's own label, just before .bank.in: "alerts.ubi.bank.in" → "ubi".
+            let label = domain.dropLast(".bank.in".count).split(separator: ".").last.map(String.init) ?? ""
+            return bankInNames[label] ?? (label.isEmpty ? "Your bank" : label.uppercased() + " Bank")
+        }
         return senders.first { sender in
             sender.domains.contains { domain == $0 || domain.hasSuffix("." + $0) }
         }?.name
@@ -79,8 +99,10 @@ nonisolated enum PaymentMail {
     static func searchQuery(since: Date?, now: Date = Date()) -> String {
         let window = since.map { "after:\(Int(min($0.addingTimeInterval(-5 * 60), now).timeIntervalSince1970))" } ?? "newer_than:3d"
         // Google sends far more than Google Pay's receipts; its search is by what they say.
-        let banks = senders.flatMap(\.domains).filter { $0 != "google.com" }.map { "from:\($0)" }
-        return "\(window) {\(banks.joined(separator: " ")) \"debited\" \"you paid\" \"paid to\"} -in:spam -in:trash"
+        let banks = (senders.flatMap(\.domains).filter { $0 != "google.com" } + ["bank.in"]).map { "from:\($0)" }
+        let words = ["\"debited\"", "\"you paid\"", "\"paid to\"", "\"debit transaction\"", "\"transaction alert\"",
+                     "\"fund transfer\""]
+        return "\(window) {\((banks + words).joined(separator: " "))} -in:spam -in:trash"
     }
 
     // MARK: Reading one
@@ -92,8 +114,10 @@ nonisolated enum PaymentMail {
             .map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
         // The line that says money went, and the sentence on it that does: a whole alert can
         // arrive as one line, footer and all.
-        guard let index = lines.firstIndex(where: isDebit),
-              let sentence = sentences(lines[index]).first(where: isDebit) ?? lines[safe: index],
+        guard let index = lines.firstIndex(where: isDebit) else {
+            return fielded(subject: subject, body: body, isKnownSender: isKnownSender)
+        }
+        guard let sentence = sentences(lines[index]).first(where: isDebit) ?? lines[safe: index],
               let amount = amount(on: sentence) ?? amount(on: lines[index]) ?? lines[safe: index + 1].flatMap(amount(on:))
         else { return nil }
         // Said of this payment — in the subject or the sentence — not of anything in a footer.
@@ -106,6 +130,34 @@ nonisolated enum PaymentMail {
         guard isKnownSender || account != nil || reference != nil || lower.contains("upi") else { return nil }
         return Payment(amount: amount, payee: payee(in: text), method: method(lower), reference: reference, account: account)
     }
+
+    /// An alert laid out as fields — "Payee Name : …", "Amount : 50.00" — with the debit said in
+    /// its subject or its opening: "DEBIT TRANSACTION ALERT", "Your fund transfer request through
+    /// UPI has been processed successfully".
+    private static func fielded(subject: String, body: String, isKnownSender: Bool) -> Payment? {
+        let subjectLower = subject.lowercased()
+        let opening = sentences(body.split(whereSeparator: \.isNewline).joined(separator: " "))
+            .first { sentence in debitCues.contains { mentions($0, in: sentence.lowercased()) } }
+        let cue = debitCues.contains { mentions($0, in: subjectLower) } || opening != nil
+        // A credit alert says "credit" and never "debit".
+        guard cue, !(mentions("credit", in: subjectLower) && !mentions("debit", in: subjectLower)),
+              !notSpent.contains(where: { mentions($0, in: (subject + " " + (opening ?? "")).lowercased()) }),
+              let amount = body.firstMatch(of: #/(?i)\b(?:txn\.?\s*|transaction\s+|debit(?:ed)?\s+|paid\s+)?amount(?:\s*\((?:rs\.?|inr|₹)\))?(?:\s+debited)?\s*[:\-–]\s*(?:rs\.?|inr|₹)?\s*([0-9][0-9,]*(?:\.[0-9]{1,2})?)/#)
+                .flatMap({ Double($0.1.replacingOccurrences(of: ",", with: "")) }), amount > 0, amount < 10_00_000
+        else { return nil }
+        let account = account(in: body)
+        let reference = reference(in: body)
+        let lower = (subject + " " + body).lowercased()
+        guard isKnownSender || account != nil || reference != nil else { return nil }
+        let named = body.firstMatch(of: #/(?i)\b(?:payee|beneficiary|merchant)\s*(?:name)?\s*[:\-–]\s*([A-Za-z][A-Za-z0-9 .&'\-]{0,50}?)(?=\s+\d{1,2}\.\s|\s{2,}|\n|$|\s+(?:payee|vpa|amount|account|a\/c|date|time|rrn|upi|ref|transaction|remarks?|beneficiary)\b)/#)
+            .map { tidy(String($0.1)) }
+        return Payment(amount: amount, payee: named ?? payee(in: body), method: method(lower), reference: reference,
+                       account: account)
+    }
+
+    /// Words that say an alert's money went out, in a subject or an opening line.
+    static let debitCues = ["debit", "debited", "fund transfer", "payment successful", "paid successfully", "you paid",
+                            "money sent"]
 
     /// What a shop's own receipt says was paid: "Order Total", "Amount paid", "Grand Total". Only
     /// an amount that's labelled as the total counts — not an offer further down.
@@ -186,7 +238,7 @@ nonisolated enum PaymentMail {
 
     /// The UPI reference or the transaction's number.
     static func reference(in text: String) -> String? {
-        for match in text.matches(of: #/(?i)(?:upi\s*)?(?:ref(?:erence)?\.?\s*(?:no\.?|number|id)?|utr(?:\s*no\.?)?|transaction\s*(?:reference\s*)?(?:id|number|no\.?)|txn\s*(?:id|no\.?))\s*(?:is)?\s*[:#\-]?\s*([A-Z0-9]{8,22})\b/#)
+        for match in text.matches(of: #/(?i)(?:upi\s*)?(?:ref(?:erence)?\.?\s*(?:no\.?|number|id)?|rrn(?:\s*no\.?)?|utr(?:\s*no\.?)?|transaction\s*(?:reference\s*)?(?:id|number|no\.?)|txn\s*(?:id|no\.?))\s*(?:is)?\s*[:#\-]?\s*([A-Z0-9]{8,22})\b/#)
         where match.1.contains(where: \.isNumber) {
             return String(match.1)
         }

@@ -57,6 +57,31 @@ struct PaymentMailTests {
         #expect(sbi.amount == 500 && sbi.payee == "Ramesh Kumar")
     }
 
+    /// Union Bank's alerts: the debit said in the subject and the opening, the payment as fields.
+    @Test func aUnionBankAlert() throws {
+        #expect(PaymentMail.sender(of: "noreplyubi-txn@ubi.bank.in") == "Union Bank")
+        let payment = try #require(PaymentMail.payment(
+            subject: "DEBIT TRANSACTION ALERT",
+            body: "Dear M VAIBHAV,\n\nGreetings!\n\nYour fund transfer request through UPI has been processed successfully.\n\nTransaction Details\n1. Payee Name : HARISH K\n2. Payee VPA : harishk@okaxis\n3. Amount : Rs.50.00\n4. Transaction Date & Time : 21-10-2026 14:07:12\n5. UPI Ref No / RRN : 629412345678\n6. Remitter Account : XXXXXXXX1234",
+            isKnownSender: true))
+        #expect(payment.amount == 50 && payment.payee == "Harish K" && payment.reference == "629412345678")
+        #expect(payment.account == "1234" && payment.method == .upi)
+
+        // All on one line, as Gmail's preview shows it.
+        let flat = try #require(PaymentMail.payment(
+            subject: "DEBIT TRANSACTION ALERT",
+            body: "Transaction Details 1. Payee Name : HARI PRASAD STORES 2. Payee VPA : paytmqr123@paytm 3. Amount (INR) : 1,250.00 4. RRN : 629412345679",
+            isKnownSender: true))
+        #expect(flat.amount == 1_250 && flat.payee == "Hari Prasad Stores")
+
+        #expect(PaymentMail.payment(subject: "CREDIT TRANSACTION ALERT",
+                                    body: "Your account XXXX1234 has been credited. Transaction Details 1. Remitter Name : RAMESH 2. Amount : Rs.500.00",
+                                    isKnownSender: true) == nil)
+        #expect(PaymentMail.payment(subject: "DEBIT TRANSACTION ALERT",
+                                    body: "Your fund transfer request through UPI has failed. Transaction Details 1. Payee Name : X 2. Amount : Rs.50.00",
+                                    isKnownSender: true) == nil)
+    }
+
     @Test func aUPIAppsReceipt() throws {
         let payment = try #require(PaymentMail.payment(
             subject: "Payment successful",
