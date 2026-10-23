@@ -318,6 +318,7 @@ final class MailService {
             // A long read: with PathOS open, not in the seconds a background check is given.
             if !notify {
                 await lookBackForPayments(email, session: session)
+                putAwayPaymentAlerts()
             }
             defaults.set(startedAt, forKey: Keys.lastChecked(email))
             if let index = accounts.firstIndex(where: { $0.email == email }) {
@@ -475,7 +476,28 @@ final class MailService {
         context.insert(PaymentRecord(amount: payment.amount, at: message.receivedAt, payee: payment.payee, source: source,
                                      method: payment.method, reference: payment.reference, account: payment.account,
                                      isReceipt: isReceipt, messageID: id))
+        // Read once before payments were kept, a bank's alert was offered as a task — "Report
+        // unauthorized UPI transaction", from its footer. It's a payment: nothing waits on you.
+        let offered = (try? context.fetch(FetchDescriptor<MailSuggestion>(predicate: #Predicate { $0.messageID == id }))) ?? []
+        for suggestion in offered where suggestion.status == .pending {
+            suggestion.status = .dismissed
+        }
         try? context.save()
+    }
+
+    /// Alerts read before payments were kept, still offered as tasks, put away: each is a payment
+    /// now. Once; `recordPayment` keeps it so from then on.
+    private func putAwayPaymentAlerts() {
+        let key = "pathos.mail.paymentAlertsPutAway"
+        guard !UserDefaults.standard.bool(forKey: key) else { return }
+        let paid = Set(((try? context.fetch(FetchDescriptor<PaymentRecord>())) ?? []).map(\.messageID))
+        let pending = MailStatus.pending.rawValue
+        let offered = (try? context.fetch(FetchDescriptor<MailSuggestion>(predicate: #Predicate { $0.statusRaw == pending }))) ?? []
+        for suggestion in offered where paid.contains(suggestion.messageID) {
+            suggestion.status = .dismissed
+        }
+        try? context.save()
+        UserDefaults.standard.set(true, forKey: key)
     }
 
     private func record(_ ride: ServiceMail.Ride, from message: MailMessage) {

@@ -2314,7 +2314,7 @@ final class AppState {
         entries += rides.compactMap { ride in
             ride.fare.map {
                 Spending.Entry(id: ride.id, at: ride.at, amount: $0, payee: ride.service.name, source: ride.service.name,
-                               method: .other, reference: nil, account: nil, isReceipt: true)
+                               method: .other, reference: nil, account: nil, isReceipt: true, isRideReceipt: true)
             }
         }
         entries += scanned.filter { $0.amount > 0 && $0.currencyCode == "INR" }.map { expense in
@@ -2327,8 +2327,17 @@ final class AppState {
         // Ride apps' receipts are stretches of their own already (`applyRideReceipts`); metro
         // tickets and autos paid by UPI are found among the payments that aren't a receipt's.
         let maxTicket = Double(MetroNetwork.data.fares.slabs.map(\.fare).max() ?? 90)
-        let travel = TravelLog.linked(segments.map(\.stretch).sorted { $0.start < $1.start },
-                                      payments: spending.filter { !$0.isReceipt && $0.receiptID == nil },
+        // A receipt paid by hand — an Uber auto's driver, by UPI — cost what was paid, not the fare.
+        let paidByHand = Dictionary(spending.compactMap { entry in entry.receiptID.map { ($0, entry.amount) } },
+                                    uniquingKeysWith: { first, _ in first })
+        let stretches = segments.map(\.stretch).sorted { $0.start < $1.start }.map { stretch in
+            guard let receipt = stretch.receiptID, let amount = paidByHand[receipt] else { return stretch }
+            var paid = stretch
+            paid.fare = amount
+            paid.paid?.amount = amount
+            return paid
+        }
+        let travel = TravelLog.linked(stretches, payments: spending.filter { !$0.isReceipt && $0.receiptID == nil },
                                       maxTicket: maxTicket)
 
         let paidFor = Dictionary(travel.compactMap { stretch in stretch.paid.map { ($0.paymentID, stretch.title) } },

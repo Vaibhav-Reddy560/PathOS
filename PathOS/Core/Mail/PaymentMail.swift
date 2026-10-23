@@ -343,6 +343,9 @@ nonisolated enum Spending {
         var receiptID: UUID? = nil
         /// The stretch of travel it paid for: "Metro · Jayadeva Hospital → Konanakunte Cross".
         var forTravel: String? = nil
+        /// A ride app's receipt for a ride the driver is paid for by hand — an Uber auto — whose
+        /// fare you round up.
+        var isRideReceipt = false
     }
 
     /// A shop's receipt comes up to a couple of hours after the bank's alert: a food order's, once
@@ -378,7 +381,9 @@ nonisolated enum Spending {
         var unmatchedReceipts: [Entry] = []
         for receipt in receipts {
             let candidates = debits.filter { debit in
-                !matched.contains(debit.id) && sameAmount(debit, receipt)
+                guard !matched.contains(debit.id) else { return false }
+                if receipt.isRideReceipt, paidTheDriver(debit, for: receipt) { return true }
+                return sameAmount(debit, receipt)
                     && receipt.at.timeIntervalSince(debit.at) <= receiptAfterDebit
                     && debit.at.timeIntervalSince(receipt.at) <= receiptBeforeDebit
             }
@@ -405,6 +410,15 @@ nonisolated enum Spending {
         Dictionary(grouping: entries) { $0.payee ?? $0.source }
             .map { (payee: $0.key, amount: total($0.value), count: $0.value.count) }
             .sorted { $0.amount > $1.amount }
+    }
+
+    /// An auto booked on Uber is paid to its driver, by UPI, as you get out — rounded up, or with
+    /// a little more: ₹140 for a ₹134.54 fare. Within half an hour of the receipt, and between the
+    /// fare and a sixth more (ten rupees at least), it's that ride's payment.
+    static func paidTheDriver(_ debit: Entry, for receipt: Entry) -> Bool {
+        abs(debit.at.timeIntervalSince(receipt.at)) <= 30 * 60
+            && debit.amount >= receipt.amount - 1
+            && debit.amount <= max(receipt.amount * 1.15, receipt.amount + 10)
     }
 
     private static func sameAmount(_ a: Entry, _ b: Entry) -> Bool {

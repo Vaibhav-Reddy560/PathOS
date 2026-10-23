@@ -160,6 +160,17 @@ struct PaymentMailTests {
         #expect(Spending.total(day) == 494)
     }
 
+    /// An Uber auto's fare, paid to its driver rounded up: one payment of what was paid, named Uber.
+    @Test func anAutoPaidToItsDriverIsTheRide() {
+        var uber = entry(134.54, minutes: 3, source: "Uber", payee: "Uber", receipt: true)
+        uber.isRideReceipt = true
+        let day = Spending.combined([entry(140, minutes: 0, source: "Union Bank", payee: "Rajesh H", reference: "9"), uber])
+        #expect(day.count == 1 && day[0].amount == 140 && day[0].payee == "Uber" && day[0].receiptID == uber.id)
+        // Lunch at twice the fare isn't the auto.
+        let lunch = Spending.combined([entry(290, minutes: 10, source: "Union Bank", payee: "Udupi", reference: "8"), uber])
+        #expect(lunch.count == 2)
+    }
+
     /// Two metro tokens of the same price, each with its own reference, are two payments.
     @Test func twoPaymentsOfTheSameAmountAreTwo() {
         let day = Spending.combined([
