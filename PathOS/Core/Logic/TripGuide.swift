@@ -65,8 +65,27 @@ nonisolated enum TripGuide {
     nonisolated struct RoadEnd: Sendable {
         var leg: Int
         var point: CLLocationCoordinate2D
-        /// Stopped within a short walk of it for a while: parked just short, which is arriving.
+        /// Stopped within a short walk of it, or of the place itself, for a while: parked just
+        /// short, which is arriving.
         var hasStoppedNear = false
+        /// What's left of the road route from where you are.
+        var remaining: Double? = nil
+    }
+
+    /// Within this of a place, and you could be at its gate: what Search calls "You're here".
+    static let besideRadius = 150.0
+    /// The leg has to have been at least this long for being beside the place to count: a short
+    /// trip mustn't arrive as it sets off.
+    static let besideAfterLeg = 400.0
+
+    /// Beside the place, and the road route to its pin only gets there by going round: a campus or
+    /// a mall whose pin is inside it, reached by the route from its far side. That's arriving —
+    /// it used to lead you a kilometre round the block, rerouting at every turn you didn't take.
+    static func isBeside(_ location: CLLocationCoordinate2D, end: CLLocationCoordinate2D, remaining: Double?,
+                         legLength: Double) -> Bool {
+        guard legLength >= besideAfterLeg, let remaining else { return false }
+        let straight = GeoMath.distance(from: location, to: end)
+        return straight <= besideRadius && remaining >= max(3 * straight, straight + 300)
     }
 
     /// Which side of you the place is, once you're there.
@@ -130,6 +149,10 @@ nonisolated enum TripGuide {
                 done = index + 1
             } else if let roadEnd, roadEnd.leg == index,
                       roadEnd.hasStoppedNear || GeoMath.distance(from: location, to: roadEnd.point) <= roadEndRadius {
+                done = index + 1
+            } else if let roadEnd, roadEnd.leg == index, !boarding,
+                      isBeside(location, end: leg.endCoordinate, remaining: roadEnd.remaining,
+                               legLength: start.map { GeoMath.distance(from: $0, to: leg.endCoordinate) } ?? leg.distanceMeters) {
                 done = index + 1
             }
         }

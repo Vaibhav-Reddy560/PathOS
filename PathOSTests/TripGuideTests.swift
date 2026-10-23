@@ -240,4 +240,25 @@ struct TripGuideTests {
         #expect(arrival(.left).sentence == "BMS College of Engineering is on your left")
         #expect(arrival(.here).sentence == "You're at BMS College of Engineering")
     }
+
+    // MARK: At a campus's gate
+
+    /// Your auto to college: dropped at the Bull Temple Road gate, 130 m from the pin in the
+    /// middle of the campus, while the road route to that pin goes round by the back street. That's
+    /// arriving — not another kilometre round the block.
+    @Test func besideACampusIsArriving() {
+        let college = CLLocationCoordinate2D(latitude: 12.9410, longitude: 77.5655)
+        let gate = GeoMath.coordinate(college, metres: 130, bearing: 90)
+        let leg = DoorToDoor.Leg(mode: .auto, title: "By road to BMS College", detail: nil, minutes: 27, distanceMeters: 7_650,
+                                 endName: "BMS College", endLatitude: college.latitude, endLongitude: college.longitude)
+        let option = DoorToDoor.Option(headline: "Straight there by road", legs: [leg], minutes: 27, fareLow: 120, fareHigh: 150)
+        let roundTheBlock = TripGuide.RoadEnd(leg: 0, point: GeoMath.coordinate(college, metres: 90, bearing: 270), remaining: 1_100)
+        #expect(TripGuide.legsDone(option, at: gate, origin: home, roadEnd: roundTheBlock) == 1)
+
+        // The same gate with the road leading straight in isn't arrived until you're there.
+        let straightIn = TripGuide.RoadEnd(leg: 0, point: college, remaining: 140)
+        #expect(TripGuide.legsDone(option, at: gate, origin: home, roadEnd: straightIn) == 0)
+        // And a short trip doesn't arrive as it sets off, whatever the road does.
+        #expect(!TripGuide.isBeside(gate, end: college, remaining: 1_100, legLength: 200))
+    }
 }

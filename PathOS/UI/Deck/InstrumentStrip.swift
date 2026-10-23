@@ -18,6 +18,8 @@ struct InstrumentStrip: View {
             : AnyLayout(HStackLayout(alignment: .firstTextBaseline, spacing: 16))
         let readouts = self.readouts
 
+        let isClock = showsArrivalTime
+
         layout {
             HStack(spacing: 7) {
                 Image(systemName: "location.fill")
@@ -27,9 +29,12 @@ struct InstrumentStrip: View {
                     .font(.pathStrip)
                     .foregroundStyle(.ice)
                     .lineLimit(1)
+                    // A clock time is never cut to "8:…": the readouts after it give way instead.
+                    .fixedSize(horizontal: isClock, vertical: false)
             }
             // A short name like "Home" needs little; a long one gives way to the numbers first.
             .frame(minWidth: 56, alignment: .leading)
+            .layoutPriority(isClock ? 2 : 0)
 
             if !dynamicTypeSize.isAccessibilitySize {
                 Spacer(minLength: 8)
@@ -64,6 +69,11 @@ struct InstrumentStrip: View {
             return arrival
         }
         return state.context.venue.name ?? state.context.venue.kind.label
+    }
+
+    /// Following a way, the strip leads with when you'll be there.
+    private var showsArrivalTime: Bool {
+        state.transit.journey == nil && state.trip != nil && arrivalTime != nil
     }
 
     /// The clock time you'd arrive at, from what's left of the journey.

@@ -423,10 +423,40 @@ private nonisolated final class RouteRenderer: MKPolylineRenderer {
     /// side by side say nothing about which way either runs; these do.
     static let chevronSpacing: CGFloat = 90
 
+    /// Moves where the line starts, and redraws only the little of the map that changed: from
+    /// where it started to where it starts now, and the chevrons just ahead. Redrawing the whole
+    /// route every frame queued MapKit's tile drawing behind itself, and the start of the line
+    /// trailed your arrow by a second or more, longer when the phone was busy.
     func setHead(segment: Int, point: MKMapPoint, metres: Double) {
-        head.withLock { $0 = Head(segment: segment, x: point.x, y: point.y, metres: metres) }
-        setNeedsDisplay()
+        let previous = head.withLock { old -> Head? in
+            let was = old
+            old = Head(segment: segment, x: point.x, y: point.y, metres: metres)
+            return was
+        }
+        guard let previous, abs(previous.metres - metres) < Self.localRedraw else {
+            setNeedsDisplay()
+            return
+        }
+        // Every point of the line between the two heads, and room round it for the line's width
+        // and the next chevron.
+        let points = polyline.points()
+        let low = min(previous.segment, segment), high = min(max(previous.segment, segment) + 1, polyline.pointCount - 1)
+        var rect = MKMapRect(origin: MKMapPoint(x: previous.x, y: previous.y), size: MKMapSize(width: 0, height: 0))
+            .union(MKMapRect(origin: point, size: MKMapSize(width: 0, height: 0)))
+        if low <= high {
+            for index in low...high {
+                rect = rect.union(MKMapRect(origin: points[index], size: MKMapSize(width: 0, height: 0)))
+            }
+        }
+        let margin = MKMapPointsPerMeterAtLatitude(point.coordinate.latitude) * Self.redrawMargin
+        setNeedsDisplay(rect.insetBy(dx: -margin, dy: -margin))
     }
+
+    /// A head that moved further than this — a jump, a new route — redraws the whole line.
+    static let localRedraw = 400.0
+    /// Metres round the moved head that are redrawn: the line's width at any zoom the driving map
+    /// allows, and a chevron's spacing ahead of it.
+    static let redrawMargin = 120.0
 
     func setPaint(_ stretches: [Painted]) {
         painted.withLock { $0 = stretches }

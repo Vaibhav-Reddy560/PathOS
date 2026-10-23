@@ -209,10 +209,13 @@ struct WorldView: View {
         state.trip == nil && state.transit.journey != nil && state.deckStop == .collapsed
     }
 
-    /// On a leg you travel along a road for, with the map showing it — MapKit's map takes over.
+    /// On a leg you travel along a road for — MapKit's map takes over, whatever the deck is doing.
+    /// It used to stand down the moment the deck left its resting place, so pulling it up even
+    /// halfway swapped the driving view for the browsing map, your arrow for a dot.
     private var isDrivingALeg: Bool {
         // Arrived at the end of a road: the same map, saying so, until you're done with it.
-        isNavigating && (state.isNavigatingByRoad || (state.tripArrival != nil && state.tripNav != nil))
+        (state.isLeadingTheWay || state.tripArrival != nil)
+            && (state.isNavigatingByRoad || (state.tripArrival != nil && state.tripNav != nil))
     }
 
     /// Where the leg you're on ends: the destination, or the station a first leg takes you to.
