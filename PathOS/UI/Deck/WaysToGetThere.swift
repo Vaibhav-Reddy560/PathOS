@@ -70,14 +70,14 @@ struct WaysToGetThereView: View {
 
     // MARK: Pieces
 
-    /// What your own ride receipts say about these estimates, once there are enough of them.
+    /// How the fares here were priced, once your own ride receipts say enough to go on.
     private var fareLearning: String? {
         guard let learned = state.rideFares else { return nil }
         let percent = Int(((learned.factor - 1) * 100).rounded())
-        guard abs(percent) >= 5 else {
-            return "Your last \(learned.rides) rides cost about what PathOS estimates."
+        guard abs(percent) >= 3 else {
+            return "Your last \(learned.rides) rides cost about what these fares say."
         }
-        return "Your last \(learned.rides) rides cost about \(abs(percent))% \(percent > 0 ? "more" : "less") than PathOS estimates."
+        return "Road fares here are what your last \(learned.rides) rides cost: about \(abs(percent))% \(percent > 0 ? "more" : "less") than the usual rates."
     }
 
     private var loading: some View {

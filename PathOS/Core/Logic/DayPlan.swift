@@ -81,6 +81,18 @@ nonisolated enum DayDistance {
     static let longestStep = 50_000.0
     /// Faster than this between two fixes is a jump, not travel: 200 km/h.
     static let fastestTravel = 55.0
+    /// Bengaluru's roads run about a third longer than the straight line between two points —
+    /// BTM Layout to Basavanagudi is 5.6 km as the crow flies and 7.65 km by road.
+    static let roadsOverStraight = 1.3
+    /// A straight line between fixes further apart than this cuts corners a road doesn't.
+    static let straightUpTo = 300.0
+
+    /// The road distance a step between two fixes stands for: the step itself when the fixes are
+    /// close, the way they are on a ride PathOS follows; more when they're far apart, as when iOS
+    /// only woke it now and then, and the road between them can't have been straight.
+    static func alongRoads(_ straight: Double) -> Double {
+        straight <= straightUpTo ? straight : straight * roadsOverStraight
+    }
 
     static func step(fromDistance meters: Double) -> Double {
         (minimumStepMeters...maximumStepMeters).contains(meters) ? meters : 0
@@ -111,7 +123,7 @@ nonisolated enum DayDistance {
         if distance > longestStep { return .skip }
         if seconds > 0, distance / seconds > fastestTravel { return .skip }
         if seconds <= 0, distance > maximumStepMeters { return .skip }
-        return .count(distance)
+        return .count(alongRoads(distance))
     }
 
     /// "3.4 km" / "620 m", for the day summary.

@@ -14,8 +14,12 @@ final class TravelSegment {
     /// In rupees: PathOS's estimate until a receipt says otherwise.
     var fare: Double?
     var fareIsEstimate: Bool = true
-    /// "followed" for a way or ride PathOS led, "noticed" for one seen from movement alone.
+    /// "followed" for a way or ride PathOS led, "noticed" for one seen from movement alone,
+    /// "receipt" for a ride a ride app's receipt told of.
     var sourceRaw: String = "followed"
+    /// The receipt it is, and the app that sent it: its distance, times and fare are the receipt's.
+    var receiptID: UUID?
+    var provider: String?
 
     init(mode: WayTravelled, start: Date, end: Date, distanceMeters: Double, from: String? = nil, to: String? = nil,
          fare: Double? = nil, fareIsEstimate: Bool = true, source: String = "followed") {
@@ -34,6 +38,11 @@ final class TravelSegment {
 
     var stretch: TravelLog.Stretch {
         TravelLog.Stretch(id: id, mode: mode, start: start, end: end, distanceMeters: distanceMeters,
-                          from: fromName, to: toName, fare: fare, fareIsEstimate: fareIsEstimate)
+                          from: fromName, to: toName, fare: fare, fareIsEstimate: fareIsEstimate, provider: provider,
+                          paid: receiptID.flatMap { receipt in
+                              fare.map { TravelLog.Paid(amount: $0, to: provider ?? "Ride app", at: end, paymentID: receipt,
+                                                        evidence: .receipt) }
+                          },
+                          receiptID: receiptID)
     }
 }

@@ -86,4 +86,30 @@ struct ServiceMailTests {
         let rides: [(fare: Double, estimate: Double)] = [(100, 80), (150, 100), (300, 100), (100, 100)]
         #expect(ServiceMail.fareFactor(rides) == 1.375)
     }
+
+    /// Uber's receipt has no "Pickup:": a time and the address under it, at each end of the ride.
+    @Test func uberSaysWhereAndWhen() throws {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(identifier: "Asia/Kolkata")!
+        let received = calendar.date(from: DateComponents(year: 2026, month: 10, day: 22, hour: 12, minute: 5))!
+        let body = """
+        Total ₹132.00
+        This receipt reflects the suggested fare (excluding GST) and is not a tax invoice.
+        Trip details
+        Auto
+        7.65 kilometres, 27 minutes
+        License Plate: KA02AM2252
+        11:29 am
+        136, 3rd Cross Rd, Dollar Layout, Stage 2, BTM Layout, Bengaluru, Karnataka 560076, India
+        11:57 am
+        Bull Temple Rd, Basavanagudi, Bengaluru, Karnataka 560004, India
+        """
+        let ride = try #require(ServiceMail.ride(.uber, subject: "Your Thursday morning trip with Uber", body: body,
+                                                 received: received, calendar: calendar))
+        #expect(ride.fare == 132 && ride.distanceKm == 7.65 && ride.minutes == 27 && ride.vehicle == .auto)
+        #expect(ride.startedAt == calendar.date(bySettingHour: 11, minute: 29, second: 0, of: received))
+        #expect(ride.endedAt == calendar.date(bySettingHour: 11, minute: 57, second: 0, of: received))
+        #expect(ride.pickup.map(ServiceMail.area(of:)) == "BTM Layout")
+        #expect(ride.drop.map(ServiceMail.area(of:)) == "Basavanagudi")
+    }
 }

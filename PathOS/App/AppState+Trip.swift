@@ -102,8 +102,10 @@ extension AppState {
         stoppedNearEndSince = nil
         closestToEnd = nil
         tripLegsReached = 0
-        // What was being noticed ends here; the way is written leg by leg from now.
+        // What was being noticed ends here; the way is written leg by leg from now, and followed
+        // by its own updates.
         logNoticed(segmenter.finish())
+        location.setFollowingMovement(false)
         legStartedAt = startedAt
         legMeters = 0
         trip = ActiveTrip(option: option, destinationName: name, startedAt: startedAt, arriveBy: arriveBy,
@@ -345,7 +347,12 @@ extension AppState {
                 } else {
                     stoppedNearEndSince = nil
                 }
-            } else if let match, match.remaining <= Self.stoppedNearEnd, here.speed >= 0, here.speed < 1 {
+            } else if let match, here.speed >= 0,
+                      (here.speed < 1 && match.remaining <= Self.stoppedNearEnd)
+                        || (here.speed < Self.walkingPace && isNearPlace(at: status.legIndex, of: trip, here: here)) {
+                // Stopped near the end of the road — or, near the place itself, no longer driving:
+                // out of the auto at a campus's gate and walking in, while the road route to its
+                // pin still went round by the back.
                 stoppedNearEndSince = stoppedNearEndSince ?? now
             } else {
                 stoppedNearEndSince = nil
@@ -505,7 +512,17 @@ extension AppState {
         guard let nav = tripNav, let end = nav.coordinates.last,
               let index = trip.option.legs.firstIndex(where: { $0.id == navLegID }) else { return nil }
         let parked = stoppedNearEndSince.map { now.timeIntervalSince($0) >= Self.parkedAfter } ?? false
-        return TripGuide.RoadEnd(leg: index, point: end, hasStoppedNear: parked)
+        return TripGuide.RoadEnd(leg: index, point: end, hasStoppedNear: parked, remaining: tripMatch?.remaining)
+    }
+
+    /// Within Search's "You're here" of the end of a leg that ends at a place — not at a station
+    /// you're about to board at, whose entrance the leg is leading you to.
+    func isNearPlace(at legIndex: Int, of trip: ActiveTrip, here: CLLocation) -> Bool {
+        guard let leg = trip.option.legs[safe: legIndex] else { return false }
+        let next = trip.option.legs[safe: legIndex + 1]
+        guard next?.mode != .metro, next?.mode != .bus else { return false }
+        let end = CLLocation(latitude: leg.endLatitude, longitude: leg.endLongitude)
+        return here.distance(from: end) <= AppState.atPlaceRadius
     }
 
     /// Asks Apple Maps again, every minute or so, how long the rest of the leg takes in the
@@ -621,6 +638,8 @@ extension AppState {
 
     /// Stopped within this of the end of the road, for this long, and you've arrived.
     static let stoppedNearEnd = 150.0
+    /// Slower than this, you're on foot, not in the auto: about seven kilometres an hour.
+    static let walkingPace = 2.0
     /// On foot, this near the end and no nearer for a while, and you're there.
     static let walkNearEnd = 200.0
 

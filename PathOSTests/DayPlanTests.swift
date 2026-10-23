@@ -150,10 +150,12 @@ struct DayPlanTests {
         #expect(DayDistance.canMeasure(from: thisMorning.addingTimeInterval(-300), to: thisMorning, calendar: calendar))
     }
 
-    /// Eight kilometres across town with PathOS closed counts when it's next open; eight
-    /// kilometres in a minute doesn't.
+    /// Eight kilometres across town with PathOS closed counts when it's next open — by road, a
+    /// third longer than the straight line; eight kilometres in a minute doesn't.
     @Test func aRideInYourPocketCounts() {
-        #expect(DayDistance.step(distance: 8_000, seconds: 25 * 60, accuracy: 10) == .count(8_000))
+        #expect(DayDistance.step(distance: 8_000, seconds: 25 * 60, accuracy: 10) == .count(8_000 * DayDistance.roadsOverStraight))
+        // Close fixes are the road itself.
+        #expect(DayDistance.step(distance: 120, seconds: 10, accuracy: 10) == .count(120))
         #expect(DayDistance.step(distance: 8_000, seconds: 60, accuracy: 10) == .skip)
         #expect(DayDistance.step(distance: 300, seconds: 60, accuracy: 200) == .ignore)
     }

@@ -314,6 +314,8 @@ final class AppState {
     @ObservationIgnored var legMeters = 0.0
     /// The ride on its own already written to the day, so it's written once.
     @ObservationIgnored var loggedJourneyID: UUID?
+    /// Where the last background wake found you, to tell a ride from a stroll.
+    @ObservationIgnored var lastWake: CLLocation?
     /// When the walk to a spot was last fetched again.
     @ObservationIgnored var lastGuidanceFetch = Date.distantPast
     /// The furthest the map has seen you get along the way being followed, in legs: progress
@@ -415,6 +417,13 @@ final class AppState {
         mail.whereYouAre = { [weak self] in self?.location.location }
         // A ride that moves on is kept, so closing PathOS doesn't lose it.
         transit.onChange = { [weak self] in self?.saveTravel() }
+        // Stopped, as iOS sees it: the ride it was following is over.
+        location.onMovementPaused = { [weak self] in
+            guard let self else { return }
+            logNoticed(segmenter.finish())
+        }
+        // Ways there priced as your own ride receipts say rides cost.
+        journeys.learnedFares = { [weak self] in self?.rideFares }
         // Deleted, skipped, a day off: what's next and its reminders follow at once.
         eventStore.onPlansChanged = { [weak self] in self?.plansChanged() }
         timetable.onPlansChanged = { [weak self] in self?.plansChanged() }
@@ -504,6 +513,8 @@ final class AppState {
         await notifications.refreshStatus()
         // The public holidays that ship with PathOS, ready to be asked about.
         holidays.addBundled()
+        // Receipts read before they went in the day's travel.
+        applyRideReceipts()
         await vault.syncGeofences(userLocation: location.location)
         scheduleBackgroundRefresh()
         // A copy of everything, every couple of days, so the data outlives the app itself.
@@ -565,6 +576,7 @@ final class AppState {
             followCurrentLegIfAny()
             Task {
                 let found = await mail.checkIfDue(every: 10 * 60)
+                applyRideReceipts()
                 if found > 0 {
                     showToast(found == 1 ? "1 new thing from your mail" : "\(found) new things from your mail", role: .world, symbol: "envelope.fill")
                 }
@@ -579,6 +591,8 @@ final class AppState {
             barometer.stop()
             if !needsBackgroundLocation {
                 location.stopUpdates()
+                // Put away mid-ride: the ride is still followed closely in your pocket.
+                followNoticedMovementIfMoving()
             }
             scheduleBackgroundRefresh()
         default:
@@ -606,6 +620,10 @@ final class AppState {
                     }
                 }
                 await refreshPinnedContext()
+                // Mail while PathOS stays open, not only as it opens: a receipt or a bank's alert
+                // for the ride you've just taken.
+                _ = await mail.checkIfDue(every: 10 * 60)
+                applyRideReceipts()
                 try? await Task.sleep(for: .seconds(20))
             }
         }
@@ -633,6 +651,7 @@ final class AppState {
         notifyNewAlerts()
         // Few messages, so the check fits in the half-minute or so iOS allows.
         await mail.checkIfDue(every: 20 * 60, limit: 6, notify: true)
+        applyRideReceipts()
     }
 
     func scheduleBackgroundRefresh() {
@@ -1227,6 +1246,7 @@ final class AppState {
 
     func startJourney(_ journey: Journey) {
         logNoticed(segmenter.finish())
+        location.setFollowingMovement(false)
         legMeters = 0
         transit.start(journey, location: location.location)
         saveTravel()
@@ -1419,8 +1439,24 @@ final class AppState {
 
     // MARK: The day's travel
 
-    /// Stretches noticed from movement, written to the day.
+    /// A ride PathOS noticed, followed closely until it stops — if it can be, with Always access.
+    func followNoticedMovement() {
+        guard trip == nil, transit.journey == nil, location.hasAlwaysAccess else { return }
+        location.setFollowingMovement(true)
+    }
+
+    func followNoticedMovementIfMoving() {
+        if segmenter.isMovingByVehicle {
+            followNoticedMovement()
+        }
+    }
+
+    /// Stretches noticed from movement, written to the day. A ride that's ended stops being
+    /// followed closely.
     func logNoticed(_ pieces: [MotionSegmenter.Piece]) {
+        if !pieces.isEmpty, !segmenter.isMovingByVehicle {
+            location.setFollowingMovement(false)
+        }
         guard !pieces.isEmpty else { return }
         for piece in pieces {
             let from = CLLocationCoordinate2D(latitude: piece.fromLatitude, longitude: piece.fromLongitude)
@@ -1466,6 +1502,66 @@ final class AppState {
             log.distanceMeters += uncounted
         }
         try? context.save()
+    }
+
+    /// Ride receipts not yet in the day's travel, put there: each replaces the stretches that
+    /// were that ride — however PathOS saw it, in pieces or by the wrong road — with the ride as
+    /// the receipt has it, and whatever GPS missed of its length goes in the day's distance.
+    func applyRideReceipts(now: Date = Date()) {
+        let context = modelContainer.mainContext
+        let since = now.addingTimeInterval(-45 * 86_400)
+        let rides = (try? context.fetch(FetchDescriptor<RideRecord>(
+            predicate: #Predicate { !$0.isAppliedToTravel && $0.at >= since }, sortBy: [SortDescriptor(\.at)]))) ?? []
+        for ride in rides {
+            applyRideReceipt(ride)
+        }
+        if !rides.isEmpty {
+            try? context.save()
+        }
+    }
+
+    private func applyRideReceipt(_ ride: RideRecord) {
+        let context = modelContainer.mainContext
+        ride.isAppliedToTravel = true
+        let rideID = ride.id
+        // Put in already — before a restore from backup, say.
+        let already = (try? context.fetchCount(FetchDescriptor<TravelSegment>(predicate: #Predicate { $0.receiptID == rideID }))) ?? 0
+        guard already == 0 else { return }
+
+        let window = ride.window
+        let around = (window?.lowerBound ?? ride.at).addingTimeInterval(-3 * 3_600)
+        let after = (window?.upperBound ?? ride.at).addingTimeInterval(3_600)
+        let nearby = (try? context.fetch(FetchDescriptor<TravelSegment>(
+            predicate: #Predicate { $0.end >= around && $0.start <= after }))) ?? []
+        let receipt = TravelLog.Receipt(at: ride.at, fare: ride.fare, vehicle: ride.vehicle, provider: ride.service.name,
+                                        distanceMeters: ride.distanceKm.map { $0 * 1_000 }, minutes: ride.minutes,
+                                        pickup: ride.pickup, drop: ride.drop, id: ride.id)
+        let coveredIDs = Set(TravelLog.covered(by: receipt, window: window, in: nearby.map(\.stretch)))
+        let covered = nearby.filter { coveredIDs.contains($0.id) }.sorted { $0.start < $1.start }
+        let counted = covered.map(\.distanceMeters).reduce(0, +)
+        let distance = receipt.distanceMeters ?? counted
+        // A way you were following keeps its names — "Home", "BMS College" — over the receipt's
+        // street addresses; anything else is named by the area the receipt says.
+        let followed = covered.filter { $0.sourceRaw == "followed" }
+        let from = followed.first?.fromName ?? covered.first?.fromName ?? ride.pickup.map(ServiceMail.area(of:))
+        let to = followed.last?.toName ?? covered.last?.toName ?? ride.drop.map(ServiceMail.area(of:))
+        let start = window?.lowerBound ?? covered.first?.start ?? ride.at.addingTimeInterval(-Double(ride.minutes ?? 0) * 60)
+        let end = window?.upperBound ?? covered.last?.end ?? ride.at
+
+        for segment in covered {
+            context.delete(segment)
+        }
+        let segment = TravelSegment(mode: WayTravelled(receipt: ride.vehicle) ?? .road, start: start, end: max(start, end),
+                                    distanceMeters: distance, from: from, to: to, fare: ride.fare,
+                                    fareIsEstimate: ride.fare == nil, source: "receipt")
+        segment.receiptID = ride.id
+        segment.provider = ride.service.name
+        context.insert(segment)
+        // What GPS didn't count of it: straight lines between sparse fixes cut every corner, and
+        // a ride PathOS never saw counted nothing.
+        if distance > counted {
+            todaysLog(for: start).distanceMeters += distance - counted
+        }
     }
 
     /// A metro or bus ride followed on its own, written once: as far along the line as you got.
@@ -1989,11 +2085,22 @@ final class AppState {
     /// becomes a notification. Open, the foreground loop already does all this.
     private func movedInBackground(to here: CLLocation) async {
         guard !isForeground else { return }
-        // In your pocket, these are the fixes there are: travel is still noticed from them.
+        // In your pocket, these are the fixes there are: travel is still noticed from them — and
+        // a wake that finds you moving at a vehicle's pace has the ride followed closely from here.
         if trip == nil, transit.journey == nil {
             logNoticed(segmenter.feed(here.coordinate, at: here.timestamp, speed: here.speed >= 0 ? here.speed : nil,
                                       accuracy: here.horizontalAccuracy))
+            let isRiding = lastWake.map { previous in
+                let metres = here.distance(from: previous), seconds = here.timestamp.timeIntervalSince(previous.timestamp)
+                return seconds > 0 && metres >= 400 && metres / seconds >= 2.5
+            } ?? false
+            if isRiding || here.speed >= 3 {
+                followNoticedMovement()
+            } else {
+                followNoticedMovementIfMoving()
+            }
         }
+        lastWake = here
         await context.refresh(location: here)
         await refreshDeparture()
         recordAttendance()
@@ -2217,19 +2324,12 @@ final class AppState {
         }
         let spending = Spending.combined(entries)
 
-        // Ride apps' receipts first, by time and distance; then metro tickets and autos paid by
-        // UPI, from the payments that aren't a receipt's already.
-        let receipts = rides.map { ride in
-            TravelLog.Receipt(at: ride.at, fare: ride.fare, vehicle: ride.vehicle, provider: ride.service.name,
-                              distanceMeters: ride.distanceKm.map { $0 * 1_000 }, minutes: ride.minutes,
-                              pickup: ride.pickup?.components(separatedBy: ",").first,
-                              drop: ride.drop?.components(separatedBy: ",").first, id: ride.id)
-        }
+        // Ride apps' receipts are stretches of their own already (`applyRideReceipts`); metro
+        // tickets and autos paid by UPI are found among the payments that aren't a receipt's.
         let maxTicket = Double(MetroNetwork.data.fares.slabs.map(\.fare).max() ?? 90)
-        let travel = TravelLog.linked(TravelLog.priced(segments.map(\.stretch), receipts: receipts),
+        let travel = TravelLog.linked(segments.map(\.stretch).sorted { $0.start < $1.start },
                                       payments: spending.filter { !$0.isReceipt && $0.receiptID == nil },
                                       maxTicket: maxTicket)
-            .filter { $0.start >= interval.start && $0.start < interval.end }
 
         let paidFor = Dictionary(travel.compactMap { stretch in stretch.paid.map { ($0.paymentID, stretch.title) } },
                                  uniquingKeysWith: { first, _ in first })

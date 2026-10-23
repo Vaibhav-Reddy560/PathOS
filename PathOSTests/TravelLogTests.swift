@@ -56,47 +56,52 @@ struct TravelLogTests {
         #expect(!TravelLog.isAlongMetro(roadAway))
     }
 
-    /// The receipt that came as a ride ended puts its fare and vehicle on it.
-    @Test func aReceiptReplacesTheEstimate() {
-        let stretch = TravelLog.Stretch(id: UUID(), mode: .road, start: start, end: start.addingTimeInterval(1_200),
-                                        distanceMeters: 5_000, from: "Home", to: "Office", fare: 110, fareIsEstimate: true)
-        let receipt = TravelLog.Receipt(at: start.addingTimeInterval(1_320), fare: 132, vehicle: .auto, provider: "Uber")
-        let matched = TravelLog.matching(stretch, receipts: [receipt])
-        #expect(matched.fare == 132 && !matched.fareIsEstimate)
-        #expect(matched.mode == .auto)
-        // A receipt from hours later isn't this ride's.
+    /// Uber's receipt for the ride to college: 11:29 to 11:57. The pieces PathOS saw it in — by
+    /// road, a stop it took for a walk, by road again — are that ride; the walk to the pickup,
+    /// mostly before it, isn't.
+    @Test func aReceiptIsTheRideItCovers() {
+        func piece(_ mode: WayTravelled, from: Double, to: Double) -> TravelLog.Stretch {
+            .init(id: UUID(), mode: mode, start: start.addingTimeInterval(from * 60), end: start.addingTimeInterval(to * 60),
+                  distanceMeters: 1_000, fareIsEstimate: true)
+        }
+        let walkToPickup = piece(.walk, from: -8, to: 1)
+        let pieces = [walkToPickup, piece(.road, from: 2, to: 12), piece(.walk, from: 12, to: 14), piece(.road, from: 14, to: 27)]
+        let receipt = TravelLog.Receipt(at: start.addingTimeInterval(30 * 60), fare: 132, vehicle: .auto, provider: "Uber",
+                                        distanceMeters: 7_650, minutes: 27)
+        let covered = TravelLog.covered(by: receipt, window: start...start.addingTimeInterval(28 * 60), in: pieces)
+        #expect(covered == pieces.dropFirst().map(\.id))
+        #expect(!covered.contains(walkToPickup.id))
+    }
+
+    /// Without its times, a receipt is the road stretch that ended as it came, of about its length
+    /// — not one from hours before, and not one twice as long.
+    @Test func aReceiptWithoutTimesFindsItsRide() {
+        let ride = TravelLog.Stretch(id: UUID(), mode: .road, start: start, end: start.addingTimeInterval(1_200),
+                                     distanceMeters: 5_000, fareIsEstimate: true)
+        let receipt = TravelLog.Receipt(at: start.addingTimeInterval(1_320), fare: 132, vehicle: .auto, provider: "Uber",
+                                        distanceMeters: 5_400)
+        #expect(TravelLog.covered(by: receipt, window: nil, in: [ride]) == [ride.id])
         let late = TravelLog.Receipt(at: start.addingTimeInterval(4 * 3_600), fare: 80, vehicle: .cab, provider: "Ola")
-        #expect(TravelLog.matching(stretch, receipts: [late]) == stretch)
+        #expect(TravelLog.covered(by: late, window: nil, in: [ride]).isEmpty)
+        let longer = TravelLog.Receipt(at: start.addingTimeInterval(1_320), fare: 300, vehicle: .cab, provider: "Uber",
+                                       distanceMeters: 12_000)
+        #expect(TravelLog.covered(by: longer, window: nil, in: [ride]).isEmpty)
     }
 
-    /// A receipt prices one ride, not two; one PathOS never saw is a ride of its own.
-    @Test func eachReceiptCountsOnce() {
-        let first = TravelLog.Stretch(id: UUID(), mode: .road, start: start, end: start.addingTimeInterval(900),
-                                      distanceMeters: 4_000, fare: 90, fareIsEstimate: true)
-        let second = TravelLog.Stretch(id: UUID(), mode: .road, start: start.addingTimeInterval(1_200),
-                                       end: start.addingTimeInterval(1_800), distanceMeters: 2_000, fare: 60, fareIsEstimate: true)
-        let receipt = TravelLog.Receipt(at: start.addingTimeInterval(1_000), fare: 120, vehicle: .cab, provider: "Uber")
-        let evening = TravelLog.Receipt(at: start.addingTimeInterval(10 * 3_600), fare: 75, vehicle: .bikeTaxi,
-                                        provider: "Rapido", distanceMeters: 3_500, minutes: 14, pickup: "Office", drop: "Home")
-        let day = TravelLog.priced([second, first], receipts: [evening, receipt])
-        #expect(day.count == 3)
-        #expect(day[0].fare == 120 && day[0].mode == .cab && day[0].provider == "Uber")
-        #expect(day[1].fare == 60 && day[1].fareIsEstimate)
-        #expect(day[2].mode == .bikeTaxi && day[2].distanceMeters == 3_500 && day[2].minutes == 14 && day[2].to == "Home")
-    }
-
+    /// The day by mode, and what each cost — what was paid, never an estimate.
     @Test func theDayAddsUpByMode() {
-        func stretch(_ mode: WayTravelled, _ metres: Double, minutes: Double, fare: Double?) -> TravelLog.Stretch {
+        func stretch(_ mode: WayTravelled, _ metres: Double, minutes: Double, fare: Double?, paid: Bool = true) -> TravelLog.Stretch {
             .init(id: UUID(), mode: mode, start: start, end: start.addingTimeInterval(minutes * 60), distanceMeters: metres,
-                  fare: fare, fareIsEstimate: true)
+                  fare: fare, fareIsEstimate: !paid)
         }
         let day = [stretch(.walk, 700, minutes: 9, fare: nil), stretch(.metro, 6_000, minutes: 20, fare: 30),
-                   stretch(.walk, 400, minutes: 5, fare: nil)]
+                   stretch(.road, 3_000, minutes: 12, fare: 90, paid: false), stretch(.walk, 400, minutes: 5, fare: nil)]
         let totals = TravelLog.byMode(day)
-        #expect(totals.map(\.mode) == [.metro, .walk])
+        #expect(totals.map(\.mode) == [.metro, .road, .walk])
         #expect(totals.last?.distanceMeters == 1_100 && totals.last?.minutes == 14)
         #expect(totals.first?.fare == 30)
-        #expect(TravelLog.otherMovement(total: 8_000, stretches: day) == 900)
+        #expect(totals[1].fare == 0)
+        #expect(TravelLog.otherMovement(total: 11_000, stretches: day) == 900)
     }
 
     // MARK: What paid for each stretch

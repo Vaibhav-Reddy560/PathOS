@@ -383,7 +383,8 @@ final class MailService {
         let skip = MailProposal(kind: .ignore, title: message.subject, summary: "", usedAI: false)
         switch service.kind {
         case .ride:
-            guard let ride = ServiceMail.ride(service, subject: message.subject, body: message.body) else { return skip }
+            guard let ride = ServiceMail.ride(service, subject: message.subject, body: message.body, received: message.receivedAt)
+            else { return skip }
             record(ride, from: message)
             let numbers = [ride.fare.map { "₹\(Int($0.rounded()))" },
                            ride.distanceKm.map { String(format: "%.1f km", $0) },

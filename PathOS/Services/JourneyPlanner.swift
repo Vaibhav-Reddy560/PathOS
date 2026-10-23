@@ -25,6 +25,8 @@ final class JourneyPlanner {
     @ObservationIgnored private let transit: TransitService
     /// Apple Maps times, by the two points and the mode.
     @ObservationIgnored private var hops: [String: DoorToDoor.RoadHop] = [:]
+    /// What your rides really cost against the estimates, and over how many, from their receipts.
+    @ObservationIgnored var learnedFares: (() -> (factor: Double, rides: Int)?)?
 
     /// Worked out again once you've moved this far, or after this long.
     private let staleDistance = 400.0
@@ -54,7 +56,7 @@ final class JourneyPlanner {
         planning.insert(key)
         defer { planning.remove(key) }
 
-        let options = await DoorToDoor.options(
+        var options = await DoorToDoor.options(
             from: origin.coordinate,
             to: destination,
             destinationName: name,
@@ -64,6 +66,10 @@ final class JourneyPlanner {
                 await self?.hop(from: from, to: to, byRoad: byRoad)
             }
         )
+        // Priced as your own rides have cost, not as the city's tariff says they should.
+        if let learned = learnedFares?() {
+            options = DoorToDoor.learning(options, factor: learned.factor, rides: learned.rides)
+        }
         plans[key] = Plan(destinationName: name, destination: destination, options: options, from: origin.coordinate, at: now)
         return options
     }

@@ -2,8 +2,9 @@ import SwiftData
 import SwiftUI
 
 /// A month or a year of your days, below its calendar: what you went to and what you missed,
-/// days off and holidays, tasks done, and how you got about and what it cost. Anything PathOS got
-/// wrong is put right here — "I was there", or a holiday that was or wasn't a day off for you.
+/// days off and holidays, tasks done, how far you went and where the money went. A day's own
+/// travel, leg by leg, is the day's — not repeated here. Anything PathOS got wrong is put right
+/// here — "I was there", or a holiday that was or wasn't a day off for you.
 ///
 /// One year at a time, never every year together: that grows too long to read.
 struct PeriodOverview: View {
@@ -21,7 +22,6 @@ struct PeriodOverview: View {
     @Query(sort: \Holiday.dayStart) private var holidays: [Holiday]
     @State private var summary = Overview.Summary()
     @State private var months: [Overview.MonthTotal] = []
-    @State private var travel: [TravelLog.Stretch] = []
     @State private var spending: [Spending.Entry] = []
     @State private var isSpendingShown = false
     @State private var showsAllMissed = false
@@ -34,7 +34,6 @@ struct PeriodOverview: View {
                 monthsSection
             }
             spendingSection
-            travelSection
             missedSection
             daysOffSection
             holidaySection
@@ -156,42 +155,6 @@ struct PeriodOverview: View {
                     .font(.subheadline.weight(.semibold))
                     .foregroundStyle(.aurora)
                     .padding(.horizontal, 4)
-            }
-        }
-    }
-
-    /// How you got about: walking, by road, the metro — how far, how long, what it cost.
-    @ViewBuilder
-    private var travelSection: some View {
-        let totals = TravelLog.byMode(travel)
-        VStack(alignment: .leading, spacing: 10) {
-            DeckSectionHeader(title: "How you got about")
-            if totals.isEmpty {
-                Text("Nothing kept yet. Ways you follow in PathOS are kept leg by leg, and so is travel it notices while it's running, with what each cost.")
-                    .font(.subheadline)
-                    .foregroundStyle(.mist)
-                    .padding(.horizontal, 4)
-            } else {
-                GroupedRows(totals) { total in
-                    TravelModeRow(total: total, isEstimate: travel.contains { $0.mode == total.mode && $0.fareIsEstimate && $0.fare != nil })
-                }
-                let byProvider = Dictionary(grouping: travel.filter { $0.provider != nil }, by: { $0.provider ?? "" })
-                if !byProvider.isEmpty {
-                    Text(byProvider.keys.sorted().map { provider in
-                        let list = byProvider[provider] ?? []
-                        let spent = Int(list.compactMap(\.fare).reduce(0, +).rounded())
-                        return "\(provider) ₹\(spent.formatted()) · \(list.count) \(list.count == 1 ? "ride" : "rides")"
-                    }.joined(separator: "\n"))
-                    .font(.subheadline)
-                    .foregroundStyle(.mist)
-                    .padding(.horizontal, 4)
-                }
-                if let learned = state.rideFares {
-                    Text("Your last \(learned.rides) rides cost \(Int((learned.factor * 100).rounded()))% of PathOS's estimate for the same distance; ways to get somewhere say so beside their fares.")
-                        .font(.footnote)
-                        .foregroundStyle(.mist)
-                        .padding(.horizontal, 4)
-                }
             }
         }
     }
@@ -329,7 +292,6 @@ struct PeriodOverview: View {
         let days = state.overviewDays(in: interval)
         summary = Overview.summary(of: days, now: Date())
         months = isYear ? Overview.byMonth(days, now: Date()) : []
-        travel = state.travel(in: interval)
         spending = state.spending(in: interval)
     }
 }
@@ -458,11 +420,9 @@ private struct PaymentRow: View {
     }
 }
 
-/// One way of getting about, over a day, a month or a year.
+/// One way of getting about over a day: how far, how long, and what was paid for it.
 private struct TravelModeRow: View {
     let total: TravelLog.ModeTotal
-    /// Some of what it cost is PathOS's estimate, not a receipt's.
-    let isEstimate: Bool
 
     var body: some View {
         HStack(spacing: 14) {
@@ -477,7 +437,7 @@ private struct TravelModeRow: View {
             }
             Spacer(minLength: 8)
             if total.fare > 0 {
-                Text((isEstimate ? "about " : "") + "₹\(Int(total.fare.rounded()).formatted())")
+                Text("₹\(Int(total.fare.rounded()).formatted())")
                     .font(.subheadline.weight(.semibold).monospacedDigit())
                     .foregroundStyle(.ice)
             }
@@ -571,8 +531,7 @@ struct TravelLogSheet: View {
                         VStack(alignment: .leading, spacing: 10) {
                             DeckSectionHeader(title: "By how you went")
                             GroupedRows(TravelLog.byMode(stretches)) { total in
-                                TravelModeRow(total: total,
-                                              isEstimate: stretches.contains { $0.mode == total.mode && $0.fareIsEstimate && $0.fare != nil })
+                                TravelModeRow(total: total)
                             }
                         }
                         VStack(alignment: .leading, spacing: 10) {
@@ -590,7 +549,7 @@ struct TravelLogSheet: View {
                             .foregroundStyle(.mist)
                             .padding(.horizontal, 4)
                     }
-                    Text("A fare is PathOS's estimate until a payment is found for it: a ride app's receipt for that time and distance, a payment to Namma Metro that day for the ride's fare or at the station, or a UPI payment as an auto ride ended for about its fare. Travel is noticed only while PathOS is running, open or in the background.")
+                    Text("What a ride cost shows once it's paid: a ride app's receipt, which also sets its distance and times; a payment to Namma Metro that day for the ride's fare or at the station; or a UPI payment as an auto ride ended for about its fare. Travel is noticed only while PathOS is running, open or in the background.")
                         .font(.footnote)
                         .foregroundStyle(.mist)
                         .padding(.horizontal, 4)
@@ -623,11 +582,11 @@ struct TravelLogSheet: View {
                           unit: total > 0 && parts.count > 1 ? String(parts[1]) : nil, role: .you)
     }
 
+    /// What the day's travel was paid: receipts and the payments found for it, never estimates.
     private var spentText: String? {
-        let fares = stretches.compactMap(\.fare)
-        guard !fares.isEmpty else { return nil }
-        let estimated = stretches.contains { $0.fare != nil && $0.fareIsEstimate }
-        return (estimated ? "~" : "") + "₹\(Int(fares.reduce(0, +).rounded()).formatted())"
+        let paid = stretches.filter { !$0.fareIsEstimate }.compactMap(\.fare)
+        guard !paid.isEmpty else { return nil }
+        return "₹\(Int(paid.reduce(0, +).rounded()).formatted())"
     }
 
     /// "25 min", "1 h 40 min".
@@ -661,14 +620,15 @@ private struct StretchRow: View {
                 }
             }
             Spacer(minLength: 8)
-            if let fare = stretch.fare, fare > 0 {
+            // Only what was paid: an estimate isn't what it cost you.
+            if let fare = stretch.fare, fare > 0, !stretch.fareIsEstimate {
                 VStack(alignment: .trailing, spacing: 1) {
                     Text("₹\(Int(fare.rounded()).formatted())")
                         .font(.subheadline.weight(.semibold).monospacedDigit())
                         .foregroundStyle(.ice)
-                    Text(stretch.paid != nil ? "paid" : stretch.fareIsEstimate ? "estimate" : "fare")
+                    Text("paid")
                         .font(.caption)
-                        .foregroundStyle(stretch.paid != nil ? .aurora : .mist)
+                        .foregroundStyle(.aurora)
                 }
             }
         }

@@ -98,20 +98,64 @@ nonisolated enum ServiceMail {
         var pickup: String?
         var drop: String?
         var vehicle: DoorToDoor.Mode?
+        /// When it picked you up and dropped you, where the receipt prints the times.
+        var startedAt: Date? = nil
+        var endedAt: Date? = nil
     }
 
     /// What a ride receipt records. Nil when it isn't a receipt — a promotion, a rating request.
-    static func ride(_ service: Service, subject: String, body: String) -> Ride? {
+    /// `received` dates the receipt's clock times: a ride ends a little before its receipt comes.
+    static func ride(_ service: Service, subject: String, body: String, received: Date? = nil,
+                     calendar: Calendar = .current) -> Ride? {
         let text = subject + "\n" + body
         let lower = text.lowercased()
         let isReceipt = ["receipt", "trip with", "ride with", "your trip", "your ride", "invoice", "total fare",
                          "trip fare", "ride fare", "thanks for riding", "thanks for travelling"]
             .contains(where: lower.contains)
         guard isReceipt, let fare = total(in: text) else { return nil }
+        let stops = timedStops(in: body, received: received, calendar: calendar)
         return Ride(service: service, fare: fare, distanceKm: distanceKm(in: text), minutes: minutes(in: text),
-                    pickup: labelled(["pickup", "pick-up", "picked up from", "from"], in: body),
-                    drop: labelled(["drop", "dropoff", "drop-off", "dropped at", "to"], in: body),
-                    vehicle: vehicle(service, in: lower))
+                    pickup: stops.first?.address ?? labelled(["pickup", "pick-up", "picked up from", "from"], in: body),
+                    drop: (stops.count > 1 ? stops.last?.address : nil) ?? labelled(["drop", "dropoff", "drop-off", "dropped at", "to"], in: body),
+                    vehicle: vehicle(service, in: lower),
+                    startedAt: stops.first?.at, endedAt: stops.count > 1 ? stops.last?.at : nil)
+    }
+
+    /// Uber's receipt has no "Pickup:": a time, and the address under it, for each end —
+    /// "11:29 am / 136, 3rd Cross Rd, … BTM Layout, Bengaluru …", then "11:57 am / Bull Temple Rd,
+    /// Basavanagudi, …". Dated by the receipt: a time later than it came is the day before's.
+    static func timedStops(in body: String, received: Date?, calendar: Calendar = .current) -> [(at: Date?, address: String)] {
+        let lines = body.split(whereSeparator: \.isNewline).map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
+        var stops: [(at: Date?, address: String)] = []
+        for (index, line) in lines.enumerated() {
+            guard let time = line.wholeMatch(of: #/(?i)(\d{1,2}):(\d{2})\s*([ap])\.?\s*m\.?/#),
+                  let address = lines[safe: index + 1], address.count >= 8, address.contains(","),
+                  address.wholeMatch(of: #/(?i)\d{1,2}:\d{2}.*/#) == nil else { continue }
+            var at: Date?
+            if let received, var hour = Int(time.1), let minute = Int(time.2) {
+                if time.3.lowercased() == "p", hour < 12 { hour += 12 }
+                if time.3.lowercased() == "a", hour == 12 { hour = 0 }
+                at = calendar.date(bySettingHour: hour, minute: minute, second: 0, of: received)
+                if let dated = at, dated > received.addingTimeInterval(3_600) {
+                    at = calendar.date(byAdding: .day, value: -1, to: dated)
+                }
+            }
+            stops.append((at, String(address.prefix(160))))
+        }
+        return stops
+    }
+
+    /// An address as a place you'd say you went: the area it's in — "136, 3rd Cross Rd, Dollar
+    /// Layout, Stage 2, BTM Layout, Bengaluru, Karnataka 560076, India" is BTM Layout.
+    static func area(of address: String) -> String {
+        let parts = address.components(separatedBy: ",").map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { part in
+                let lower = part.lowercased()
+                return !part.isEmpty && lower != "india" && !lower.hasPrefix("karnataka")
+                    && !["bengaluru", "bangalore", "bengaluru urban", "bangalore urban"].contains(lower)
+                    && !part.allSatisfy { $0.isNumber || $0 == " " }
+            }
+        return parts.last ?? address
     }
 
     /// The amount a receipt says was paid: on the line that says "total", or failing that the

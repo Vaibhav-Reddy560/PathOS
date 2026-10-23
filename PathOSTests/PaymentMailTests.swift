@@ -126,6 +126,10 @@ struct PaymentMailTests {
         #expect(PaymentMail.canonicalPayee("Bangalor") == "Namma Metro")
         #expect(PaymentMail.canonicalPayee("BMRCL") == "Namma Metro")
         #expect(PaymentMail.canonicalPayee("Bangalore Electricity Supply") == "Bangalore Electricity Supply")
+        // Union Bank's eight letters: Zomato's two companies are Zomato.
+        #expect(PaymentMail.canonicalPayee("Zomato M") == "Zomato")
+        #expect(PaymentMail.canonicalPayee("Zomato O") == "Zomato")
+        #expect(PaymentMail.canonicalPayee("Falcon E") == "Falcon E")
     }
 
     @Test func banksAreKnownBySender() {

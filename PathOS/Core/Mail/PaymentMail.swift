@@ -78,9 +78,20 @@ nonisolated enum PaymentMail {
             || ["bangalore metro", "bengaluru metro", "bangalore metr", "bmrc", "namma metro"].contains(where: name.contains)
     }
 
-    /// The payee as it's best known: "Bangalor" is Namma Metro.
+    /// Names banks cut short — Union Bank keeps eight letters, so Zomato's two companies come out
+    /// "Zomato M" and "Zomato O" — that are the one name you'd know them by.
+    static let brands = ["zomato": "Zomato", "swiggy": "Swiggy", "uber": "Uber", "rapido": "Rapido", "amazon": "Amazon",
+                         "flipkart": "Flipkart", "zepto": "Zepto", "blinkit": "Blinkit", "bigbasket": "BigBasket",
+                         "myntra": "Myntra", "bookmyshow": "BookMyShow", "irctc": "IRCTC", "jiomart": "JioMart",
+                         "bescom": "BESCOM", "airtel": "Airtel", "jio": "Jio", "ola": "Ola", "nammayatri": "Namma Yatri",
+                         "dunzo": "Dunzo", "district": "District", "instamart": "Swiggy Instamart"]
+
+    /// The payee as it's best known: "Bangalor" is Namma Metro, "Zomato M" is Zomato.
     static func canonicalPayee(_ payee: String?) -> String? {
-        isMetro(payee) ? metroName : payee
+        if isMetro(payee) { return metroName }
+        guard let payee else { return nil }
+        let first = payee.lowercased().split(whereSeparator: { !$0.isLetter }).first.map(String.init) ?? ""
+        return brands[first] ?? payee
     }
 
     /// Banks' own names for themselves on `.bank.in`, the domain only an Indian bank can hold —

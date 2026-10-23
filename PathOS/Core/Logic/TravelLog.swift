@@ -119,6 +119,11 @@ nonisolated struct MotionSegmenter: Sendable {
 
     init() {}
 
+    /// Moving by road or rail now, or starting to: worth following closely.
+    var isMovingByVehicle: Bool {
+        ongoing?.moving == .vehicle || pending?.moving == .vehicle
+    }
+
     /// Takes a fix; returns any stretch it finished.
     mutating func feed(_ coordinate: CLLocationCoordinate2D, at time: Date, speed: Double?, accuracy: Double) -> [Piece] {
         guard accuracy > 0, accuracy <= 100 else { return [] }
@@ -128,10 +133,12 @@ nonisolated struct MotionSegmenter: Sendable {
             return []
         }
         last = point
-        let distance = GeoMath.distance(from: previous.coordinate, to: coordinate)
+        let straight = GeoMath.distance(from: previous.coordinate, to: coordinate)
         let seconds = time.timeIntervalSince(previous.at)
         // Over a long gap, how far you went in it says more than the speed at either end.
-        let pace = seconds > 20 || (speed ?? -1) < 0 ? distance / seconds : speed!
+        let pace = seconds > 20 || (speed ?? -1) < 0 ? straight / seconds : speed!
+        // Fixes far apart are joined by roads, not a straight line.
+        let distance = DayDistance.alongRoads(straight)
         var finished: [Piece] = []
 
         if pace < Self.stillBelow {
@@ -248,6 +255,8 @@ nonisolated enum TravelLog {
         var provider: String? = nil
         /// The payment found to be for it, and why it's believed.
         var paid: Paid? = nil
+        /// The ride app's receipt it is: its distance, times and fare are the receipt's.
+        var receiptID: UUID? = nil
 
         var minutes: Int { max(0, Int((end.timeIntervalSince(start) / 60).rounded())) }
 
@@ -280,7 +289,7 @@ nonisolated enum TravelLog {
         var evidence: Evidence
     }
 
-    /// A ride receipt from mail, as matched to a stretch.
+    /// A ride receipt from mail, as put to the day's travel.
     nonisolated struct Receipt: Equatable, Sendable {
         var at: Date
         var fare: Double?
@@ -293,54 +302,27 @@ nonisolated enum TravelLog {
         var id = UUID()
     }
 
-    /// A receipt arrives as the ride ends, give or take: one in that window belongs to the stretch,
-    /// and its fare and vehicle replace the estimate.
-    static func matching(_ stretch: Stretch, receipts: [Receipt]) -> Stretch {
-        receiptIndex(for: stretch, in: receipts).map { applying(receipts[$0], to: stretch) } ?? stretch
-    }
-
-    /// The day's stretches with its receipts, each receipt used once. One that matches nothing was
-    /// a ride PathOS didn't see, and stands as a stretch of its own.
-    static func priced(_ stretches: [Stretch], receipts: [Receipt]) -> [Stretch] {
-        var unused = receipts.sorted { $0.at < $1.at }
-        var priced = stretches.sorted { $0.start < $1.start }.map { stretch in
-            guard let index = receiptIndex(for: stretch, in: unused) else { return stretch }
-            return applying(unused.remove(at: index), to: stretch)
+    /// The stretches a ride app's receipt is the ride of, and replaces: the ones it ran through —
+    /// most of their time inside the ride's — or, where the receipt doesn't say when the ride ran,
+    /// the one road stretch that ended as it came, about as long as the ride. A walk to the pickup,
+    /// mostly before it, isn't the ride.
+    static func covered(by receipt: Receipt, window: ClosedRange<Date>?, in stretches: [Stretch]) -> [UUID] {
+        let candidates = stretches.filter { $0.mode != .metro && $0.mode != .bus && $0.receiptID == nil }
+        if let window {
+            return candidates.filter { stretch in
+                let overlap = min(stretch.end, window.upperBound).timeIntervalSince(max(stretch.start, window.lowerBound))
+                return overlap > 0 && overlap >= 0.6 * max(60, stretch.end.timeIntervalSince(stretch.start))
+            }.map(\.id)
         }
-        priced += unused.map { receipt in
-            Stretch(id: receipt.id, mode: WayTravelled(receipt: receipt.vehicle) ?? .road,
-                    start: receipt.at.addingTimeInterval(-Double(receipt.minutes ?? 0) * 60), end: receipt.at,
-                    distanceMeters: receipt.distanceMeters ?? 0, from: receipt.pickup, to: receipt.drop,
-                    fare: receipt.fare, fareIsEstimate: false, provider: receipt.provider,
-                    paid: receipt.fare.map { Paid(amount: $0, to: receipt.provider, at: receipt.at, paymentID: receipt.id, evidence: .receipt) })
-        }
-        return priced.sorted { $0.start < $1.start }
-    }
-
-    private static func receiptIndex(for stretch: Stretch, in receipts: [Receipt]) -> Int? {
-        guard stretch.mode.isRoad else { return nil }
-        let window = stretch.start.addingTimeInterval(-10 * 60)...stretch.end.addingTimeInterval(30 * 60)
-        return receipts.indices.filter { index in
-            // Where both say how far, the receipt's ride has to be about this one's length.
-            guard window.contains(receipts[index].at) else { return false }
-            guard let receipted = receipts[index].distanceMeters, receipted > 0, stretch.distanceMeters > 0 else { return true }
+        let came = receipt.at.addingTimeInterval(-30 * 60)...receipt.at.addingTimeInterval(10 * 60)
+        return candidates.filter { stretch in
+            guard stretch.mode.isRoad, came.contains(stretch.end) else { return false }
+            // Where both say how far, about the same ride.
+            guard let receipted = receipt.distanceMeters, receipted > 0, stretch.distanceMeters > 0 else { return true }
             return (0.6...1.6).contains(receipted / stretch.distanceMeters)
         }
-        .min { abs(receipts[$0].at.timeIntervalSince(stretch.end)) < abs(receipts[$1].at.timeIntervalSince(stretch.end)) }
-    }
-
-    private static func applying(_ receipt: Receipt, to stretch: Stretch) -> Stretch {
-        var matched = stretch
-        if let fare = receipt.fare {
-            matched.fare = fare
-            matched.fareIsEstimate = false
-        }
-        matched.mode = WayTravelled(receipt: receipt.vehicle) ?? stretch.mode
-        matched.provider = receipt.provider
-        if let fare = receipt.fare {
-            matched.paid = Paid(amount: fare, to: receipt.provider, at: receipt.at, paymentID: receipt.id, evidence: .receipt)
-        }
-        return matched
+        .min { abs($0.end.timeIntervalSince(receipt.at)) < abs($1.end.timeIntervalSince(receipt.at)) }
+        .map { [$0.id] } ?? []
     }
 
     // MARK: Payments to stretches
@@ -431,13 +413,14 @@ nonisolated enum TravelLog {
         var id: WayTravelled { mode }
     }
 
-    /// The day by mode: how far, how long, what it cost — furthest first.
+    /// The day by mode: how far, how long, what it cost — furthest first. Only what was paid
+    /// counts as cost: an estimate is no one's spending.
     static func byMode(_ stretches: [Stretch]) -> [ModeTotal] {
         Dictionary(grouping: stretches, by: \.mode).map { mode, list in
             ModeTotal(mode: mode,
                       distanceMeters: list.map(\.distanceMeters).reduce(0, +),
                       minutes: list.map(\.minutes).reduce(0, +),
-                      fare: list.compactMap(\.fare).reduce(0, +))
+                      fare: list.filter { !$0.fareIsEstimate }.compactMap(\.fare).reduce(0, +))
         }
         .sorted { $0.distanceMeters > $1.distanceMeters }
     }

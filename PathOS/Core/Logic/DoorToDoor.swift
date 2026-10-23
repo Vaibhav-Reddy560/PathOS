@@ -170,6 +170,36 @@ nonisolated enum DoorToDoor {
         }
     }
 
+    // MARK: What your rides cost
+
+    /// Road fares as your own rides have cost against PathOS's estimates — 22% more, say, from
+    /// the last ten receipts — so a way's price is what you'd actually pay. The metro's and the
+    /// bus's fares are set, and stay as they are.
+    static func learning(_ options: [Option], factor: Double, rides: Int) -> [Option] {
+        guard factor > 0, abs(factor - 1) >= 0.03 else { return options }
+        return options.map { option in
+            var learned = option
+            learned.legs = option.legs.map { leg in
+                var leg = leg
+                leg.fares = leg.fares.map { fare in
+                    guard [.auto, .bikeTaxi, .cab].contains(fare.mode) else { return fare }
+                    var fare = fare
+                    fare.estimate.low = Int((Double(fare.estimate.low) * factor).rounded())
+                    fare.estimate.high = Int((Double(fare.estimate.high) * factor).rounded())
+                    fare.note = "from your last \(rides) rides"
+                    return fare
+                }
+                return leg
+            }
+            // The way's total moves by what its legs' usual fares moved by.
+            let before = option.legs.compactMap(\.headlineFare?.estimate)
+            let after = learned.legs.compactMap(\.headlineFare?.estimate)
+            learned.fareLow += after.map(\.low).reduce(0, +) - before.map(\.low).reduce(0, +)
+            learned.fareHigh += after.map(\.high).reduce(0, +) - before.map(\.high).reduce(0, +)
+            return learned
+        }
+    }
+
     // MARK: The ways
 
     private static func roadOption(from origin: CLLocationCoordinate2D, to destination: CLLocationCoordinate2D,

@@ -28,6 +28,10 @@ final class LocationManager: NSObject {
     @ObservationIgnored var onSignificantChange: ((CLLocation) -> Void)?
     /// Called with every fix, from either source: what the day's distance is counted from.
     @ObservationIgnored var onFix: ((CLLocation) -> Void)?
+    /// Called when iOS sees you've stopped and pauses the close following of a ride.
+    @ObservationIgnored var onMovementPaused: (() -> Void)?
+    /// Following a ride PathOS noticed, closely, until it stops.
+    @ObservationIgnored private(set) var isFollowingMovement = false
 
     override init() {
         super.init()
@@ -118,6 +122,28 @@ final class LocationManager: NSObject {
         }
     }
 
+    /// Follows a ride PathOS has noticed — one you didn't start a way for — closely, until you
+    /// stop. In your pocket iOS otherwise only wakes it every few hundred metres to a couple of
+    /// kilometres, with fixes too vague to use, and a ride measured between the good ones cut
+    /// every corner: eight kilometres to college came out as five. iOS pauses it once you've
+    /// stopped (`onMovementPaused`); a later wake that finds you moving again starts it again.
+    /// Needs Always access to start in the background.
+    func setFollowingMovement(_ following: Bool) {
+        guard following != isFollowingMovement else { return }
+        isFollowingMovement = following
+        if following {
+            manager.desiredAccuracy = kCLLocationAccuracyNearestTenMeters
+            manager.distanceFilter = 25
+            manager.activityType = .otherNavigation
+            manager.pausesLocationUpdatesAutomatically = true
+            manager.allowsBackgroundLocationUpdates = true
+            manager.showsBackgroundLocationIndicator = false
+            manager.startUpdatingLocation()
+        } else {
+            manager.stopUpdatingLocation()
+        }
+    }
+
     /// Wakes PathOS, even after it has been closed, each time you've moved a few hundred metres.
     /// Cheap enough to leave on all day, unlike live updates; needs Always access to work in the
     /// background.
@@ -187,7 +213,15 @@ extension LocationManager: CLLocationManagerDelegate {
         }
     }
 
-    /// Only significant changes arrive here; live updates come through `CLLocationUpdate`.
+    nonisolated func locationManagerDidPauseLocationUpdates(_ manager: CLLocationManager) {
+        MainActor.assumeIsolated {
+            self.isFollowingMovement = false
+            self.onMovementPaused?()
+        }
+    }
+
+    /// Significant changes arrive here, and the close following of a noticed ride; live updates
+    /// come through `CLLocationUpdate`.
     nonisolated func locationManager(_ manager: CLLocationManager, didUpdateLocations locations: [CLLocation]) {
         guard let latest = locations.last else { return }
         MainActor.assumeIsolated {

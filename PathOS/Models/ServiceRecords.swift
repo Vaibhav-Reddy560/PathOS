@@ -16,6 +16,11 @@ final class RideRecord {
     var vehicleRaw: String?
     /// The receipt, so it's never counted twice.
     var messageID: String = ""
+    /// When it picked you up and dropped you, where the receipt says.
+    var startedAt: Date?
+    var endedAt: Date?
+    /// Already put in the day's travel: its distance, its times and where it went.
+    var isAppliedToTravel: Bool = false
 
     init(_ ride: ServiceMail.Ride, at: Date, messageID: String) {
         serviceRaw = ride.service.rawValue
@@ -27,6 +32,18 @@ final class RideRecord {
         drop = ride.drop
         vehicleRaw = ride.vehicle?.rawValue
         self.messageID = messageID
+        startedAt = ride.startedAt
+        endedAt = ride.endedAt
+    }
+
+    /// When the ride ran: the receipt's own times, or worked back from when it came and how long
+    /// it took. Nil when the receipt says neither.
+    var window: ClosedRange<Date>? {
+        if let startedAt, let endedAt, endedAt > startedAt { return startedAt...endedAt }
+        guard let minutes, minutes > 0 else { return nil }
+        // A receipt comes a minute or two after the drop.
+        let end = endedAt ?? at.addingTimeInterval(-2 * 60)
+        return end.addingTimeInterval(-Double(minutes) * 60)...end
     }
 
     var service: ServiceMail.Service { ServiceMail.Service(rawValue: serviceRaw) ?? .uber }

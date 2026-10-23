@@ -218,4 +218,20 @@ struct RoadFareTests {
         #expect(!fare.isRegulated)
         #expect(fare.text.contains("–"))
     }
+
+    /// Road fares as your rides have cost: 22% more than the estimate, and the way's total with
+    /// them. The metro's fare is set, and stays.
+    @Test func roadFaresAreWhatYourRidesCost() {
+        let road = DoorToDoor.Leg(mode: .auto, title: "Auto to the station", detail: nil, minutes: 10, distanceMeters: 2_000,
+                                  endName: "Station", endLatitude: 12.92, endLongitude: 77.60,
+                                  fares: [DoorToDoor.LegFare(mode: .auto, estimate: FareEstimate(low: 50, high: 60, isRegulated: true), note: "")])
+        let metro = DoorToDoor.Leg(mode: .metro, title: "Yellow Line", detail: nil, minutes: 20, distanceMeters: 8_000,
+                                   endName: "RV Road", endLatitude: 12.93, endLongitude: 77.58,
+                                   fares: [DoorToDoor.LegFare(mode: .metro, estimate: FareEstimate(low: 30, high: 30, isRegulated: true), note: "")])
+        let option = DoorToDoor.Option(headline: "Metro", legs: [road, metro], minutes: 30, fareLow: 80, fareHigh: 90)
+        let learned = DoorToDoor.learning([option], factor: 1.22, rides: 8)[0]
+        #expect(learned.legs[0].headlineFare?.estimate.low == 61 && learned.legs[0].headlineFare?.estimate.high == 73)
+        #expect(learned.legs[1].headlineFare?.estimate.low == 30)
+        #expect(learned.fareLow == 91 && learned.fareHigh == 103)
+    }
 }
