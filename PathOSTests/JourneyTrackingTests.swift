@@ -112,6 +112,20 @@ struct JourneyTrackingTests {
         let instruction = JourneyTracker.instruction(for: progress, in: journey)
         #expect(instruction.headline.hasPrefix("Board the Yellow Line towards"))
         #expect(instruction.detail.contains("Next: Ragigudda"))
+        // Jayadeva Hospital's trains towards RV Road leave from platform 1: said first.
+        #expect(instruction.detail.hasPrefix("Platform 1 · "))
+    }
+
+    /// Which platform, for every train of the ride, as the stations' layouts give it — and two
+    /// where a depot station has a spare.
+    @Test func eachTrainSaysItsPlatform() {
+        let journey = forumRide
+        #expect(journey.parts.map(\.platform) == ["1", "2"])
+        #expect(journey.stops[2].changeInstruction == "Change to the Green Line towards Silk Institute, platform 2")
+        let majestic = MetroNetwork.line(id: "green")?.stops.first { $0.name.contains("Majestic") }
+        #expect(majestic?.platform(towards: "Silk Institute") == "4" && majestic?.platform(towards: "Madavara") == "3")
+        let depot = MetroNetwork.line(id: "purple")?.stops.first { $0.name == "Baiyappanahalli" }
+        #expect(depot?.platform(towards: "Challaghatta") == "2 or 3")
     }
 
     /// The fault on the morning ride: twenty minutes on the platform used to count as twenty
@@ -222,7 +236,7 @@ struct JourneyTrackingTests {
         }
         let coming = JourneyTracker.progress(of: before, in: journey, now: now)
         #expect(coming.isChangingNext)
-        #expect(JourneyTracker.instruction(for: coming, in: journey).detail.hasSuffix("To the Green Line towards Silk Institute"))
+        #expect(JourneyTracker.instruction(for: coming, in: journey).detail.hasSuffix("To the Green Line towards Silk Institute, platform 2"))
     }
 
     /// Arriving is GPS putting you at the last station, nothing less.

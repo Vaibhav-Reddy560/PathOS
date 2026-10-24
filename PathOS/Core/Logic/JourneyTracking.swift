@@ -35,6 +35,8 @@ nonisolated struct Journey: Identifiable, Codable, Sendable {
         var changeWalk: Int = 0
         /// The metro line it runs on, for following the ride along its track.
         var lineID: String? = nil
+        /// Where it leaves from: "2", "2 or 3".
+        var platform: String? = nil
     }
 
     var id = UUID()
@@ -62,7 +64,7 @@ nonisolated struct Journey: Identifiable, Codable, Sendable {
 
     static func metro(_ route: MetroRoute, startedAt: Date = Date(), calendar: Calendar = .current) -> Journey {
         let changes = Dictionary(uniqueKeysWithValues: route.rides.dropFirst().map {
-            ($0.boardAt, "Change to the \($0.lineName) towards \($0.towards)")
+            ($0.boardAt, "Change to the \($0.lineName) towards \($0.towards)" + ($0.platform.map { ", platform \($0)" } ?? ""))
         })
         let stops = zip(route.path, route.arrivalMinutes).map { station, minutes in
             JourneyStop(name: station.name, latitude: station.lat, longitude: station.lon,
@@ -81,7 +83,7 @@ nonisolated struct Journey: Identifiable, Codable, Sendable {
             parts.append(Part(firstStop: first, lastStop: first + ride.stops, train: "\(ride.lineName) towards \(ride.towards)",
                               everyMinutes: every,
                               changeWalk: index == 0 ? 0 : MetroNetwork.interchangeWalkMinutes(at: ride.boardAt),
-                              lineID: ride.lineID))
+                              lineID: ride.lineID, platform: ride.platform))
             first += ride.stops
         }
         return Journey(kind: .metro, lineName: route.lineSummary, stops: stops, startedAt: startedAt,
@@ -116,6 +118,8 @@ nonisolated struct JourneyProgress: Equatable, Sendable {
     var train: String? = nil
     /// Minutes between its trains, when known.
     var everyMinutes: Int? = nil
+    /// The platform it leaves from, when known: "2", "2 or 3".
+    var platform: String? = nil
     /// You, on the line, where the map draws you.
     var latitude: Double? = nil
     var longitude: Double? = nil
@@ -453,6 +457,7 @@ nonisolated enum JourneyTracker {
             isChanging: track.part > 0 && !track.isOnBoard,
             train: part.train,
             everyMinutes: part.everyMinutes,
+            platform: part.platform,
             latitude: point?.latitude,
             longitude: point?.longitude
         )
@@ -488,9 +493,11 @@ nonisolated enum JourneyTracker {
         if progress.isWaiting {
             let train = progress.train ?? journey.lineName
             let every = progress.everyMinutes.map { "Trains about every \($0) min" }
+            // The platform first: it's what you're looking for on the concourse.
+            let platform = progress.platform.map { "Platform \($0)" }
             return Instruction(
                 headline: progress.isChanging ? "Change here: \(train)" : "Board the \(train)",
-                detail: [every, "Next: \(next)", "\(stops) to \(journey.destination)", minutes].compactMap { $0 }
+                detail: [platform, every, "Next: \(next)", "\(stops) to \(journey.destination)", minutes].compactMap { $0 }
                     .joined(separator: " · "),
                 symbol: progress.isChanging ? "arrow.triangle.swap" : journey.symbol,
                 isAction: progress.isChanging

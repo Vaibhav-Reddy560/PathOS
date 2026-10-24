@@ -453,7 +453,7 @@ nonisolated enum DoorToDoor {
     private static func rideDetail(_ route: MetroRoute) -> String {
         var parts = ["\(route.stationsTravelled) stops"]
         if let first = route.rides.first {
-            parts.append("towards \(first.towards)")
+            parts.append("towards \(first.towards)" + (first.platform.map { ", platform \($0)" } ?? ""))
         }
         if !route.changes.isEmpty {
             parts.append("change at \(route.changes.joined(separator: ", "))")

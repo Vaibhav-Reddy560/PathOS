@@ -3,6 +3,7 @@
 
     python3 Tools/TransitData/build.py metro    # Namma Metro: stations, coordinates, service, fares
     python3 Tools/TransitData/build.py track    # only each metro line's track, into metro.json as it is
+    python3 Tools/TransitData/build.py platforms  # only which platform goes which way, into metro.json
     python3 Tools/TransitData/build.py bus      # BMTC: stops, routes, how often they run
     python3 Tools/TransitData/build.py city     # the launch screen's map of central Bengaluru
                                                 # (add --from saved.json to reuse an Overpass answer)
@@ -117,6 +118,164 @@ def build_metro() -> None:
     service["generated"] = date.today().isoformat()
     credit_track(service)
     write("metro.json", service)
+
+
+# MARK: Platforms
+
+WIKIPEDIA_API = "https://en.wikipedia.org/w/api.php"
+
+
+def build_platforms() -> None:
+    """Which platform at each station goes which way, into the metro.json already there: from
+    each station's Wikipedia article, whose layout table names every platform with the station it
+    runs to next, checked against the platforms OpenStreetMap has mapped. Where the two disagree,
+    the platform is left out — a wrong platform is worse than none."""
+    metro = json.loads((OUT / "metro.json").read_text())
+    articles = station_articles()
+    titles = sorted({article for line in metro["lines"] for s in line["stations"]
+                     if (article := best_article(s["name"], articles))})
+    texts = wikitext(titles)
+    mapped = osm_platforms(metro)
+    failures, kept, dropped = [], 0, []
+    for line in metro["lines"]:
+        names = [s["name"] for s in line["stations"]]
+        for i, station in enumerate(line["stations"]):
+            station.pop("platforms", None)
+            article = best_article(station["name"], articles)
+            ways = {}
+            for number, towards, following in layout_platforms(texts.get(article, "")):
+                way = direction(names, i, following, towards)
+                if way and number not in ways.setdefault(way, []):
+                    ways[way].append(number)
+            # Checked against OpenStreetMap where it has the platform mapped.
+            for way, numbers in list(ways.items()):
+                theirs = mapped.get((line["id"], station["name"], way))
+                if theirs and not set(theirs) & set(numbers):
+                    dropped.append(f"{line['name']} · {station['name']} towards {way}: Wikipedia {numbers}, OpenStreetMap {theirs}")
+                    del ways[way]
+            if ways:
+                station["platforms"] = {way: sorted(numbers, key=int) for way, numbers in ways.items()}
+                kept += 1
+            elif i not in (0, len(names) - 1):
+                failures.append(f"{line['name']} · {station['name']}: no platforms read")
+    for note in dropped:
+        print(f"  left out, the sources disagree: {note}")
+    for note in failures:
+        print(f"  no platforms: {note}")
+    print(f"  platforms for {kept} station stops")
+    metro["sources"] = [source for source in metro.get("sources", []) if source["what"] != "Platforms by direction"] + [{
+        "what": "Platforms by direction",
+        "url": "https://en.wikipedia.org/wiki/List_of_Namma_Metro_stations",
+        "licence": "CC BY-SA 4.0 (each station's article), checked against OpenStreetMap (ODbL 1.0)",
+        "retrieved": date.today().isoformat(),
+    }]
+    write("metro.json", metro)
+
+
+def station_articles() -> list:
+    """The station articles linked from Wikipedia's list of Namma Metro stations."""
+    answer = json.loads(fetch(f"{WIKIPEDIA_API}?action=parse&page=List_of_Namma_Metro_stations&prop=links&format=json&formatversion=2"))
+    return [link["title"] for link in answer["parse"]["links"] if link.get("exists") and "station" in link["title"].lower()]
+
+
+def best_article(name: str, articles: list):
+    """The article for a station: by its name, or the part after a comma — "Sri Balagangadharanatha
+    Swamiji Station, Hosahalli" is Hosahalli's."""
+    keys = [name] + ([name.split(",")[-1]] if "," in name else [])
+    best = max(articles, key=lambda title: max(likeness(key, title) for key in keys))
+    return best if max(likeness(key, best) for key in keys) >= 0.85 else None
+
+
+def likeness(a: str, b: str) -> float:
+    def plain(text):
+        text = re.sub(r"\(.*?\)", "", text.lower())
+        for long, short in (("metro station", ""), ("station", ""), ("mysore", "mysuru"), ("bengaluru", ""), ("bangalore", "")):
+            text = text.replace(long, short)
+        return re.sub(r"[^a-z]", "", text)
+    return difflib.SequenceMatcher(None, plain(a), plain(b)).ratio()
+
+
+def wikitext(titles: list) -> dict:
+    """Articles' wikitext by title, forty to a request."""
+    from urllib.parse import quote
+    texts = {}
+    for start in range(0, len(titles), 40):
+        batch = "|".join(titles[start:start + 40])
+        answer = json.loads(fetch(f"{WIKIPEDIA_API}?action=query&prop=revisions&rvprop=content&rvslots=main"
+                                  f"&format=json&formatversion=2&redirects=1&titles={quote(batch)}"))
+        renamed = {r["to"]: r["from"] for r in answer["query"].get("redirects", [])}
+        for page in answer["query"]["pages"]:
+            if "revisions" in page:
+                texts[renamed.get(page["title"], page["title"])] = page["revisions"][0]["slots"]["main"]["content"]
+    return texts
+
+
+STATION_LINK = re.compile(r"\[\[([^\]|]+)(?:\|([^\]]+))?\]\]|\{\{stl\|Namma Metro\|([^}|]+)(?:\|[^}]*)?\}\}")
+
+
+def linked_names(text: str) -> list:
+    names = []
+    for match in STATION_LINK.finditer(text):
+        name = match.group(2) or match.group(1) or match.group(3)
+        names.append(re.sub(r"\s*metro station.*$", "", name.strip(), flags=re.I))
+    return names
+
+
+def layout_platforms(text: str) -> list:
+    """(platform, towards, next station) for each platform in an article's layout table."""
+    found = []
+    marks = list(re.finditer(r"Platform\s*[-–]?\s*(\d+)", text))
+    for index, mark in enumerate(marks):
+        end = marks[index + 1].start() if index + 1 < len(marks) else mark.end() + 900
+        chunk = text[mark.end():min(end, mark.end() + 900)]
+        towards = re.search(r"[Tt]owards\s*(?:→|←|&rarr;|&larr;)?\s*(.+)", chunk)
+        following = re.search(r"Next\s*[Ss]tation:?'*\s*(.+)", chunk)
+        towards = (linked_names(towards.group(1))[:1] or [None])[0] if towards else None
+        following = (linked_names(following.group(1))[:1] or [None])[0] if following else None
+        if towards or following:
+            found.append((mark.group(1), towards, following))
+    return found
+
+
+def direction(names: list, index: int, following, towards):
+    """Which end of the line a platform's trains run to: by the next station, which has to be a
+    neighbour on this line — names here are near twins (Hongasandra, Singasandra), so only a close
+    match counts — or else by the station it says it's towards."""
+    if following:
+        neighbours = [j for j in (index - 1, index + 1) if 0 <= j < len(names)]
+        best = max(neighbours, key=lambda j: likeness(following, names[j]), default=None)
+        if best is not None and likeness(following, names[best]) >= 0.9:
+            return names[-1] if best > index else names[0]
+        return None
+    if towards:
+        best = max(range(len(names)), key=lambda j: likeness(towards, names[j]))
+        if best != index and likeness(towards, names[best]) >= 0.92:
+            return names[-1] if best > index else names[0]
+    return None
+
+
+def osm_platforms(metro: dict) -> dict:
+    """OpenStreetMap's numbered platforms that say where they go — "Towards Silk Institute",
+    platform 2 — by line, station and the end of the line they run to."""
+    answer = overpass('[out:json][timeout:120];(nwr["railway"="platform"](12.75,77.40,13.15,77.80);'
+                      'nwr["public_transport"="platform"]["subway"="yes"](12.75,77.40,13.15,77.80););out tags center;')
+    mapped = {}
+    for element in answer.get("elements", []):
+        tags = element.get("tags", {})
+        number, name = tags.get("ref") or tags.get("local_ref"), tags.get("name", "")
+        centre = element.get("center") or {"lat": element.get("lat"), "lon": element.get("lon")}
+        if not number or not name.startswith("Towards ") or centre.get("lat") is None:
+            continue
+        towards = name[len("Towards "):]
+        for line in metro["lines"]:
+            names = [s["name"] for s in line["stations"]]
+            for i, station in enumerate(line["stations"]):
+                if distance((centre["lat"], centre["lon"]), (station["lat"], station["lon"])) > 250:
+                    continue
+                way = direction(names, i, None, towards)
+                if way:
+                    mapped.setdefault((line["id"], station["name"], way), []).append(number)
+    return mapped
 
 
 def build_track() -> None:
@@ -586,11 +745,13 @@ def write(name: str, payload, folder: Path = OUT) -> None:
 
 
 if __name__ == "__main__":
-    targets = [a for a in sys.argv[1:] if a in ("metro", "track", "bus", "city")] or ["metro", "bus", "city"]
+    targets = [a for a in sys.argv[1:] if a in ("metro", "track", "platforms", "bus", "city")] or ["metro", "bus", "city"]
     if "metro" in targets:
         build_metro()
     elif "track" in targets:
         build_track()
+    if "platforms" in targets:
+        build_platforms()
     if "bus" in targets:
         build_bus()
     if "city" in targets:

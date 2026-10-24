@@ -6,9 +6,18 @@ nonisolated struct MetroStation: Hashable, Sendable, Decodable {
     var name: String
     var lat: Double
     var lon: Double
+    /// The platforms trains leave from, by the end of the line they run to: the way the platform
+    /// signs put it. Two where a station has a spare — a depot's — and none where no one's said.
+    var platforms: [String: [String]]?
 
     var coordinate: CLLocationCoordinate2D {
         CLLocationCoordinate2D(latitude: lat, longitude: lon)
+    }
+
+    /// "2", or "2 or 3": where trains towards that end of the line leave from.
+    func platform(towards terminus: String) -> String? {
+        guard let numbers = platforms?[terminus], !numbers.isEmpty else { return nil }
+        return numbers.count == 1 ? numbers[0] : numbers.dropLast().joined(separator: ", ") + " or " + numbers.last!
     }
 }
 

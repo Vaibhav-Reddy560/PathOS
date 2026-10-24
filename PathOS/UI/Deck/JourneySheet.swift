@@ -279,7 +279,8 @@ struct JourneySheet: View {
                             .font(.headline)
                             .foregroundStyle(.ice)
                         // Platforms are signed by the end of the line, so the heading is the platform sign.
-                        Text("Board at \(ride.boardAt) · \(ride.stops == 1 ? "1 stop" : "\(ride.stops) stops")")
+                        Text(["Board at \(ride.boardAt)", ride.platform.map { "platform \($0)" },
+                              ride.stops == 1 ? "1 stop" : "\(ride.stops) stops"].compactMap { $0 }.joined(separator: " · "))
                             .font(.subheadline)
                             .foregroundStyle(.mist)
                         Text("Get off at \(ride.getOffAt)")

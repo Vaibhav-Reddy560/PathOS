@@ -14,6 +14,8 @@ nonisolated struct MetroRide: Hashable, Codable, Sendable {
     var getOffAt: String { line?.stations[safe: toIndex] ?? "" }
     /// How the platform is signed: trains towards this terminus.
     var towards: String { line?.terminus(from: fromIndex, to: toIndex) ?? "" }
+    /// The platform to board from: "2", "2 or 3", or nil where it isn't known.
+    var platform: String? { line?.stops[safe: fromIndex]?.platform(towards: towards) }
 
     /// Stations in riding order, boarding station first.
     var path: [MetroStation] {
