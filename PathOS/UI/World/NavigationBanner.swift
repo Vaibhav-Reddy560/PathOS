@@ -38,7 +38,7 @@ struct NavigationBanner: View {
             if ride != nil, state.transit.progress?.isWaiting == true {
                 OnTheTrainButton()
             }
-            // A leg by road, as it starts: how you're doing it, until you've said.
+            // A leg that isn't the train, as it starts: how you're doing it, until you've said.
             if !isRide, let leg = state.legAwaitingChoice {
                 LegChoiceMenu(leg: leg, chosen: nil)
             }

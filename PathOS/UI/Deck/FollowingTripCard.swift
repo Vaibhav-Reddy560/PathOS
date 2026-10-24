@@ -59,9 +59,10 @@ struct FollowingTripCard: View {
                     // On it: said where the button was, so End route isn't left on its own.
                     } else if ride != nil, state.transit.progress?.hasArrived != true {
                         OnBoardChip()
-                    // A leg by road: how you're doing it — asked, or as you said — and a ride to book.
-                    } else if [.auto, .bikeTaxi, .cab].contains(currentLeg.mode) || trip.choice(for: currentLeg) != nil {
-                        LegChoiceMenu(leg: currentLeg, chosen: trip.choice(for: currentLeg))
+                    // A leg that isn't the train, as it starts: how you're doing it, and a ride to
+                    // book.
+                    } else if state.legAwaitingChoice != nil {
+                        LegChoiceMenu(leg: currentLeg, chosen: nil)
                     // The pointer is for the last stretch — finding the building — not for a
                     // place kilometres off that the map is already leading you to.
                     } else if state.pointerIsUseful(to: currentLeg.endCoordinate) {
@@ -79,6 +80,9 @@ struct FollowingTripCard: View {
                             .frame(maxWidth: .infinity, minHeight: 34)
                     }
                     .pathPrimaryAction()
+                    // As you said you're doing it, and changeable.
+                    } else if let chosen = trip.choice(for: currentLeg) {
+                        LegChoiceMenu(leg: currentLeg, chosen: chosen)
                     } else {
                         Spacer(minLength: 0)
                     }

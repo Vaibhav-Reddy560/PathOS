@@ -76,9 +76,9 @@ nonisolated enum WayTravelled: String, Codable, CaseIterable, Sendable {
     }
 }
 
-/// How you're doing a leg PathOS planned by road — asked as it starts, the way "On the train?"
-/// is on a platform. A receipt says when it's a ride app's; nothing says when you walked it or
-/// drove yourself, unless you do.
+/// How you're doing a leg that isn't the train — asked as each starts, every trip, the way "On the
+/// train?" is on a platform. A receipt says when it's a ride app's; nothing says when you walked
+/// it, took an auto for a walk's distance, or drove yourself, unless you do.
 nonisolated enum LegChoice: String, Codable, CaseIterable, Identifiable, Sendable {
     case auto
     case cab

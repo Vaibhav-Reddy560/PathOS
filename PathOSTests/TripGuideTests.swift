@@ -261,4 +261,17 @@ struct TripGuideTests {
         // And a short trip doesn't arrive as it sets off, whatever the road does.
         #expect(!TripGuide.isBeside(gate, end: college, remaining: 1_100, legLength: 200))
     }
+
+    /// How you're going is asked of every leg that isn't the train — a station near enough to walk
+    /// to as well, since you might take an auto — every trip, until you've said.
+    @Test func everyLegButTheTrainIsAsked() {
+        let legs = trip().legs
+        #expect(TripGuide.asksHow(legs[0], chosen: nil))
+        #expect(!TripGuide.asksHow(legs[1], chosen: nil))
+        #expect(TripGuide.asksHow(legs[2], chosen: nil))
+        #expect(!TripGuide.asksHow(legs[0], chosen: .auto))
+        var short = legs[2]
+        short.distanceMeters = 150
+        #expect(!TripGuide.asksHow(short, chosen: nil))
+    }
 }

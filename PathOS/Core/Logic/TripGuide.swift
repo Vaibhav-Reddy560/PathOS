@@ -72,6 +72,15 @@ nonisolated enum TripGuide {
         var remaining: Double? = nil
     }
 
+    /// Shorter than this, a leg is a walk and there's nothing to ask.
+    static let askHowFrom = 300.0
+
+    /// Whether to ask how you're doing a leg: any that isn't the train, planned on foot or by
+    /// road, once it's longer than a few minutes' walk — until you've said.
+    static func asksHow(_ leg: DoorToDoor.Leg, chosen: LegChoice?) -> Bool {
+        chosen == nil && leg.mode != .metro && leg.mode != .bus && leg.distanceMeters >= askHowFrom
+    }
+
     /// Within this of a place, and you could be at its gate: what Search calls "You're here".
     static let besideRadius = 150.0
     /// The leg has to have been at least this long for being beside the place to count: a short

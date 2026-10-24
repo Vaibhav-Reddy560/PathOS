@@ -777,10 +777,14 @@ extension AppState {
 
     /// The leg by road you're on, until you've said how you're doing it: an auto, a cab, on foot,
     /// or driving yourself.
+    ///
+    /// Every leg that isn't the train, every trip: one planned as a walk too — a station a
+    /// kilometre off is planned on foot, and you might well take an auto. It used to ask only of
+    /// legs planned by road, so to a station near enough to walk it never asked again.
     var legAwaitingChoice: DoorToDoor.Leg? {
         guard let trip, tripArrival == nil, let status = tripStatus, !status.hasArrived,
-              let leg = trip.option.legs[safe: status.legIndex], [.auto, .bikeTaxi, .cab].contains(leg.mode),
-              trip.choice(for: leg) == nil else { return nil }
+              let leg = trip.option.legs[safe: status.legIndex],
+              TripGuide.asksHow(leg, chosen: trip.choice(for: leg)) else { return nil }
         return leg
     }
 
@@ -804,15 +808,26 @@ extension AppState {
             leg.mode = .walk
             leg.title = "Walk to \(leg.endName)"
             leg.minutes = max(1, GeoMath.walkingMinutes(forDistance: leg.distanceMeters))
-        } else if wasWalk == false {
+        } else {
+            // Planned as a walk, taken by road: priced and timed as the road leg it now is.
+            if wasWalk {
+                let road = DoorToDoor.roadLeg(
+                    DoorToDoor.RoadHop(minutes: LeaveOnTime.roughTravelMinutes(distance: leg.distanceMeters),
+                                       distanceMeters: leg.distanceMeters),
+                    to: leg.endCoordinate, name: leg.endName, now: Date(), title: leg.title)
+                leg.fares = road.fares
+                leg.minutes = road.minutes
+            }
+            // What you hired, as its own mode; your own wheel, as a drive by road.
+            leg.mode = choice.fareMode ?? .cab
             leg.title = choice == .drive ? "Drive to \(leg.endName)" : "\(choice.label) to \(leg.endName)"
         }
         leg.fares = choice.fareMode.map { mode in leg.fares.filter { $0.mode == mode } } ?? []
         trip.option.legs[index] = leg
         self.trip = trip
         saveTravel()
-        // A walk is a different route from a drive: asked for again, on foot.
-        if choice == .walk, !wasWalk, tripStatus?.legIndex == index {
+        // On foot and by road are different routes: the one you're taking is asked for again.
+        if (choice == .walk) != wasWalk, tripStatus?.legIndex == index {
             tripNav = nil
             navLegID = nil
             Task { await refreshRoute(force: true) }
