@@ -420,6 +420,36 @@ private struct PaymentRow: View {
     }
 }
 
+/// A row of the day by how you went: a way of going, or the rest of the day's distance.
+private struct ModeRow: Identifiable {
+    var total: TravelLog.ModeTotal?
+    var metres: Double
+    var id: String { total?.mode.rawValue ?? "other" }
+}
+
+/// The part of the day's distance no stretch accounts for.
+private struct OtherMovementRow: View {
+    let metres: Double
+
+    var body: some View {
+        HStack(spacing: 14) {
+            SignalGlyph(symbol: "point.3.filled.connected.trianglepath.dotted", role: .you, size: 40)
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Moving about")
+                    .font(.body.weight(.semibold))
+                    .foregroundStyle(.ice)
+                Text("\(DayDistance.format(metres)) · too broken up to tell how")
+                    .font(.subheadline)
+                    .foregroundStyle(.mist)
+            }
+            Spacer(minLength: 8)
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 12)
+        .accessibilityElement(children: .combine)
+    }
+}
+
 /// One way of getting about over a day: how far, how long, and what was paid for it.
 private struct TravelModeRow: View {
     let total: TravelLog.ModeTotal
@@ -529,9 +559,15 @@ struct TravelLogSheet: View {
                             .padding(.horizontal, 4)
                     } else {
                         VStack(alignment: .leading, spacing: 10) {
-                            DeckSectionHeader(title: "By how you went")
-                            GroupedRows(TravelLog.byMode(stretches)) { total in
-                                TravelModeRow(total: total)
+                            // Adding up to the day's distance: what couldn't be told as a walk or a
+                            // ride is a line of its own, not a footnote.
+                            DeckSectionHeader(title: "By how you went", trailing: DayDistance.format(travelled))
+                            GroupedRows(byMode) { row in
+                                if let total = row.total {
+                                    TravelModeRow(total: total)
+                                } else {
+                                    OtherMovementRow(metres: row.metres)
+                                }
                             }
                         }
                         VStack(alignment: .leading, spacing: 10) {
@@ -542,13 +578,6 @@ struct TravelLogSheet: View {
                         }
                     }
 
-                    let other = TravelLog.otherMovement(total: recorded, stretches: stretches)
-                    if other >= 100 {
-                        Text("Another \(DayDistance.format(other)) was moving about, or travel too broken up to tell how.")
-                            .font(.footnote)
-                            .foregroundStyle(.mist)
-                            .padding(.horizontal, 4)
-                    }
                     Text("What a ride cost shows once it's paid: a ride app's receipt, which also sets its distance and times; a payment to Namma Metro that day for the ride's fare or at the station; or a UPI payment as an auto ride ended for about its fare. Travel is noticed only while PathOS is running, open or in the background.")
                         .font(.footnote)
                         .foregroundStyle(.mist)
@@ -575,8 +604,24 @@ struct TravelLogSheet: View {
         metric.frame(maxWidth: .infinity, alignment: .leading)
     }
 
+    /// The day's distance: what GPS counted, or the stretches' own when they come to more.
+    private var travelled: Double {
+        max(recorded, stretches.map(\.distanceMeters).reduce(0, +))
+    }
+
+    /// Each way of going, and what's left of the day's distance — moving about, or travel too
+    /// broken up to tell how — so the rows add up to the total above them.
+    private var byMode: [ModeRow] {
+        var rows = TravelLog.byMode(stretches).map { ModeRow(total: $0, metres: $0.distanceMeters) }
+        let other = TravelLog.otherMovement(total: travelled, stretches: stretches)
+        if other >= 50 {
+            rows.append(ModeRow(total: nil, metres: other))
+        }
+        return rows
+    }
+
     private var distance: some View {
-        let total = max(recorded, stretches.map(\.distanceMeters).reduce(0, +))
+        let total = travelled
         let parts = DayDistance.format(total).split(separator: " ")
         return MetricView(label: "Travelled", value: total > 0 ? String(parts.first ?? "0") : "—",
                           unit: total > 0 && parts.count > 1 ? String(parts[1]) : nil, role: .you)

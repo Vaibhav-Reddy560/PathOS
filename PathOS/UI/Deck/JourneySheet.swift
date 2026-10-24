@@ -486,6 +486,8 @@ struct ActiveJourneyCard: View {
                 HStack(spacing: 8) {
                     if progress.isWaiting {
                         OnTheTrainButton()
+                    } else if !progress.hasArrived {
+                        OnBoardChip()
                     } else {
                         Spacer(minLength: 0)
                     }

@@ -11,6 +11,8 @@ nonisolated enum WayTravelled: String, Codable, CaseIterable, Sendable {
     case cab
     case metro
     case bus
+    /// Your own vehicle: nothing to pay anyone, and no receipt to wait for.
+    case drive
 
     var name: String {
         switch self {
@@ -21,6 +23,7 @@ nonisolated enum WayTravelled: String, Codable, CaseIterable, Sendable {
         case .cab: "Cab"
         case .metro: "Metro"
         case .bus: "Bus"
+        case .drive: "Drove"
         }
     }
 
@@ -33,6 +36,7 @@ nonisolated enum WayTravelled: String, Codable, CaseIterable, Sendable {
         case .cab: "car.fill"
         case .metro: "tram.fill"
         case .bus: "bus.fill"
+        case .drive: "steeringwheel"
         }
     }
 
@@ -57,7 +61,73 @@ nonisolated enum WayTravelled: String, Codable, CaseIterable, Sendable {
         }
     }
 
+    /// Hired by road: what a ride app's receipt or a payment as you get out can be for.
     var isRoad: Bool { [.road, .auto, .bikeTaxi, .cab].contains(self) }
+
+    /// How you said you were going, as the day records it.
+    init(_ choice: LegChoice) {
+        switch choice {
+        case .auto: self = .auto
+        case .cab: self = .cab
+        case .bikeTaxi: self = .bikeTaxi
+        case .walk: self = .walk
+        case .drive: self = .drive
+        }
+    }
+}
+
+/// How you're doing a leg PathOS planned by road — asked as it starts, the way "On the train?"
+/// is on a platform. A receipt says when it's a ride app's; nothing says when you walked it or
+/// drove yourself, unless you do.
+nonisolated enum LegChoice: String, Codable, CaseIterable, Identifiable, Sendable {
+    case auto
+    case cab
+    case bikeTaxi
+    case walk
+    case drive
+
+    var id: String { rawValue }
+
+    var label: String {
+        switch self {
+        case .auto: "Auto"
+        case .cab: "Cab"
+        case .bikeTaxi: "Bike taxi"
+        case .walk: "Walk"
+        case .drive: "I'll drive"
+        }
+    }
+
+    /// What the card says once you've said.
+    var doing: String {
+        switch self {
+        case .auto: "By auto"
+        case .cab: "By cab"
+        case .bikeTaxi: "By bike taxi"
+        case .walk: "Walking"
+        case .drive: "Driving"
+        }
+    }
+
+    var symbol: String {
+        switch self {
+        case .auto: "car.rear.fill"
+        case .cab: "car.fill"
+        case .bikeTaxi: "scooter"
+        case .walk: "figure.walk"
+        case .drive: "steeringwheel"
+        }
+    }
+
+    /// The fare a payment would be for, as the plan priced it: none on foot or at your own wheel.
+    var fareMode: DoorToDoor.Mode? {
+        switch self {
+        case .auto: .auto
+        case .cab: .cab
+        case .bikeTaxi: .bikeTaxi
+        case .walk, .drive: nil
+        }
+    }
 }
 
 /// Stretches of travel noticed from movement alone, when no way is being followed: walking, by

@@ -1480,11 +1480,12 @@ final class AppState {
             legMeters = 0
         }
         guard let leg = trip.option.legs[safe: index] else { return }
-        let mode = WayTravelled(leg.mode)
+        // As you said you did it, where you said: walked, driven, or by what you hired.
+        let mode = trip.choice(for: leg).map(WayTravelled.init) ?? WayTravelled(leg.mode)
         let distance = finished ? max(leg.distanceMeters, legMeters) : legMeters
         guard distance >= 50 else { return }
-        let fare = leg.headlineFare.map { Double($0.estimate.low + $0.estimate.high) / 2 }
-        let from = index == 0 ? (trip.origin.flatMap(placeName(near:)) ?? "Start") : trip.option.legs[index - 1].endName
+        let fare = mode == .drive ? nil : leg.headlineFare.map { Double($0.estimate.low + $0.estimate.high) / 2 }
+        let from = index == 0 ? trip.origin.flatMap(placeName(near:)) : trip.option.legs[index - 1].endName
         logSegment(TravelSegment(
             mode: mode, start: min(legStartedAt ?? trip.startedAt, end), end: end, distanceMeters: distance,
             from: from, to: leg.endName, fare: mode == .walk ? nil : fare

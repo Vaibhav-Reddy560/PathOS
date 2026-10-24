@@ -56,6 +56,12 @@ struct FollowingTripCard: View {
                     // On the platform: say so, and the stops count from now.
                     } else if state.transit.progress?.isWaiting == true, ride != nil {
                         OnTheTrainButton()
+                    // On it: said where the button was, so End route isn't left on its own.
+                    } else if ride != nil, state.transit.progress?.hasArrived != true {
+                        OnBoardChip()
+                    // A leg by road: how you're doing it — asked, or as you said — and a ride to book.
+                    } else if [.auto, .bikeTaxi, .cab].contains(currentLeg.mode) || trip.choice(for: currentLeg) != nil {
+                        LegChoiceMenu(leg: currentLeg, chosen: trip.choice(for: currentLeg))
                     // The pointer is for the last stretch — finding the building — not for a
                     // place kilometres off that the map is already leading you to.
                     } else if state.pointerIsUseful(to: currentLeg.endCoordinate) {
@@ -138,6 +144,68 @@ struct EndRouteButton: View {
                 .frame(minHeight: 34)
         }
         .pathSecondaryAction()
+    }
+}
+
+/// On the train, said where "On the train" was asked: the card stays balanced, and you can see
+/// it's been taken.
+struct OnBoardChip: View {
+    var body: some View {
+        Label("On the train", systemImage: "checkmark.circle.fill")
+            .font(.subheadline.weight(.semibold))
+            .foregroundStyle(.aurora)
+            .lineLimit(1)
+            .frame(maxWidth: .infinity, minHeight: 34)
+            .padding(.vertical, 2)
+            .background(Color.aurora.opacity(0.12), in: Capsule())
+            .accessibilityLabel("You're on the train")
+    }
+}
+
+/// How you're doing the leg by road you're on — an auto, a cab, a bike taxi, on foot, or at your
+/// own wheel — asked as it starts, the way "On the train" is on a platform, and changeable after.
+/// Nothing else can tell: a ride app's receipt says when it was theirs, and nothing says when
+/// you walked it or drove. A ride to book is here too, for when you haven't yet.
+struct LegChoiceMenu: View {
+    let leg: DoorToDoor.Leg
+    let chosen: LegChoice?
+
+    @Environment(AppState.self) private var state
+
+    var body: some View {
+        let menu = Menu {
+            Section("How are you going?") {
+                ForEach(LegChoice.allCases) { choice in
+                    Button {
+                        state.choose(choice, forLeg: leg.id)
+                    } label: {
+                        Label(choice.label, systemImage: choice.symbol)
+                    }
+                }
+            }
+            Section("Book a ride to \(leg.endName)") {
+                ForEach(CabProvider.allCases) { provider in
+                    Button {
+                        CabLauncher.open(provider, drop: leg.endCoordinate, pickup: state.location.location?.coordinate)
+                    } label: {
+                        Label(provider.name, systemImage: provider.symbol)
+                    }
+                }
+            }
+        } label: {
+            Label(chosen?.doing ?? "How are you going?", systemImage: chosen?.symbol ?? "questionmark.circle.fill")
+                .font(.subheadline.weight(.semibold))
+                .lineLimit(1)
+                .frame(maxWidth: .infinity, minHeight: 34)
+        }
+        .accessibilityHint(chosen == nil ? "Say how you're doing this leg, or book a ride" : "Change how you're doing this leg")
+
+        // Asked, it's the thing to do; said, it's only a reminder you can change.
+        if chosen == nil {
+            menu.pathPrimaryAction()
+        } else {
+            menu.pathSecondaryAction()
+        }
     }
 }
 

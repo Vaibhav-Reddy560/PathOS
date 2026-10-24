@@ -20,6 +20,12 @@ nonisolated struct ActiveTrip: Codable, Sendable {
     /// The ride, stop by stop, for a way built around a metro or bus journey you planned station
     /// to station: it's followed from the moment you reach the first one.
     var ride: Journey?
+    /// How you said you're doing each leg by road, by the leg's id.
+    var choices: [String: LegChoice]?
+
+    func choice(for leg: DoorToDoor.Leg) -> LegChoice? {
+        choices?[leg.id.uuidString]
+    }
 
     var coordinate: CLLocationCoordinate2D {
         CLLocationCoordinate2D(latitude: latitude, longitude: longitude)
@@ -718,7 +724,9 @@ extension AppState {
             announcedTripLeg = status.legIndex
             saveTravel()
             if status.legIndex > 0 {
-                await announceTrip(title: status.headline, body: status.detail, id: "leg\(status.legIndex)")
+                // A leg by road: asked how you're doing it, as a platform asks whether you're on.
+                let asking = legAwaitingChoice != nil ? " · Say how you're going — an auto, a cab, walking or driving." : ""
+                await announceTrip(title: status.headline, body: status.detail + asking, id: "leg\(status.legIndex)")
             }
         }
         // Said once for each further five minutes lost, not every time it's noticed.
@@ -765,6 +773,50 @@ extension AppState {
     /// The banner, the control rail and the camera all read this, so they can't disagree.
     var isLeadingTheWay: Bool {
         trip != nil && tripStatus?.hasArrived == false
+    }
+
+    /// The leg by road you're on, until you've said how you're doing it: an auto, a cab, on foot,
+    /// or driving yourself.
+    var legAwaitingChoice: DoorToDoor.Leg? {
+        guard let trip, tripArrival == nil, let status = tripStatus, !status.hasArrived,
+              let leg = trip.option.legs[safe: status.legIndex], [.auto, .bikeTaxi, .cab].contains(leg.mode),
+              trip.choice(for: leg) == nil else { return nil }
+        return leg
+    }
+
+    /// How you said you're doing the leg you're on, once you have.
+    var currentLegChoice: LegChoice? {
+        guard let trip, let status = tripStatus, let leg = trip.option.legs[safe: status.legIndex] else { return nil }
+        return trip.choice(for: leg)
+    }
+
+    /// You've said how you're doing a leg. On foot, it's led by the footpath and timed at a walk;
+    /// at your own wheel, or by whatever you hired, its fare is the one a payment would be for —
+    /// none when you drive.
+    func choose(_ choice: LegChoice, forLeg id: UUID) {
+        guard var trip, let index = trip.option.legs.firstIndex(where: { $0.id == id }) else { return }
+        var choices = trip.choices ?? [:]
+        choices[id.uuidString] = choice
+        trip.choices = choices
+        var leg = trip.option.legs[index]
+        let wasWalk = leg.mode == .walk
+        if choice == .walk {
+            leg.mode = .walk
+            leg.title = "Walk to \(leg.endName)"
+            leg.minutes = max(1, GeoMath.walkingMinutes(forDistance: leg.distanceMeters))
+        } else if wasWalk == false {
+            leg.title = choice == .drive ? "Drive to \(leg.endName)" : "\(choice.label) to \(leg.endName)"
+        }
+        leg.fares = choice.fareMode.map { mode in leg.fares.filter { $0.mode == mode } } ?? []
+        trip.option.legs[index] = leg
+        self.trip = trip
+        saveTravel()
+        // A walk is a different route from a drive: asked for again, on foot.
+        if choice == .walk, !wasWalk, tripStatus?.legIndex == index {
+            tripNav = nil
+            navLegID = nil
+            Task { await refreshRoute(force: true) }
+        }
     }
 
     /// Following a leg you travel along a road for, as against waiting on a platform.
