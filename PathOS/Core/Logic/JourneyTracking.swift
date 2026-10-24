@@ -143,6 +143,11 @@ nonisolated struct RideTrack: Codable, Equatable, Sendable {
     var hasArrived = false
     /// Platforms you've been asked about already, so each is asked once.
     var askedOnBoard: [Int] = []
+    /// The train's speed as GPS last read it, and when: good in a coach even when the position isn't.
+    var speed: Double?
+    var speedAt: Date?
+    /// Where you've been shown, so the dot never goes back a station to wait for GPS to catch up.
+    var shown: Double?
 }
 
 /// A position from GPS, as a ride reads it.
@@ -151,6 +156,8 @@ nonisolated struct RideFix: Sendable {
     /// Metres either way; negative when unknown.
     var accuracy: Double
     var at: Date
+    /// Metres a second, when GPS knows.
+    var speed: Double? = nil
 }
 
 /// The ride's line, as it's drawn and followed: along the track where it's known, straight from
@@ -279,8 +286,15 @@ nonisolated enum RideLine {
 }
 
 nonisolated enum JourneyTracker {
-    /// A fix this sure of itself, or surer, can move you along.
+    /// A fix this sure of itself, or surer, moves you along as far as it says.
     static let goodFix = 100.0
+    /// Inside a coach GPS is rarely surer than this, on a viaduct as much as underground; a fix
+    /// up to it still moves you along, by less than it says — no further than it can be sure of.
+    /// Leaving them out held the ride a station or two behind until a platform's clearer sky.
+    static let usableFix = 400.0
+    /// Between fixes you're carried on at a little under the trains' average pace, so a guess
+    /// falls behind rather than running ahead.
+    static let carriedPace = 0.9
     /// Within this of the line, a fix is on it. Track curves away from the straight line between
     /// stations, and a station's entrances sit off it.
     static let onLine = 250.0
@@ -303,22 +317,37 @@ nonisolated enum JourneyTracker {
     /// the fix is good and on the line. A fix that jumps back — to the station you left, as GPS
     /// does under a platform roof — or kilometres ahead is left out rather than believed.
     static func advance(_ track: RideTrack, in journey: Journey, fix: RideFix?, now: Date) -> RideTrack {
+        let line = RideLine.geometry(of: journey)
+        let parts = journey.rideParts
+        var moved = advance(track, line: line, parts: parts, fix: fix, now: now)
+        // Shown as far as you've been shown, at least: the dot doesn't go back to wait for GPS.
+        moved.shown = max(moved.shown ?? 0, moved.along, estimatedAlong(moved, on: line, parts: parts, now: now))
+        return moved
+    }
+
+    private static func advance(_ track: RideTrack, line: RideGeometry, parts: [Journey.Part], fix: RideFix?,
+                                now: Date) -> RideTrack {
         var track = track
         if track.since == nil { track.since = now }
-        let line = RideLine.geometry(of: journey)
         let distances = line.stops
-        let parts = journey.rideParts
-        guard let fix, fix.accuracy > 0, fix.accuracy <= goodFix,
+        guard let fix, fix.accuracy > 0, fix.accuracy <= usableFix,
               let spot = RideLine.locate(fix.coordinate, on: line),
-              spot.offset <= max(onLine, fix.accuracy * 2) else { return track }
+              spot.offset <= max(onLine, fix.accuracy * 1.5) else { return track }
 
+        // A vaguer fix counts for less: as far along as it could be sure of.
+        let doubt = max(0, fix.accuracy - goodFix)
+        let credited = spot.along - doubt
         let reach = track.seenAt.map { track.along + max(500, fix.at.timeIntervalSince($0) * fastest) } ?? .infinity
-        if spot.along <= reach {
-            track.along = max(track.along, spot.along)
+        if credited <= reach {
+            track.along = max(track.along, credited)
         }
         // A fix that agrees with where you are counts as seeing you there.
-        if spot.along >= track.along - atStation, spot.along <= reach {
+        if spot.along >= track.along - atStation - doubt, credited <= reach {
             track.seenAt = fix.at
+            if let speed = fix.speed, speed >= 0 {
+                track.speed = min(speed, fastest)
+                track.speedAt = fix.at
+            }
         }
 
         // On the train: carried along from its platform. Passing a change station means you're on
@@ -350,19 +379,34 @@ nonisolated enum JourneyTracker {
         return track
     }
 
-    /// Where you're drawn on the line: where GPS last put you, carried on at the train's speed while
-    /// there's no fix — underground — but never past the next station. A guess doesn't get to
-    /// say you've passed one.
+    /// Where you're drawn on the line: where GPS last put you, carried on while there's no fix —
+    /// at the train's own speed just after one, then a little under its average — through the
+    /// stations between, but never by a guess to where you change or get off: those wait for GPS
+    /// to see you there. It used to stop at the very next station, and a ride with few good
+    /// fixes ran a station or two behind.
     static func estimatedAlong(_ track: RideTrack, in journey: Journey, now: Date) -> Double {
-        estimatedAlong(track, on: RideLine.geometry(of: journey), now: now)
+        estimatedAlong(track, on: RideLine.geometry(of: journey), parts: journey.rideParts, now: now)
     }
 
-    static func estimatedAlong(_ track: RideTrack, on line: RideGeometry, now: Date) -> Double {
+    static func estimatedAlong(_ track: RideTrack, on line: RideGeometry, parts: [Journey.Part], now: Date) -> Double {
         let distances = line.stops
-        guard track.isOnBoard, !track.hasArrived, let seen = track.seenAt ?? track.since,
-              now.timeIntervalSince(seen) > 30 else { return track.along }
-        let next = distances.first { $0 > track.along + atStation } ?? distances.last ?? track.along
-        return min(track.along + now.timeIntervalSince(seen) * cruise(on: line), next)
+        // From whichever was later: the last fix that saw you, or getting on — time on the platform
+        // isn't riding.
+        guard track.isOnBoard, !track.hasArrived, let seen = [track.seenAt, track.since].compactMap({ $0 }).max(),
+              !distances.isEmpty else {
+            return track.along
+        }
+        let elapsed = now.timeIntervalSince(seen)
+        guard elapsed > 10 else { return track.along }
+        let pace: Double
+        if let speed = track.speed, let at = track.speedAt, now.timeIntervalSince(at) <= 45, speed >= 3 {
+            pace = speed
+        } else {
+            pace = cruise(on: line) * carriedPace
+        }
+        let part = parts[min(track.part, parts.count - 1)]
+        let stopBefore = distances[min(part.lastStop, distances.count - 1)] - atStation - 1
+        return max(track.along, min(track.along + elapsed * pace, stopBefore))
     }
 
     /// Where you are along the ride, worked out from where you are on the line — never from how
@@ -373,7 +417,9 @@ nonisolated enum JourneyTracker {
         let distances = line.stops
         let parts = journey.rideParts
         let last = max(0, stops.count - 1)
-        let position = track.hasArrived ? (distances.last ?? 0) : estimatedAlong(track, on: line, now: now)
+        let position = track.hasArrived
+            ? (distances.last ?? 0)
+            : max(track.shown ?? 0, estimatedAlong(track, on: line, parts: parts, now: now))
         var current = stops.indices.last { distances[$0] <= position + atStation } ?? 0
         if !track.hasArrived { current = min(current, max(0, last - 1)) }
         let next: Int? = track.hasArrived ? nil : current + 1

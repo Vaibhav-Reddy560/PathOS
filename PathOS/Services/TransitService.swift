@@ -57,7 +57,9 @@ final class TransitService {
     /// background too.
     func update(location: CLLocation?, now: Date = Date()) {
         guard let journey else { return }
-        let fix = location.map { RideFix(coordinate: $0.coordinate, accuracy: $0.horizontalAccuracy, at: $0.timestamp) }
+        let fix = location.map {
+            RideFix(coordinate: $0.coordinate, accuracy: $0.horizontalAccuracy, at: $0.timestamp, speed: $0.speed >= 0 ? $0.speed : nil)
+        }
         let moved = JourneyTracker.advance(track, in: journey, fix: fix, now: now)
         let changed = moved != track
         track = moved

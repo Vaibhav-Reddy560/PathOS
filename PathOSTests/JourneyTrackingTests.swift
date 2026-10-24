@@ -162,15 +162,42 @@ struct JourneyTrackingTests {
         #expect(off.along == track.along)
     }
 
-    /// Underground, with no fix, you're carried on at the train's pace — but never past the next
-    /// station, and a guess never says you've arrived.
-    @Test func withoutAFixTheGuessStopsAtTheNextStation() {
+    /// Underground, with no fix, you're carried on at a little under the trains' pace — through
+    /// the stations between, but a guess never gets you to where you get off, and never says
+    /// you've arrived.
+    @Test func withoutAFixTheGuessStopsShortOfGettingOff() {
         let journey = forumRide
         let (track, now) = ride(journey, to: 4, from: afternoon)
         let much = now.addingTimeInterval(20 * 60)
         let progress = JourneyTracker.progress(of: track, in: journey, now: much)
         #expect(progress.currentIndex <= 5)
         #expect(!progress.hasArrived)
+    }
+
+    /// On the Green Line with no fix after boarding: carried through Banashankari and on, not held
+    /// at the next station — the ride that ran a station or two behind.
+    @Test func withoutAFixTheRideStillMovesThroughStations() {
+        let journey = forumRide
+        let (atChange, now) = ride(journey, to: 2, from: afternoon)
+        let boarded = JourneyTracker.board(atChange, now: now)
+        // Six minutes on, a couple of stations' worth at the trains' pace.
+        let later = now.addingTimeInterval(6 * 60)
+        let carried = JourneyTracker.advance(boarded, in: journey, fix: nil, now: later)
+        #expect(JourneyTracker.progress(of: carried, in: journey, now: later).currentIndex >= 4)
+        // A fix from behind doesn't take the dot back.
+        let behind = JourneyTracker.advance(carried, in: journey, fix: fix(journey, along: along(journey, stop: 3), at: later), now: later)
+        #expect(JourneyTracker.progress(of: behind, in: journey, now: later).currentIndex >= 4)
+    }
+
+    /// Inside a coach GPS says ±250 m: still on the line, and it moves you — by less than it says.
+    @Test func aVagueFixStillMovesYouAlong() {
+        let journey = forumRide
+        let (track, now) = ride(journey, to: 1, from: afternoon)
+        var vague = fix(journey, along: along(journey, stop: 1) + 800, at: now.addingTimeInterval(60))
+        vague.accuracy = 250
+        let moved = JourneyTracker.advance(track, in: journey, fix: vague, now: now.addingTimeInterval(60))
+        #expect(moved.along > track.along)
+        #expect(moved.along <= along(journey, stop: 1) + 800 - 150 + 1)
     }
 
     /// At the change, you're on the next train's platform: said, and asked.
