@@ -768,6 +768,9 @@ final class AppState {
         }
     }
 
+    /// When rain was last said at the door.
+    static let rainWarnedKey = "pathos.rain.lastWarned"
+
     private func didLeave(_ place: SavedPlace) async {
         if place.kind == .home {
             routine.logDeparture(from: .home)
@@ -775,6 +778,14 @@ final class AppState {
 
         let here = await location.currentLocation() ?? CLLocation(latitude: place.latitude, longitude: place.longitude)
         guard let advice = await context.evaluateExit(at: here) else { return }
+        // Said at the ends of the day only — out from home, or off home once the day's plans are
+        // done — and once a rainy spell. In between, the pinned context says it without a buzz.
+        let now = Date()
+        let lastWarned = UserDefaults.standard.object(forKey: Self.rainWarnedKey) as? Date
+        let hasMore = agenda(on: now).contains { $0.start > now }
+        guard ExitCheckEvaluator.shouldWarn(leavingHome: place.kind == .home, hasMorePlannedToday: hasMore,
+                                            lastWarned: lastWarned, now: now) else { return }
+        UserDefaults.standard.set(now, forKey: Self.rainWarnedKey)
 
         haptics.alert()
         let link = URL(string: "pathos://dashboard")

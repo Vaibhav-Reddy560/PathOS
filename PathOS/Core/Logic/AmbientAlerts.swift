@@ -48,6 +48,12 @@ nonisolated struct AmbientAlert: Identifiable, Equatable, Sendable {
 
     /// The weather and where you are: always true, so never news. The deck shows both too.
     var isBackground: Bool { id == "weather" || id == "idle" }
+
+    /// Rain and the barometer: shown — in the island, and the pinned context on the Lock Screen
+    /// — but never a notification of their own. A forecast hovering about 50% came and went
+    /// all afternoon, and each return buzzed again, under a roof or not. Rain is said once, at
+    /// the door, when it matters (`ExitCheckEvaluator.shouldWarn`).
+    var isWeather: Bool { id == "exit.advice" || id == "pressure.drop" }
 }
 
 /// Plain values the alert rules read, so they can be tested without the app running.
@@ -521,7 +527,7 @@ nonisolated enum AmbientAlerts {
     }
 
     private static func interrupts(_ alert: AmbientAlert) -> Bool {
-        alert.role == .attention || alert.role == .critical
+        (alert.role == .attention || alert.role == .critical) && !alert.isWeather
     }
 
     /// "Rain likely — take an umbrella" → "Rain likely".

@@ -70,14 +70,18 @@ struct AmbientAlertTests {
         #expect(alerts.contains { $0.id == "guidance" && $0.detail == "Finding your location…" })
     }
 
-    @Test func onlyNewlyRaisedAlertsNotify() {
-        let alerts = AmbientAlerts.prioritized(snapshot(exitAdvice: rain, weather: sunny))
-        let first = AmbientAlerts.notifiable(previous: [], current: alerts)
-        #expect(first.map(\.id) == ["exit.advice"])
+    private var soon: AlertSnapshot.Event {
+        AlertSnapshot.Event(id: "e", title: "Jazz", start: now.addingTimeInterval(12 * 60), latitude: 12.97, longitude: 77.59)
+    }
 
-        // The world doesn't get a notification, and the same advice never repeats.
+    @Test func onlyNewlyRaisedAlertsNotify() {
+        let alerts = AmbientAlerts.prioritized(snapshot(event: soon, weather: sunny))
+        let first = AmbientAlerts.notifiable(previous: [], current: alerts)
+        #expect(first.map(\.id) == ["event.soon.e"])
+
+        // The world doesn't get a notification, and the same alert never repeats.
         let announced = AmbientAlerts.announcedIDs(alerts)
-        #expect(announced == ["exit.advice"])
+        #expect(announced == ["event.soon.e"])
         #expect(AmbientAlerts.notifiable(previous: announced, current: alerts).isEmpty)
     }
 
@@ -86,8 +90,30 @@ struct AmbientAlertTests {
         let announced = AmbientAlerts.announcedIDs(quiet)
         #expect(announced.isEmpty)
 
+        let coming = AmbientAlerts.prioritized(snapshot(event: soon, weather: sunny))
+        #expect(AmbientAlerts.notifiable(previous: announced, current: coming).map(\.id) == ["event.soon.e"])
+    }
+
+    /// Rain is shown — the island, the pinned context — but never a notification of its own: a
+    /// forecast hovering about 50% came and went all afternoon, and each return buzzed again.
+    @Test func rainIsShownNotAnnounced() {
         let rainy = AmbientAlerts.prioritized(snapshot(exitAdvice: rain, weather: sunny))
-        #expect(AmbientAlerts.notifiable(previous: announced, current: rainy).map(\.id) == ["exit.advice"])
+        #expect(rainy.first?.id == "exit.advice")
+        #expect(AmbientAlerts.notifiable(previous: [], current: rainy).isEmpty)
+        let falling = AmbientAlerts.prioritized(snapshot(trend: .rapidDrop(dropHPa: 2, overHours: 1), weather: sunny))
+        #expect(AmbientAlerts.notifiable(previous: [], current: falling).isEmpty)
+    }
+
+    /// Said at the door only at the ends of the day — out from home, or off home once nothing's
+    /// left to go to — and once a rainy spell.
+    @Test func rainIsSaidAtTheEndsOfTheDay() {
+        #expect(ExitCheckEvaluator.shouldWarn(leavingHome: true, hasMorePlannedToday: true, lastWarned: nil, now: now))
+        #expect(!ExitCheckEvaluator.shouldWarn(leavingHome: false, hasMorePlannedToday: true, lastWarned: nil, now: now))
+        #expect(ExitCheckEvaluator.shouldWarn(leavingHome: false, hasMorePlannedToday: false, lastWarned: nil, now: now))
+        #expect(!ExitCheckEvaluator.shouldWarn(leavingHome: true, hasMorePlannedToday: false,
+                                               lastWarned: now.addingTimeInterval(-3_600), now: now))
+        #expect(ExitCheckEvaluator.shouldWarn(leavingHome: false, hasMorePlannedToday: false,
+                                              lastWarned: now.addingTimeInterval(-4 * 3_600), now: now))
     }
 
     @Test func theIslandRestsOnItsNameWhenThereIsNoNews() {
